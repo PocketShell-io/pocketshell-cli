@@ -1,7 +1,7 @@
 # pocketshell
 
 Unified server-side Python utility for the [PocketShell](https://github.com/PocketShell-io/pocketshell)
-Android client. This is the host-side companion CLI, maintained in its own
+Android and desktop clients. This is the host-side companion CLI, maintained in its own
 repo with an independent release cycle; before v0.5.5 it lived at
 `tools/pocketshell/` in the [monorepo](https://github.com/PocketShell-io/pocketshell)
 (versioning was coupled to the app tag there — see [Release flow](#release-flow)). The app probes for this single helper on each remote

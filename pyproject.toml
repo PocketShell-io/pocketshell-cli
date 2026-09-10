@@ -12,7 +12,7 @@ name = "pocketshell"
 # self-governed release is 0.5.5, continuing from the last app-coupled
 # release 0.5.4 so `uv tool upgrade pocketshell` stays monotonic.
 version = "0.5.5"
-description = "Unified server-side Python utility for the PocketShell Android client."
+description = "Unified server-side Python utility for the PocketShell Android and desktop clients."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Alexey Grigorev" }]

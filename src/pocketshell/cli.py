@@ -45,7 +45,7 @@ from pocketshell.workspaces import workspaces_group
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
-        "Unified server-side helper for the PocketShell Android client.\n\n"
+        "Unified server-side helper for the PocketShell Android and desktop clients.\n\n"
         "Subcommands replace the separately-installed `quse` CLI. Today "
         "`usage`, `sessions`, "
         "`agent-log`, `repos`, `github`, `daemon`, and `serve` are wired "
