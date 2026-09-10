@@ -1,7 +1,10 @@
 # pocketshell
 
-Unified server-side Python utility for the [PocketShell](https://github.com/alexeygrigorev/pocketshell)
-Android client. The app probes for this single helper on each remote
+Unified server-side Python utility for the [PocketShell](https://github.com/PocketShell-io/pocketshell)
+Android client. This is the host-side companion CLI, maintained in its own
+repo with an independent release cycle; before v0.5.5 it lived at
+`tools/pocketshell/` in the [monorepo](https://github.com/PocketShell-io/pocketshell)
+(versioning was coupled to the app tag there — see [Release flow](#release-flow)). The app probes for this single helper on each remote
 host and uses its subcommands for usage, aplexer session lifecycle, agent
 conversations, QR host setup, repository discovery, environment files, hooks,
 logs, and daemon lifecycle checks.
@@ -34,7 +37,7 @@ uv tool install pocketshell
 For local development from a clone:
 
 ```bash
-cd tools/pocketshell
+cd pocketshell-cli
 uv venv
 uv pip install -e .
 pocketshell --help
@@ -148,15 +151,15 @@ Schema (every entry):
 {
   "owner": "alexeygrigorev",          // null when remote URL is non-GitHub
   "name": "pocketshell",              // local dir basename, or GH repo name
-  "full_name": "alexeygrigorev/pocketshell",  // null when owner unknown
+  "full_name": "PocketShell-io/pocketshell",  // null when owner unknown
   "local": {                          // populated by --local scans
     "path": "/home/alexey/git/pocketshell",
     "head": "main"
   },
   "remote": {                         // populated by --remote scans
     "default_branch": "main",
-    "html_url": "https://github.com/alexeygrigorev/pocketshell",
-    "ssh_url": "git@github.com:alexeygrigorev/pocketshell.git",
+    "html_url": "https://github.com/PocketShell-io/pocketshell",
+    "ssh_url": "git@github.com:PocketShell-io/pocketshell.git",
     "updated_at": "2026-05-27T12:00:00Z"
   }
 }
@@ -269,10 +272,10 @@ subcommand keeps working.
 #### Running from a repo clone (no install)
 
 To run `qr-share` straight from a checkout without installing the tool,
-use `uv run` from `tools/pocketshell` and include the `qr` extra:
+use `uv run` from the repo root and include the `qr` extra:
 
 ```bash
-cd tools/pocketshell
+cd pocketshell-cli
 uv run --extra qr pocketshell qr-share prod
 ```
 
@@ -356,7 +359,7 @@ generated executables, and durable ownership metadata are cleaned up.
 ## Development
 
 ```bash
-cd tools/pocketshell
+cd pocketshell-cli
 uv venv
 uv pip install -e ".[dev]"
 uv run pytest
@@ -374,119 +377,46 @@ they run in seconds without invoking a real host session.
 
 ## Release flow
 
-`pocketshell` ships in lockstep with the Android app. Every time the
-maintainer cuts an Android release tag (`vX.Y.Z`), the
-[`Build`](../../.github/workflows/build.yml) workflow assembles the APK
-and **also** builds the Python sdist + wheel and publishes them to PyPI.
+`pocketshell` is released from THIS repo on its own cycle, independent of the
+Android app (extraction: PocketShell-io/pocketshell#2643). The `version` in
+`pyproject.toml` is the single source of truth:
 
-### Version coupling (tag-derived, issue #2356)
+1. Bump `version` in `pyproject.toml` (one small commit — the release
+   declaration; org convention, cf. PocketShell-io/quse).
+2. Tag that commit `vX.Y.Z` — the tag MUST equal the pyproject version — and
+   push the tag. `.github/workflows/publish.yml` builds the sdist + wheel,
+   refuses to publish if `dist/` does not carry exactly the tagged version,
+   and publishes to PyPI.
+3. Hosts pick it up with `uv tool upgrade pocketshell`.
 
-Neither side is a hand-maintained literal any more. Both derive from the git
-tag being built, via the single shared script
-[`scripts/derive-version.sh`](../../scripts/derive-version.sh):
+CI (`.github/workflows/ci.yml`) runs the pytest suite plus the packaging and
+frozen-lock guards on every PR and every push to `main`. The first
+self-governed release is **0.5.5**, continuing from the last app-coupled
+release 0.5.4 so `uv tool upgrade` stays monotonic.
 
-- `app/build.gradle.kts` computes `versionCode`/`versionName` at Gradle
-  configuration time by shelling out to `scripts/derive-version.sh`.
-- `tools/pocketshell/pyproject.toml`'s committed `version` field is a
-  placeholder. The release workflow's "Stamp pyproject.toml version from
-  tag" step overwrites it (in the ephemeral CI checkout, never committed)
-  from `scripts/derive-version.sh version-name --ref <tag>` immediately
-  before building the sdist/wheel.
+### PyPI publish setup (one-time)
 
-[`scripts/check-version-coupling.sh`](../../scripts/check-version-coupling.sh)
-verifies the derivation script is the SOLE source of truth (its own
-self-test, Gradle's resolved version matching a direct script invocation,
-and both consumers referencing the script by path rather than an
-independent reimplementation) — it runs per-push in `tests.yml`.
-[`scripts/check-pypi-version.sh`](../../scripts/check-pypi-version.sh)
-verifies, at tag-publish time, that the freshly-stamped
-`pyproject.toml` version equals what `scripts/derive-version.sh` derives
-for the tag being published:
+The `publish-pypi` job publishes with a PyPI API token stored as the
+`PYPI_API_TOKEN` secret on this repo (same mechanism as
+[PocketShell-io/quse](https://github.com/PocketShell-io/quse)):
 
-```bash
-scripts/check-pypi-version.sh --check-tag vX.Y.Z
-```
+1. On pypi.org, create an API token scoped to the `pocketshell` project (or
+   reuse the existing project-scoped token from the monorepo era).
+2. On GitHub: this repo → Settings → Secrets and variables → Actions →
+   New repository secret → name `PYPI_API_TOKEN`. The `pypi` environment
+   already exists; the publish job runs inside it.
 
-### Cutting a release
+If a publish fails after the tag is pushed, fix the cause and re-run
+`publish.yml` from the Actions tab (it has a `workflow_dispatch` trigger) —
+the tag does not need to move.
 
-There is no version-bump commit or PR. The tag itself is the version
-declaration:
-
-1. Pick the next semantic version after the latest GitHub Release/tag.
-2. Run the emulator release validation gate
-   (`scripts/release-emulator-validation.sh`) against the current `main`
-   HEAD, as described in [`process.md`](../../process.md) -> "Release
-   Builds".
-3. Push the tag with `scripts/push-release-tag.sh vX.Y.Z ...`. It creates
-   the tag locally FIRST and verifies `scripts/derive-version.sh` derives
-   the expected `versionName` (and a strictly-monotonic `versionCode`
-   versus the previous tag) from it before pushing — so a derivation bug
-   is caught before the tag ever reaches `origin`. The tag-triggered
-   `Build` workflow then:
-   - builds and uploads the APK (its `versionCode`/`versionName` come from
-     the tag via `app/build.gradle.kts`'s own derivation) + creates the
-     GitHub Release
-   - stamps `tools/pocketshell/pyproject.toml`'s version from the tag
-   - runs `scripts/check-pypi-version.sh --check-tag vX.Y.Z`
-   - builds the Python sdist + wheel
-   - publishes them to PyPI via OIDC trusted publishing
-
-The PyPI publish job depends on the APK build job, so a broken APK
-build also aborts the PyPI publish. If only the PyPI publish fails the
-maintainer can re-trigger the workflow at the same tag from the
-Actions tab; the APK build is idempotent against an existing release
-(`softprops/action-gh-release` updates the existing release rather
-than failing).
-
-## PyPI trusted publishing setup (one-time)
-
-The `publish-pypi` job uses GitHub's OIDC token instead of a long-lived
-API token. This avoids storing a `PYPI_API_TOKEN` secret in the repo
-and means there is nothing to rotate. The trade-off is that the
-project owner must complete one configuration step on pypi.org before
-the first automated tag publish:
-
-1. Sign in to https://pypi.org/ with the project owner account.
-2. Open the `pocketshell` project page ->
-   **Manage** -> **Publishing**.
-3. Under **Trusted publishers**, click **Add a new pending publisher**
-   (if the project is empty) or **Add a new publisher**, then fill in:
-   - **PyPI Project Name**: `pocketshell`
-   - **Owner**: `alexeygrigorev`
-   - **Repository name**: `pocketshell`
-   - **Workflow name**: `build.yml`
-   - **Environment name**: `pypi`
-4. Save the publisher.
-5. In this repository on GitHub, open
-   **Settings** -> **Environments** -> **New environment** -> name it
-   `pypi`. No secrets or reviewers are required; the environment exists
-   purely to scope the OIDC token. (If the environment already exists,
-   confirm it has no protection rules that would block the workflow
-   from running.)
-6. Push the next release tag. The `Publish to PyPI via trusted
-   publishing` step should succeed without any token configuration.
-
-### Why trusted publishing (and not `PYPI_API_TOKEN`)?
-
-- No long-lived secret to rotate, leak, or accidentally print in logs.
-- The OIDC subject is scoped to `repo=alexeygrigorev/pocketshell`,
-  `workflow=build.yml`, `environment=pypi`, so a compromised fork or
-  a different workflow file in this repo cannot reuse it.
-- D22 (no backwards-compat): we do not also maintain a token-fallback
-  path. If trusted publishing breaks, fix it; do not add a token
-  branch alongside.
-
-If trusted publishing is ever unavailable for a tag (e.g. PyPI outage
-on the OIDC verifier), the recommended manual escape hatch is:
+Manual escape hatch (maintainer account, only when CI publishing is
+unavailable):
 
 ```bash
-cd tools/pocketshell
-python -m build
-python -m twine upload dist/*
+uv build
+uv run --with twine twine upload dist/*
 ```
-
-with the maintainer's account. Do not re-add a `PYPI_API_TOKEN` secret
-as a permanent fallback.
 
 ## Why a unified CLI?
 

@@ -4,17 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pocketshell"
-# PLACEHOLDER (issue #2356, Phase 4 of epic #2350): this value is NEVER read
-# for a real release. The publish-pypi job in .github/workflows/build.yml
-# overwrites this field (in its ephemeral CI checkout only, never committed)
-# from `scripts/derive-version.sh version-name --ref <tag>` — the SAME
-# derivation app/build.gradle.kts uses for the Android versionName — right
-# before building the sdist/wheel, so both sides derive from the git tag
-# being released and can never independently drift.
-# scripts/check-pypi-version.sh enforces the stamped value matches the tag;
-# scripts/check-version-coupling.sh enforces the derivation itself is
-# single-sourced. See tools/pocketshell/README.md ("Version coupling").
-version = "0.0.0"
+# The version is REAL and hand-bumped (org convention, cf. PocketShell-io/quse):
+# cutting a release = bump this to the tag value, push tag vX.Y.Z, and
+# .github/workflows/publish.yml refuses to publish if dist/ does not carry
+# exactly the tagged version. Versioning is independent of the Android app
+# since the extraction (PocketShell-io/pocketshell#2643): the first
+# self-governed release is 0.5.5, continuing from the last app-coupled
+# release 0.5.4 so `uv tool upgrade pocketshell` stays monotonic.
+version = "0.5.5"
 description = "Unified server-side Python utility for the PocketShell Android client."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -182,8 +179,8 @@ dependencies = [
 pocketshell = "pocketshell.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/alexeygrigorev/pocketshell"
-Issues = "https://github.com/alexeygrigorev/pocketshell/issues"
+Homepage = "https://github.com/PocketShell-io/pocketshell-cli"
+Issues = "https://github.com/PocketShell-io/pocketshell-cli/issues"
 
 [dependency-groups]
 dev = [

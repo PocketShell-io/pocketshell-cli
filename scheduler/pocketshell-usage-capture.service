@@ -1,6 +1,6 @@
 [Unit]
 Description=PocketShell usage capture (writes the cached latest reading + history log)
-Documentation=https://github.com/alexeygrigorev/pocketshell/blob/main/docs/usage-panel.md
+Documentation=https://github.com/PocketShell-io/pocketshell/blob/main/docs/usage-panel.md
 
 [Service]
 Type=oneshot

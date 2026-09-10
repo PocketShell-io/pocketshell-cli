@@ -60,33 +60,14 @@ _PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 _DATA = Path(__file__).resolve().parent / "data"
 _FIXTURE_0015 = _DATA / "quse-0.0.15-usage.json"
 _FIXTURE_0015_PROVENANCE = _DATA / "quse-0.0.15-usage.provenance.txt"
-# The EXACT `normalize_usage_stdout` output for that capture. Committed so the
-# Android parser test can consume the real producer bytes instead of a Kotlin
-# re-implementation of the producer.
+# The EXACT `normalize_usage_stdout` output for that capture. The Android
+# parser test (PocketShell-io/pocketshell, shared/core-usage test resources)
+# consumes a byte-identical COPY of this file named
+# `quse-0.0.15-usage.ndjson`. Since the CLI moved to its own repo (#2643) the
+# old cross-repo drift guard cannot span both trees: the copies were
+# byte-identical at the split, and any change to either side is a deliberate,
+# reviewed change that must update the sibling copy in the same breath.
 _FIXTURE_0015_NDJSON = _DATA / "quse-0.0.15-usage.ndjson"
-_KOTLIN_FIXTURE_0015_NDJSON = (
-    Path(__file__).resolve().parents[3]
-    / "shared"
-    / "core-usage"
-    / "src"
-    / "test"
-    / "resources"
-    / "quse-0.0.15-usage.ndjson"
-)
-# The connected usage-render journey embeds the same producer NDJSON as a
-# Kotlin literal (the app module has no androidTest resource pipeline).
-_ANDROID_TEST_JOURNEY = (
-    Path(__file__).resolve().parents[3]
-    / "app"
-    / "src"
-    / "androidTest"
-    / "java"
-    / "com"
-    / "pocketshell"
-    / "app"
-    / "usage"
-    / "Usage1318StrictSchemaRenderE2eTest.kt"
-)
 _LOCK = Path(__file__).resolve().parent.parent / "uv.lock"
 
 # The published 0.0.15 shape for a span that does not apply to a provider: the
@@ -324,35 +305,6 @@ def test_committed_producer_ndjson_matches_normalize_output() -> None:
     against stale bytes.
     """
     assert _FIXTURE_0015_NDJSON.read_text() == normalize_usage_stdout(_quse_keyed_json())
-
-
-def test_kotlin_test_resource_matches_the_python_producer_fixture() -> None:
-    """Cross-language single-source guard for the shared NDJSON fixture."""
-    assert _KOTLIN_FIXTURE_0015_NDJSON.exists(), (
-        f"missing Android test resource {_KOTLIN_FIXTURE_0015_NDJSON}"
-    )
-    assert (
-        _KOTLIN_FIXTURE_0015_NDJSON.read_text() == _FIXTURE_0015_NDJSON.read_text()
-    ), "the Android test resource has drifted from the Python producer fixture"
-
-
-@pytest.mark.skip(reason="app/ deleted for app2 rewrite; re-enable once app2 has the journey fixture")
-def test_kotlin_androidtest_literal_matches_the_python_producer_fixture() -> None:
-    """The connected usage-render journey must assert against REAL producer bytes.
-
-    `Usage1318StrictSchemaRenderE2eTest` embeds the NDJSON as a Kotlin literal
-    (the app module has no androidTest resource pipeline). Guard it here so a
-    producer change cannot leave the on-device acceptance asserting a stale
-    wire shape — the #2274 → #2293 handover is exactly that kind of change.
-    """
-    assert _ANDROID_TEST_JOURNEY.exists(), f"missing {_ANDROID_TEST_JOURNEY}"
-    kotlin = _ANDROID_TEST_JOURNEY.read_text()
-    for line in _FIXTURE_0015_NDJSON.read_text().splitlines():
-        assert line in kotlin, (
-            "the connected usage journey's embedded NDJSON has drifted from the "
-            f"producer fixture; missing line for provider "
-            f"{json.loads(line)['provider']!r}"
-        )
 
 
 def test_flatten_handles_single_provider_shape() -> None:

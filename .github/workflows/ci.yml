@@ -1,0 +1,82 @@
+# CI for the standalone pocketshell CLI (extracted from
+# PocketShell-io/pocketshell#2643). Mirrors the monorepo's former
+# "Python utility tests (pocketshell)" job: same pinned uv, same frozen-lock
+# install semantics, same guards. scripts/check-python-ci-lock.sh greps THIS
+# file structurally — keep the setup-uv version, `uv sync --frozen --group
+# dev` and `uv run --frozen pytest -v` lines in the shapes it expects.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.10.11"
+          enable-cache: true
+
+      - name: Verify frozen-lock CI wiring
+        run: |
+          bash scripts/check-python-ci-lock.sh --self-test
+          bash scripts/check-python-ci-lock.sh
+
+      - name: Product surface stays aplexer-only (no tmux)
+        run: |
+          bash scripts/check-product-tmux-absent.sh --self-test
+          bash scripts/check-product-tmux-absent.sh
+
+      - name: Install pocketshell + dev deps from the committed lock
+        run: uv sync --frozen --group dev
+
+      # `-rs` prints the REASON for every skipped test. The kernel-level
+      # session-cap proof (tests/test_session_cgroup_kernel_proof.py) can only
+      # run on a host that delegates a cgroup-v2 user scope, which this runner
+      # does not, so it skips here by design — and a bare "SKIPPED" line is
+      # indistinguishable from a test that quietly stopped running. With `-rs`
+      # the log names the missing capability. scripts/check-cgroup-cap-proof.sh
+      # is what turns that skip back into a hard failure on a host that CAN
+      # run it.
+      - name: Run pytest
+        run: uv run --frozen pytest -v -rs
+
+      - name: Cgroup cap proof guard
+        run: bash scripts/check-cgroup-cap-proof.sh --if-supported
+
+      # Issue #2274 / audit F22: removes the missing-window production guard
+      # in a copied tree, proves the affected test turns red while controls
+      # stay green, restores the source, and verifies the real worktree never
+      # changed.
+      - name: Usage missing-window mutation proof
+        env:
+          POCKETSHELL_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: bash scripts/test-usage-missing-window-mutation.sh
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Smoke-test built CLI
+        run: |
+          uv run --frozen pocketshell --version
+          uv run --frozen pocketshell --help
+          uv run --frozen pocketshell usage --help

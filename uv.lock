@@ -305,7 +305,7 @@ wheels = [
 
 [[package]]
 name = "pocketshell"
-version = "0.0.0"
+version = "0.5.5"
 source = { editable = "." }
 dependencies = [
     { name = "aplexer", marker = "sys_platform == 'linux'" },

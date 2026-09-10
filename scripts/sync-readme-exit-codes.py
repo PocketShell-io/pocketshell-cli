@@ -6,7 +6,7 @@ WHY THIS EXISTS
 `pocketshell send`'s exit-code table existed in two places with no mechanical
 link: `EXIT_CODE_TABLE` in `pocketshell/send.py` — which `--help` is rendered
 from, so THAT half cannot drift — and a hand-written prose table in
-`tools/pocketshell/README.md`. #2122 corrected the exit-4 wording on the README
+`README.md`. #2122 corrected the exit-4 wording on the README
 half and left `--help` stale; #2136 fixed `--help` and added description pins,
 but only on the `EXIT_CODE_TABLE` side. Either way the two disagreed, and the
 README is what a client author reads while implementing #2124's auto-retry
@@ -69,7 +69,7 @@ def check(readme_path: Path) -> int:
     )
     print(
         f"FAIL {readme_path}: the exit-code table disagrees with EXIT_CODE_TABLE.\n"
-        "Regenerate with tools/pocketshell/scripts/sync-readme-exit-codes.py",
+        "Regenerate with scripts/sync-readme-exit-codes.py",
         file=sys.stderr,
     )
     for line in diff:

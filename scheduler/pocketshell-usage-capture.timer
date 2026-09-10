@@ -1,6 +1,6 @@
 [Unit]
 Description=Run PocketShell usage capture hourly
-Documentation=https://github.com/alexeygrigorev/pocketshell/blob/main/docs/usage-panel.md
+Documentation=https://github.com/PocketShell-io/pocketshell/blob/main/docs/usage-panel.md
 
 [Timer]
 # Hourly capture. RandomizedDelaySec spreads the provider API calls so a

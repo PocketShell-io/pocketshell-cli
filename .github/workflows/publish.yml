@@ -1,0 +1,59 @@
+# Publish the pocketshell CLI to PyPI on a vX.Y.Z tag. The tag MUST equal the
+# `version` in pyproject.toml (the release declaration — see README
+# "Release flow"). Publishing uses the PYPI_API_TOKEN repo secret, same
+# mechanism as PocketShell-io/quse. If the publish step fails after the tag
+# is pushed, fix the cause and re-run this workflow from the Actions tab;
+# the tag does not need to move.
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.10.11"
+          enable-cache: true
+      - run: uv build
+      - name: Verify dist version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          echo "tag=$TAG"
+          ls -la dist/
+          if ! ls dist/ | grep -qE -- "-${TAG}(-|\.)"; then
+            echo "::error::dist/ contents do not carry the tagged version ${TAG} — bump pyproject.toml to match the tag (or re-tag) and push again"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist
+          path: dist/*
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pocketshell
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
