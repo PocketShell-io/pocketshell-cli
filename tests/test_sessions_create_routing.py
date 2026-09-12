@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from click.testing import CliRunner
 
@@ -35,6 +36,7 @@ def test_create_uses_only_aplexer_and_emits_schema_three(monkeypatch, tmp_path: 
     monkeypatch.setattr(sessions, "_resolve_aplexer", lambda: _resolution("/fake/a"))
     monkeypatch.setattr(sessions, "_aplexer_snapshot", lambda: [])
     monkeypatch.setattr(sessions._memcap, "resolve_session_mem_bytes", lambda **_: 123)
+    monkeypatch.setattr(sessions, "uuid4", lambda: SimpleNamespace(hex="deadbeefcafe"))
 
     def start(argv):
         calls.append(list(argv))
@@ -55,10 +57,39 @@ def test_create_uses_only_aplexer_and_emits_schema_three(monkeypatch, tmp_path: 
         "created": True,
     }
     assert calls == [[
+        "systemd-run", "--user", "--scope",
+        "--unit", "aplexer-launch-deadbeefcafe", "--collect", "--",
         "/fake/a", "--json", "start", "--workspace", str(tmp_path),
         "--tag", "shell", "--engine", "codex", "--memory", "123",
     ]]
     assert "backend" not in result.output.lower()
+
+
+def test_capped_start_wraps_the_worker_in_a_unique_user_scope() -> None:
+    first = sessions.aplexer_start_argv(
+        aplexer_path="/fake/a", workspace="/work/project", tag="shell",
+        engine=None, profile=None, memory_bytes=123,
+    )
+    second = sessions.aplexer_start_argv(
+        aplexer_path="/fake/a", workspace="/work/project", tag="shell",
+        engine=None, profile=None, memory_bytes=123,
+    )
+    for argv in (first, second):
+        assert argv[:7] == [
+            "systemd-run", "--user", "--scope", "--unit", argv[4], "--collect", "--",
+        ]
+        assert argv[4].startswith("aplexer-launch-")
+        assert "--memory" in argv[7:]
+    assert first[4] != second[4]
+
+
+def test_uncapped_start_is_not_wrapped() -> None:
+    argv = sessions.aplexer_start_argv(
+        aplexer_path="/fake/a", workspace="/work/project", tag="shell",
+        engine=None, profile=None, memory_bytes=None,
+    )
+    assert argv == ["/fake/a", "--json", "start", "--workspace", "/work/project", "--tag", "shell"]
+    assert not any("systemd-run" in part for part in argv)
 
 
 def test_create_reuses_a_live_record_without_starting_again(monkeypatch, tmp_path: Path) -> None:

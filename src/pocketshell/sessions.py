@@ -9,6 +9,7 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
+from uuid import uuid4
 
 import click
 
@@ -181,7 +182,28 @@ def aplexer_start_argv(
     profile: Optional[str],
     memory_bytes: Optional[int],
 ) -> list[str]:
-    """Build the detached ``a --json start`` invocation."""
+    """Build the detached ``a --json start`` invocation.
+
+    A capped start is wrapped in a transient per-user systemd scope
+    (``systemd-run --user --scope``). aplexer's worker moves the workload
+    into its delegated scope by writing its own pgid into that scope's
+    ``cgroup.procs`` from a pre_exec hook, and cgroup-v2 grants that write
+    only on the common ancestor of the writer's cgroup and the target.
+    Spawned straight from an SSH session, the worker lives in
+    ``session-*.scope``, the workload scope lands under
+    ``user@<uid>.service/app.slice``, and their common ancestor
+    (``user-<uid>.slice``) is root-owned — so every capped create died with
+    ``spawn workload: Permission denied (os error 13)`` (#2625; the same
+    runner gap PR #2590 documented from the CI side). Inside a user-manager
+    scope the common ancestor is the user-owned ``app.slice`` — the shape
+    every session still had under the tmux arm's ``robust.slice`` before
+    #2561 removed tmux. The scope becomes the worker's home for the
+    session's whole life (aplexer's record discloses it as
+    ``worker_cgroup``), and ``--collect`` reaps the unit once the session
+    is gone. Only capped starts wrap: an uncapped ``a start`` (the Docker
+    fixture's ``--mem none``) performs no cgroup migration and must keep
+    working on hosts with no user manager at all.
+    """
     argv = [aplexer_path, "--json", "start", "--workspace", workspace, "--tag", tag]
     if engine:
         argv.extend(["--engine", engine])
@@ -189,6 +211,11 @@ def aplexer_start_argv(
         argv.extend(["--profile", profile])
     if memory_bytes is not None:
         argv.extend(["--memory", str(memory_bytes)])
+        argv = [
+            "systemd-run", "--user", "--scope",
+            "--unit", f"aplexer-launch-{uuid4().hex}",
+            "--collect", "--",
+        ] + argv
     return argv
 
 
