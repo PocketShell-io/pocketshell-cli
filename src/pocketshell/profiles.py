@@ -226,6 +226,49 @@ def _aplexer_profiles(
     return _profiles_from_aplexer_json(payload)
 
 
+def resolve_aplexer_profile_arg(
+    name: str,
+    engine: Optional[str] = None,
+    env: Optional[dict[str, str]] = None,
+) -> Optional[str]:
+    """Map a client-facing profile name onto the ``a start --profile`` value.
+
+    The client picker shows the display names from ``profiles list``
+    (``Zcodex``, ``Claude (Z.AI)``), while ``a start --profile`` takes
+    aplexer's profile ids — the lowercase dir stems — matched
+    case-sensitively, and aplexer deliberately omits the engines' default
+    dirs, so the default display names (``Codex`` / ``Claude``) are unknown
+    to it (#2661). Resolution order:
+
+    1. case-insensitive match on an aplexer profile id → that id;
+    2. case-insensitive match on a profile's display name for ``engine``
+       → the aplexer id behind it;
+    3. the engine's default display name → ``None`` (the caller must drop
+       ``--profile`` entirely);
+    4. anything else → ``name`` unchanged, so aplexer produces its
+       authoritative ``unknown profile`` error.
+
+    Probe failure or the ``POCKETSHELL_APLEXER`` kill switches return
+    ``name`` unchanged (branch 4), degrading to the pre-#2661 behaviour.
+    """
+    payload = aplexer.run_json(["profiles"], env=env, feature="profiles")
+    if not isinstance(payload, dict):
+        return name
+    lowered = name.strip().lower()
+    for stem in payload:
+        if isinstance(stem, str) and stem.lower() == lowered:
+            return stem
+    if engine:
+        for stem, entry in payload.items():
+            if not isinstance(entry, dict) or entry.get("engine") != engine:
+                continue
+            if _display_name_for_sibling(engine, str(stem)).lower() == lowered:
+                return str(stem)
+        if _ENGINE_DEFAULT_DISPLAY.get(engine, "").lower() == lowered:
+            return None
+    return name
+
+
 def _profile_key(profile: Profile) -> tuple[str, Optional[str]]:
     """Compare native vs aplexer siblings by engine + config_dir."""
     path = profile.config_dir

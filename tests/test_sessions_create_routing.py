@@ -119,3 +119,65 @@ def test_create_fails_loudly_when_aplexer_cannot_resolve(monkeypatch) -> None:
 
     assert result.exit_code == 127
     assert "could not resolve" in result.output
+
+
+def _start_recording(calls: list[list[str]]):
+    def start(argv: list[str]):
+        calls.append(list(argv))
+        return 0, json.dumps(_record()), ""
+
+    return start
+
+
+def test_create_translates_a_profile_display_name_onto_the_aplexer_id(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """#2661: the picker sends display names; aplexer wants dir-stem ids."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(sessions, "_resolve_aplexer", lambda: _resolution("/fake/a"))
+    monkeypatch.setattr(sessions, "_aplexer_snapshot", lambda: [])
+    monkeypatch.setattr(sessions._memcap, "resolve_session_mem_bytes", lambda **_: 123)
+    monkeypatch.setattr(sessions, "_run_aplexer", _start_recording(calls))
+    monkeypatch.setattr(
+        sessions._profiles,
+        "resolve_aplexer_profile_arg",
+        lambda name, engine=None: {"Zcodex": "zcodex"}.get(name, name),
+    )
+
+    result = CliRunner().invoke(
+        sessions.sessions_group,
+        [
+            "create", "shell", "--cwd", str(tmp_path),
+            "--engine", "codex", "--profile", "Zcodex", "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0][calls[0].index("--profile") + 1] == "zcodex"
+
+
+def test_create_drops_the_profile_flag_for_the_engine_default_display_name(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """#2661: aplexer omits default dirs, so `--profile Codex` must go away."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(sessions, "_resolve_aplexer", lambda: _resolution("/fake/a"))
+    monkeypatch.setattr(sessions, "_aplexer_snapshot", lambda: [])
+    monkeypatch.setattr(sessions._memcap, "resolve_session_mem_bytes", lambda **_: 123)
+    monkeypatch.setattr(sessions, "_run_aplexer", _start_recording(calls))
+    monkeypatch.setattr(
+        sessions._profiles,
+        "resolve_aplexer_profile_arg",
+        lambda name, engine=None: None if name == "Codex" else name,
+    )
+
+    result = CliRunner().invoke(
+        sessions.sessions_group,
+        [
+            "create", "shell", "--cwd", str(tmp_path),
+            "--engine", "codex", "--profile", "Codex", "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "--profile" not in calls[0]

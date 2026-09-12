@@ -604,3 +604,61 @@ def test_cli_shape_unchanged_with_shadow_probe(
         assert "SECRET" not in json.dumps(entry)
     names = {p["name"] for p in parsed["profiles"]}
     assert {"Claude", "Claude (Z.AI)", "Codex"} <= names
+
+
+# ---------------------------------------------------------------------------
+# resolve_aplexer_profile_arg (#2661): the client picker sends display names
+# ("Zcodex"), `a start --profile` takes aplexer's dir-stem ids ("zcodex"),
+# and aplexer deliberately omits the engines' default dirs ("Codex").
+# ---------------------------------------------------------------------------
+
+
+_APLEXER_PROFILES_PAYLOAD = {
+    "godex": {"engine": "codex", "env": {"CODEX_HOME": "/home/u/.godex"}},
+    "zcodex": {"engine": "codex", "env": {"CODEX_HOME": "/home/u/.zcodex"}},
+    "zlaude": {"engine": "claude", "env": {"CLAUDE_CONFIG_DIR": "/home/u/.zlaude"}},
+}
+
+
+def test_resolve_aplexer_profile_arg_maps_display_name_to_id(tmp_path, monkeypatch):
+    _install_fake_a(tmp_path, monkeypatch, payload=_APLEXER_PROFILES_PAYLOAD)
+    assert profiles.resolve_aplexer_profile_arg("Zcodex", engine="codex") == "zcodex"
+
+
+def test_resolve_aplexer_profile_arg_accepts_the_aplexer_id_verbatim(tmp_path, monkeypatch):
+    _install_fake_a(tmp_path, monkeypatch, payload=_APLEXER_PROFILES_PAYLOAD)
+    assert profiles.resolve_aplexer_profile_arg("zcodex", engine="codex") == "zcodex"
+
+
+def test_resolve_aplexer_profile_arg_is_case_insensitive_on_the_id(tmp_path, monkeypatch):
+    _install_fake_a(tmp_path, monkeypatch, payload=_APLEXER_PROFILES_PAYLOAD)
+    assert profiles.resolve_aplexer_profile_arg("Godex", engine="codex") == "godex"
+
+
+def test_resolve_aplexer_profile_arg_maps_the_known_alias_display_name(tmp_path, monkeypatch):
+    _install_fake_a(tmp_path, monkeypatch, payload=_APLEXER_PROFILES_PAYLOAD)
+    assert profiles.resolve_aplexer_profile_arg("Claude (Z.AI)", engine="claude") == "zlaude"
+
+
+def test_resolve_aplexer_profile_arg_drops_the_engine_default_display_name(tmp_path, monkeypatch):
+    _install_fake_a(tmp_path, monkeypatch, payload=_APLEXER_PROFILES_PAYLOAD)
+    assert profiles.resolve_aplexer_profile_arg("Codex", engine="codex") is None
+
+
+def test_resolve_aplexer_profile_arg_keeps_unknown_names_verbatim(tmp_path, monkeypatch):
+    _install_fake_a(tmp_path, monkeypatch, payload=_APLEXER_PROFILES_PAYLOAD)
+    assert profiles.resolve_aplexer_profile_arg("Nope", engine="codex") == "Nope"
+
+
+def test_resolve_aplexer_profile_arg_degrades_to_passthrough_without_the_probe(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("POCKETSHELL_APLEXER_PROFILES", "0")
+    assert profiles.resolve_aplexer_profile_arg("Zcodex", engine="codex") == "Zcodex"
+
+
+def test_resolve_aplexer_profile_arg_degrades_to_passthrough_on_probe_failure(
+    tmp_path, monkeypatch
+):
+    _install_fake_a(tmp_path, monkeypatch, exit_code=2)
+    assert profiles.resolve_aplexer_profile_arg("Zcodex", engine="codex") == "Zcodex"

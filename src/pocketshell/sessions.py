@@ -15,6 +15,7 @@ import click
 
 from . import aplexer as _aplexer
 from . import memcap as _memcap
+from . import profiles as _profiles
 from . import session_enum as _session_enum
 
 
@@ -366,7 +367,11 @@ def _create_on_aplexer(
         workspace=workspace,
         tag=name,
         engine=engine,
-        profile=profile,
+        profile=(
+            _profiles.resolve_aplexer_profile_arg(profile, engine=engine)
+            if profile
+            else profile
+        ),
         memory_bytes=memory_bytes,
     )
     code, stdout, stderr = _run_aplexer(argv)
