@@ -195,9 +195,9 @@ def aplexer_start_argv(
     (``user-<uid>.slice``) is root-owned — so every capped create died with
     ``spawn workload: Permission denied (os error 13)`` (#2625; the same
     runner gap PR #2590 documented from the CI side). Inside a user-manager
-    scope the common ancestor is the user-owned ``app.slice`` — the shape
-    every session still had under the tmux arm's ``robust.slice`` before
-    #2561 removed tmux. The scope becomes the worker's home for the
+    scope the common ancestor is the user-owned ``app.slice`` — the
+    placement every session had before #2561 removed the previous session
+    backend. The scope becomes the worker's home for the
     session's whole life (aplexer's record discloses it as
     ``worker_cgroup``), and ``--collect`` reaps the unit once the session
     is gone. Only capped starts wrap: an uncapped ``a start`` (the Docker
