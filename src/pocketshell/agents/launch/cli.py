@@ -69,7 +69,7 @@ def _make_agent_command(kind: str):
         config_dir: Optional[str],
         profile: Optional[str],
     ) -> None:
-        config_dir, extra_env, profile_label = _resolve_config_dir(
+        config_dir, extra_env = _resolve_config_dir(
             ctx, kind, config_dir, profile
         )
         launch_agent(
@@ -79,7 +79,6 @@ def _make_agent_command(kind: str):
             skip_permissions=skip_permissions,
             config_dir=config_dir,
             extra_env=extra_env,
-            profile=profile_label,
         )
 
     return _cmd

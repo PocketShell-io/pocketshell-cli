@@ -475,31 +475,33 @@ def test_launch_agent_missing_dir_exits_two():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_config_dir_default_profile_label_is_none(tmp_path, monkeypatch):
-    """The default Claude profile resolves to a None profile label."""
+def test_resolve_config_dir_default_profile_uses_agent_defaults(tmp_path, monkeypatch):
+    """The default Claude profile leaves its config dir unset."""
     _seed_zlaude_home(tmp_path, monkeypatch)
-    cfg, env, label = agents._resolve_config_dir(
+    cfg, env = agents._resolve_config_dir(
         _FakeCtx(), "claude", None, "Claude"
     )
-    assert label is None
+    assert cfg is None
+    assert env == {}
 
 
-def test_resolve_config_dir_named_profile_label(tmp_path, monkeypatch):
-    """A named (non-default) profile resolves to its human label."""
-    _seed_zlaude_home(tmp_path, monkeypatch)
-    cfg, env, label = agents._resolve_config_dir(
+def test_resolve_config_dir_named_profile_returns_config_dir(tmp_path, monkeypatch):
+    """A named profile resolves to its config dir for the launch."""
+    home = _seed_zlaude_home(tmp_path, monkeypatch)
+    cfg, env = agents._resolve_config_dir(
         _FakeCtx(), "claude", None, "Claude (Z.AI)"
     )
-    assert label == "Claude (Z.AI)"
+    assert cfg == str(home / ".zlaude")
+    assert env == {}
 
 
-def test_resolve_config_dir_config_dir_has_no_profile_label():
-    """An explicit --config-dir carries no named profile, so no label."""
-    cfg, env, label = agents._resolve_config_dir(
+def test_resolve_config_dir_explicit_config_dir_returns_no_extra_env():
+    """An explicit --config-dir carries no profile-specific extra env."""
+    cfg, env = agents._resolve_config_dir(
         _FakeCtx(), "codex", "/home/u/.codex-x", None
     )
     assert cfg == "/home/u/.codex-x"
-    assert label is None
+    assert env == {}
 
 
 # ---------------------------------------------------------------------------

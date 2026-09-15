@@ -88,10 +88,6 @@ from pocketshell.agents.launch.run import (
     launch_agent,
     _resolve_config_dir,
 )
-from pocketshell.agents.launch.record import (
-    record_agent_kind,
-    record_agent_source,
-)
 from pocketshell.agents.launch.spec import (
     _aplexer_profile_id,
 )
@@ -111,8 +107,6 @@ __all__ = [
     "claude_config_path",
     "seed_claude_trust",
     "launch_agent",
-    "record_agent_kind",
-    "record_agent_source",
     "_aplexer_profile_id",
     "_resolve_config_dir",
     "agent_group",

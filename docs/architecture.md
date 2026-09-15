@@ -25,7 +25,6 @@ src/pocketshell/
 │       ├── cli.py               # `pocketshell agent`
 │       ├── command.py            # argv construction
 │       ├── environment.py        # launch environment policy
-│       ├── record.py             # launch instrumentation seam
 │       ├── run.py                # process execution
 │       ├── spec.py               # aplexer launch specs
 │       └── trust.py              # provider trust preparation

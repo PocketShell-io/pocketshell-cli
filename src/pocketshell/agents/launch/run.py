@@ -10,7 +10,6 @@ from pocketshell.env import merged_exports
 # --- sibling modules ---
 from pocketshell.agents.launch.command import _agent_missing_message, build_argv
 from pocketshell.agents.launch.environment import _env_from_launch_spec, build_env
-from pocketshell.agents.launch.record import record_agent_kind, record_agent_source
 from pocketshell.agents.launch.spec import _aplexer_launch_spec
 from pocketshell.agents.launch.trust import claude_config_path, seed_claude_trust
 
@@ -108,18 +107,6 @@ def _seed_trust_if_needed(kind: str, env: dict[str, str], resolved_dir: str) -> 
         seed_claude_trust(claude_config_path(env), resolved_dir)
 
 
-def _record_launch(
-    kind: str,
-    resolved_dir: str,
-    profile: Optional[str],
-    record_kind,
-    record_source,
-) -> None:
-    """Optional instrumentation boundary before exec; defaults are no-ops."""
-    record_kind(kind, dict(os.environ), profile=profile)
-    record_source(kind, resolved_dir, dict(os.environ))
-
-
 def _prepare_launch(
     ctx: click.Context,
     kind: str,
@@ -128,7 +115,7 @@ def _prepare_launch(
     skip_permissions: bool,
     config_dir: Optional[str],
     extra_env: Optional[dict[str, str]],
-) -> tuple[dict[str, str], list[str], str]:
+) -> tuple[dict[str, str], list[str]]:
     """Resolve engine + dir, build argv/env, preflight, chdir, seed trust."""
     manifest = _resolve_manifest(ctx, kind)
     resolved_dir = str(_resolve_dir(ctx, directory))
@@ -141,32 +128,28 @@ def _prepare_launch(
     # Run from the folder so the agent's cwd is correct.
     os.chdir(resolved_dir)
     _seed_trust_if_needed(kind, env, resolved_dir)
-    return env, argv, resolved_dir
+    return env, argv
 
 
 def launch_agent(
     ctx: click.Context, kind: str, directory: str, *, skip_permissions: bool,
     config_dir: Optional[str], extra_env: Optional[dict[str, str]] = None,
-    profile: Optional[str] = None, execvpe=None,
-    record_kind=None, record_source=None,
+    execvpe=None,
 ) -> None:
     """Resolve the dir, build env+argv, suppress prompts, exec the agent.
 
     ``extra_env`` layers the selected profile's ``env:`` block (#732) under
-    the #703 provider strip. ``execvpe``/``record_*`` are test injection
-    points; production resolves :func:`os.execvpe` *at call time* so a
-    monkeypatch on ``agents.os.execvpe`` is honoured (a default argument
-    would bind the original at def-time and bypass the patch). Never returns.
+    the #703 provider strip. ``execvpe`` is a test injection point; production
+    resolves :func:`os.execvpe` *at call time* so a monkeypatch on
+    ``agents.os.execvpe`` is honoured (a default argument would bind the
+    original at def-time and bypass the patch). Never returns.
     """
     execvpe = execvpe or os.execvpe
-    record_kind = record_kind or record_agent_kind
-    record_source = record_source or record_agent_source
-    env, argv, resolved_dir = _prepare_launch(
+    env, argv = _prepare_launch(
         ctx, kind, directory,
         skip_permissions=skip_permissions,
         config_dir=config_dir, extra_env=extra_env,
     )
-    _record_launch(kind, resolved_dir, profile, record_kind, record_source)
     # Replace this process with the agent so it owns the pty cleanly.
     execvpe(argv[0], argv, env)
 
@@ -193,16 +176,14 @@ def _resolve_config_dir(
     kind: str,
     config_dir: Optional[str],
     profile: Optional[str],
-) -> tuple[Optional[str], dict[str, str], Optional[str]]:
-    """Resolve config dir + extra env + profile label from the launch flags.
+) -> tuple[Optional[str], dict[str, str]]:
+    """Resolve config dir and extra env from the launch flags.
 
-    Returns ``(config_dir, extra_env, profile_label)``. ``--config-dir`` and
+    Returns ``(config_dir, extra_env)``. ``--config-dir`` and
     ``--profile`` are mutually exclusive. ``--profile`` resolves the named
-    host profile to its ``config_dir`` AND its ``env:`` block (#732).
-    ``profile_label`` (#858) is the resolved profile's human ``name`` for a
-    *non-default* profile only, so the session tree can tell a z.ai Claude
-    apart from a default Claude; a default launch clears any stale
-    ``@ps_agent_profile`` option (#889).
+    host profile to its ``config_dir`` and ``env:`` block (#732). Session
+    metadata is recorded by aplexer from the launched process, so the wrapper
+    does not maintain a second host-side metadata source.
     """
     if config_dir is not None and profile is not None:
         click.echo(
@@ -212,9 +193,6 @@ def _resolve_config_dir(
         )
         ctx.exit(2)
     if profile is None:
-        return config_dir, {}, None
+        return config_dir, {}
     resolved = _resolve_named_profile(ctx, kind, profile)
-    # Only a non-default profile is surfaced as a label; the default profile
-    # is the plain kind (no spurious chip in the tree).
-    label = None if resolved.default else resolved.name
-    return resolved.config_dir, dict(resolved.env), label
+    return resolved.config_dir, dict(resolved.env)

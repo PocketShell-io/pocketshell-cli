@@ -6,7 +6,6 @@ from pocketshell.agents.launch.environment import (
     PROVIDER_ENV_UNSET_VARS,
     build_env,
 )
-from pocketshell.agents.launch.record import record_agent_kind, record_agent_source
 from pocketshell.agents.launch.run import launch_agent, _resolve_config_dir
 from pocketshell.agents.launch.spec import _aplexer_profile_id
 from pocketshell.agents.launch.trust import claude_config_path, seed_claude_trust
@@ -19,8 +18,6 @@ __all__ = [
     "claude_config_path",
     "seed_claude_trust",
     "launch_agent",
-    "record_agent_kind",
-    "record_agent_source",
     "_aplexer_profile_id",
     "_resolve_config_dir",
 ]
