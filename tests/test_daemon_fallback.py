@@ -22,9 +22,9 @@ from click.testing import CliRunner
 from pocketshell.daemon import client as dclient
 from pocketshell.daemon import failures as dfailures
 from pocketshell.daemon import protocol as dprotocol
-from pocketshell.agents_kind import agents_group as _agents_group
+from pocketshell.agents import agents_group as _agents_group
 from pocketshell.cli import cli
-from pocketshell.cgroup_agents import DEFAULT_CGROUP_MOUNT, DEFAULT_PROC_ROOT
+from pocketshell.runtime.cgroups import DEFAULT_CGROUP_MOUNT, DEFAULT_PROC_ROOT
 
 
 class _FakeSocket:
@@ -169,7 +169,7 @@ def test_affected_wrappers_share_supported_skew_fallback(
 
         result = sessions._try_daemon_sessions_list(as_json=False)
     elif wrapper == "agent-kind":
-        from pocketshell import agents_kind
+        from pocketshell.agents import kind as agents_kind
 
         result = agents_kind._try_daemon_call(
             [],

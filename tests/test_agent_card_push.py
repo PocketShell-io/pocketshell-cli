@@ -18,7 +18,8 @@ from typing import Any
 
 from click.testing import CliRunner
 
-from pocketshell import agent_card_push, cards as cards_mod, push as push_mod
+from pocketshell import cards as cards_mod, push as push_mod
+from pocketshell.cards import push as agent_card_push
 from pocketshell.cli import cli
 
 

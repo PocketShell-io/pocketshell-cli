@@ -32,7 +32,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pocketshell import aplexer as _aplexer
+from pocketshell.runtime import aplexer as _aplexer
 
 PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 

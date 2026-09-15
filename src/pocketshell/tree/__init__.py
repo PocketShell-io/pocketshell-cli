@@ -84,6 +84,14 @@ from pocketshell.tree.workspace import (
     get_workspace,
     upsert_workspace,
 )
+from pocketshell.tree.workspace_cli import (
+    WORKSPACES_KEY,
+    WORKSPACES_SCHEMA,
+    add_workspace,
+    list_workspaces,
+    remove_workspace,
+    workspaces_group,
+)
 import os  # noqa: F401  (tests patch tree_mod.os.fsync/replace)
 
 __all__ = [
@@ -106,6 +114,12 @@ __all__ = [
     "MAX_OPEN_TABS",
     "get_workspace",
     "upsert_workspace",
+    "WORKSPACES_KEY",
+    "WORKSPACES_SCHEMA",
+    "add_workspace",
+    "list_workspaces",
+    "remove_workspace",
+    "workspaces_group",
     "daemon_handler_get",
     "daemon_handler_upsert",
     "daemon_handler_reconcile",

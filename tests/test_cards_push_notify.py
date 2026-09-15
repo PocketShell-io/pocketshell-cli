@@ -29,7 +29,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from pocketshell import agent_card_push as push_mod
+from pocketshell.cards import push as push_mod
 from pocketshell import cards as cards_mod
 from pocketshell.cli import cli
 
@@ -43,9 +43,9 @@ def _env(tmp_path: Path) -> dict[str, str]:
 
 @pytest.fixture
 def notify_spy(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Spy replacing ``agent_card_push.notify_card_pushed``.
+    """Spy replacing ``cards.push.notify_card_pushed``.
 
-    The push verbs import it lazily (``from pocketshell.agent_card_push import
+    The push verbs import it lazily (``from pocketshell.cards.push import
     notify_card_pushed``), so patching the module attribute intercepts the call
     at invocation time. Records each call so we can assert count + arguments.
     """

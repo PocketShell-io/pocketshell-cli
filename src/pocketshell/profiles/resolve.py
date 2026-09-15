@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Optional
-from pocketshell import aplexer
+from pocketshell.runtime import aplexer
 # --- sibling modules ---
 from pocketshell.profiles.model import yaml  # noqa: F401
 # --- sibling modules ---

@@ -183,7 +183,7 @@ def _agents_kind_for_panes_handler(params: Mapping[str, Any]) -> dict[str, Any]:
     ``unknown`` (pane pid/cgroup unreadable). One bad pane never sinks
     the batch.
     """
-    from pocketshell import cgroup_agents as _cgroup_agents
+    from pocketshell.runtime import cgroups as _cgroup_agents
 
     return {"results": _cgroup_agents.kind_for_panes(_validated_panes(params))}
 

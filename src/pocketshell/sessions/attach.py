@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Sequence
 import click
-from pocketshell import session_enum as _session_enum
+from pocketshell.runtime import sessions as _session_enum
 # --- sibling modules ---
 from pocketshell.sessions.cli import sessions_group
 from pocketshell.sessions.create import _aplexer_snapshot, _aplexer_unresolved_message, _resolve_aplexer

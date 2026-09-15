@@ -17,8 +17,8 @@ from typing import Optional
 
 import pytest
 
-from pocketshell import cgroup_agents
-from pocketshell.cgroup_agents import (
+from pocketshell.runtime import cgroups as cgroup_agents
+from pocketshell.runtime.cgroups import (
     AGENT_CLAUDE,
     AGENT_CODEX,
     AGENT_GROK,

@@ -465,7 +465,7 @@ def test_reconcile_empty_registry_yields_added_only(tmp_path: Path) -> None:
 
 def test_live_session_names_none_when_aplexer_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(
-        "pocketshell.session_enum.enumerate_live_sessions",
+        "pocketshell.runtime.sessions.enumerate_live_sessions",
         lambda **_kwargs: ([], [{"message": "aplexer unavailable"}]),
     )
     assert tree_mod._live_session_names() is None

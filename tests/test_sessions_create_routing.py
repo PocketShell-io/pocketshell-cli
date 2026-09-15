@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 from click.testing import CliRunner
 
-from pocketshell import aplexer, sessions
+from pocketshell import sessions
+from pocketshell.runtime import aplexer
 from pocketshell.sessions import create as create_mod
 
 

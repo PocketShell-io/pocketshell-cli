@@ -5,7 +5,7 @@ deleted the proof that lived beside it; this file restores that proof (the
 release gate `scripts/check-cgroup-cap-proof.sh` pins its node, so deleting
 it silently made every release validation impossible). Behaviour under proof
 is unchanged: `pocketshell sessions create` resolves the cap with
-`pocketshell.memcap` and hands it to `a start --memory`, and APLEXER applies
+`pocketshell.runtime.memcap` and hands it to `a start --memory`, and APLEXER applies
 it in a cgroup-v2 systemd `--user` scope.
 
 The oracle is the KERNEL: the created session's own cgroup must carry the
@@ -49,7 +49,7 @@ from typing import Optional
 
 import pytest
 
-from pocketshell import memcap
+from pocketshell.runtime import memcap
 
 #: Reason text for the platform guard, named so the decorator guard below
 #: compares against a stable shape rather than a free-form string.

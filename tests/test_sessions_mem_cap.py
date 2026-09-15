@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pocketshell import memcap
+from pocketshell.runtime import memcap
 
 
 def test_explicit_cap_wins() -> None:

@@ -24,8 +24,7 @@ import click
 from pocketshell import __version__
 from pocketshell.agent_log import agent_log_command
 from pocketshell.cards import register_push_card_commands
-from pocketshell.agents import agent_group
-from pocketshell.agents_kind import agents_group
+from pocketshell.agents import agent_group, agents_group
 from pocketshell.env import env_group
 from pocketshell.engines import engines_group
 from pocketshell.github import github_group
@@ -37,9 +36,8 @@ from pocketshell.push import push_group
 from pocketshell.repos import repos_group
 from pocketshell.sessions import sessions_group
 from pocketshell.serve import serve_command
-from pocketshell.tree import tree_group
+from pocketshell.tree import tree_group, workspaces_group
 from pocketshell.usage import usage_command
-from pocketshell.workspaces import workspaces_group
 
 
 @click.group(

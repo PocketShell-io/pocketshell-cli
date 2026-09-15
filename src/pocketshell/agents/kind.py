@@ -1,7 +1,7 @@
 """`pocketshell agents kind` — CLI seam over the cgroup agent-kind detector.
 
 Epic #821 (workstream A2-infra). The daemon RPC ``agents.kind_for_panes``
-(:func:`pocketshell.cgroup_agents.kind_for_panes`,
+(:func:`pocketshell.runtime.cgroups.kind_for_panes`,
 :func:`pocketshell.daemon._agents_kind_for_panes_handler`) does cgroup-v2 +
 ``/proc`` agent-kind detection on the host, but it is **daemon-registry-only**:
 the PocketShell Android client only ever execs ``pocketshell <subcommand>`` over
@@ -12,7 +12,7 @@ This module adds the missing seam: ``pocketshell agents kind`` accepts a pane
 list (each pane ``{pane_id, pane_pid}``, matching the RPC's input shape),
 dispatches to the daemon when it is up (mirroring the
 :func:`pocketshell.sessions._try_daemon_sessions_list` CLI→daemon pattern), falls back
-to calling :func:`pocketshell.cgroup_agents.kind_for_panes` in-process when the
+to calling :func:`pocketshell.runtime.cgroups.kind_for_panes` in-process when the
 daemon is absent (the detection is pure cgroupfs/``/proc`` reads — no shell-out,
 so the in-process call is the same computation the daemon performs), and emits
 the RPC's ``{"results": [{pane_id, agent_kind, scope, evidence_pid?}]}`` as
@@ -29,7 +29,7 @@ Input forms (pick whichever is convenient — they merge):
 ``none`` / ``unknown`` / empty-pane inputs never error: an empty pane list
 yields ``{"results": []}``, a missing/invalid ``pane_pid`` yields
 ``agent_kind="unknown"`` for that pane, and one bad pane never sinks the batch
-(the detector is defensive by design — see ``cgroup_agents``).
+(the detector is defensive by design — see ``runtime.cgroups``).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from typing import Any, Mapping, Optional
 
 import click
 
-from pocketshell.cgroup_agents import (
+from pocketshell.runtime.cgroups import (
     DEFAULT_CGROUP_MOUNT,
     DEFAULT_PROC_ROOT,
 )
@@ -134,7 +134,7 @@ def _classify_in_process(
     cgroup_mount: str,
 ) -> dict[str, Any]:
     """Call the detector in-process and wrap it in the RPC's result envelope."""
-    from pocketshell import cgroup_agents as _cgroup_agents
+    from pocketshell.runtime import cgroups as _cgroup_agents
 
     results = _cgroup_agents.kind_for_panes(
         panes, proc_root=proc_root, cgroup_mount=cgroup_mount

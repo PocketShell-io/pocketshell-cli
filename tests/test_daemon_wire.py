@@ -397,7 +397,7 @@ def shimmed_backends(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     stub("pocketshell.repos.daemon_handler_clone", {"status": "cloned"})
     stub("pocketshell.repos.daemon_handler_open", {"status": "open"})
     stub("pocketshell.sessions.daemon_handler_list", {"sessions": []})
-    stub("pocketshell.cgroup_agents.kind_for_panes", [{"pane_id": "%0"}])
+    stub("pocketshell.runtime.cgroups.kind_for_panes", [{"pane_id": "%0"}])
     stub("pocketshell.tree.daemon_handler_get", {"nodes": []})
     stub("pocketshell.tree.daemon_handler_upsert", {"ok": True})
     stub("pocketshell.tree.daemon_handler_reconcile", {"ok": True})

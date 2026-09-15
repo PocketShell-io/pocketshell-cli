@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from pocketshell import aplexer
+from pocketshell.runtime import aplexer
 
 
 # Wire version of :func:`json_payload`. Schema 3 removes the old backend

@@ -99,6 +99,7 @@ from pocketshell.agents.trust import (
     claude_config_path,
     seed_claude_trust,
 )
+from pocketshell.agents.kind import agents_group
 import os  # noqa: F401  (tests patch agents.os.execvpe)
 import shutil  # noqa: F401  (tests patch agents.shutil.which)
 
@@ -115,4 +116,5 @@ __all__ = [
     "_aplexer_profile_id",
     "_resolve_config_dir",
     "agent_group",
+    "agents_group",
 ]

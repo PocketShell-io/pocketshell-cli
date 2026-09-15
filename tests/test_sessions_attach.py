@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
-from pocketshell import aplexer, sessions, session_enum
+from pocketshell import sessions
+from pocketshell.runtime import aplexer, sessions as session_enum
 from pocketshell.sessions import attach as attach_mod
 
 

@@ -10,14 +10,12 @@ which individual issues added files.
 src/pocketshell/
 ├── __main__.py                  # python -m pocketshell
 ├── cli.py                       # root Click composition and daemon lifecycle
-├── aplexer.py                   # shared adapter for the bundled `a` backend
 ├── github.py                    # one-file `github status` integration
 ├── serve.py                     # one-file foreground HTTP integration
 ├── agent_log/                   # conversation-log discovery and handoff
-├── agents/                      # agent launch plus cgroup kind detection
+├── agents/                      # agent launch plus kind-command CLI
 │   ├── cli.py                   # `pocketshell agent`
-│   ├── kind.py                  # cgroup/proc classifier
-│   └── kind_cli.py              # `pocketshell agents kind`
+│   └── kind.py                  # `pocketshell agents kind`
 ├── cards/                       # typed agent→app cards
 │   └── push.py                  # card FCM notification adapter
 ├── daemon/                      # Unix-socket JSON-RPC server/client
@@ -29,11 +27,14 @@ src/pocketshell/
 ├── prune_attachments/           # attachment cleanup command
 ├── push/                        # FCM transport and usage-reset pushes
 ├── repos/                       # local/remote repository discovery
-├── sessions/                    # aplexer session lifecycle
-│   ├── enumeration.py           # live-session wire model and probing
-│   └── memcap.py                # session memory-cap policy
+├── runtime/                     # shared host-runtime primitives
+│   ├── aplexer.py               # bundled `a` backend adapter
+│   ├── cgroups.py               # cgroup/proc agent classifier
+│   ├── memcap.py                # session memory-cap policy
+│   └── sessions.py              # live-session wire model and probing
+├── sessions/                    # aplexer session lifecycle commands
 ├── tree/                        # durable tree/workspace registry
-│   └── workspaces.py            # `pocketshell workspaces`
+│   └── workspace_cli.py         # `pocketshell workspaces`
 └── usage/                       # the complete usage boundary
     ├── cli.py                   # live/cache/reset-events command modes
     ├── quse.py                  # thin process boundary to quse
@@ -53,14 +54,16 @@ single-file external-tool adapter does not need a package solely to gain an
 - A feature package's `__init__.py` is its public compatibility surface. Code
   inside the package imports implementation modules directly to avoid circular
   imports through the public surface.
-- `sessions` owns live-session models, aplexer lifecycle, and session policy.
-  `aplexer.py` remains shared because engines and profiles also resolve the
-  bundled backend.
-- `agents` owns both agent launch and process-kind detection. The plural
-  `agents` command and singular `agent` command are separate Click commands
-  exposed from the same package.
+- `runtime` owns host primitives shared by unrelated feature packages:
+  aplexer resolution, cgroup/proc classification, memory-cap policy, and live
+  session enumeration. It has no eager feature-package imports.
+- `sessions` owns aplexer lifecycle commands and delegates shared policy and
+  enumeration to `runtime`.
+- `agents` owns agent launch and the CLI seam for runtime process-kind
+  detection. The plural `agents` command and singular `agent` command are
+  separate Click commands exposed from the same package.
 - `tree` owns the registry and its workspace membership extension. Live
-  session enumeration is imported from `sessions`, never duplicated in the
+  session enumeration is imported from `runtime`, never duplicated in the
   tree store.
 - `cards` owns card persistence and card-specific notification payloads;
   `push` owns the FCM transport and usage-reset payloads.
@@ -75,7 +78,7 @@ single-file external-tool adapter does not need a package solely to gain an
 root CLI
   └── feature public surfaces
         ├── feature implementation modules
-        ├── shared host adapters (aplexer, daemon, filesystem stores)
+        ├── shared host adapters (runtime, daemon, filesystem stores)
         └── external providers (quse, gh, FCM)
 ```
 

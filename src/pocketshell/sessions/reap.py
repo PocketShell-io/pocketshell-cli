@@ -6,7 +6,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
-from pocketshell import session_enum as _session_enum
+from pocketshell.runtime import sessions as _session_enum
 
 
 _SESSION_COMMAND_TIMEOUT_S = 5.0

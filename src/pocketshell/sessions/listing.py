@@ -4,7 +4,7 @@ import json
 import sys
 from typing import Any, Mapping, Optional
 import click
-from pocketshell import session_enum as _session_enum
+from pocketshell.runtime import sessions as _session_enum
 # --- sibling modules ---
 from pocketshell.sessions.cli import sessions_group
 from pocketshell.sessions.create import CREATE_SCHEMA_VERSION

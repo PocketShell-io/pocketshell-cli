@@ -313,7 +313,7 @@ def test_cli_reaches_daemon_rpc(
         raise AssertionError("in-process classifier must not run when daemon up")
 
     monkeypatch.setattr(
-        "pocketshell.cgroup_agents.kind_for_panes", _boom
+        "pocketshell.runtime.cgroups.kind_for_panes", _boom
     )
     # The daemon classifies against the live host; pid 1 always exists, so the
     # envelope is well-formed regardless of what scope it resolves to.

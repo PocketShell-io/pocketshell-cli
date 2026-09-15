@@ -7,7 +7,8 @@ import subprocess
 
 from click.testing import CliRunner
 
-from pocketshell import aplexer, sessions, session_enum
+from pocketshell import sessions
+from pocketshell.runtime import aplexer, sessions as session_enum
 from pocketshell.sessions import kill as kill_mod
 from pocketshell.sessions import reap as reap_mod
 

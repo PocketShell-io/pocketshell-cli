@@ -2,7 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Optional
-from pocketshell import aplexer
+from pocketshell.runtime import aplexer
 # __SIBLING_IMPORTS__
 
 

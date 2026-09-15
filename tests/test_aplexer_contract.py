@@ -59,8 +59,8 @@ from typing import Any, Sequence
 
 import pytest
 
-from pocketshell import aplexer as _aplexer
-from pocketshell import session_enum as _session_enum
+from pocketshell.runtime import aplexer as _aplexer
+from pocketshell.runtime import sessions as _session_enum
 from pocketshell import sessions as _sessions
 
 PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"

@@ -6,7 +6,8 @@ import json
 
 from click.testing import CliRunner
 
-from pocketshell import sessions, session_enum
+from pocketshell import sessions
+from pocketshell.runtime import sessions as session_enum
 from pocketshell.sessions import listing as listing_mod
 
 

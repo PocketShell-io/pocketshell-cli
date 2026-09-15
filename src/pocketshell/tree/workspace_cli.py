@@ -14,13 +14,12 @@ from typing import Any, Mapping, Optional
 
 import click
 
-from pocketshell.tree import (
-    TreePaths,
-    _cli_version,
+from pocketshell.tree.model import _cli_version
+from pocketshell.tree.paths import TreePaths, resolve_paths
+from pocketshell.tree.storage import (
     _read_registry,
     _registry_lock,
     _write_registry,
-    resolve_paths,
 )
 
 WORKSPACES_KEY = "workspaces"

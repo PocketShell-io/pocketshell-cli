@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pocketshell import session_enum
+from pocketshell.runtime import sessions as session_enum
 
 
 NOW_MS = 1_700_000_000_000

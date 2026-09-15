@@ -6,10 +6,10 @@ import subprocess
 from typing import Any, Mapping, Optional, Sequence
 from uuid import uuid4
 import click
-from pocketshell import aplexer as _aplexer
-from pocketshell import memcap as _memcap
+from pocketshell.runtime import aplexer as _aplexer
+from pocketshell.runtime import memcap as _memcap
 from pocketshell import profiles as _profiles
-from pocketshell import session_enum as _session_enum
+from pocketshell.runtime import sessions as _session_enum
 # --- sibling modules ---
 from pocketshell.sessions.cli import sessions_group
 from pocketshell.sessions.reap import _aplexer_existing_record, _reap_aplexer_blockers, _workload_survivor_warning

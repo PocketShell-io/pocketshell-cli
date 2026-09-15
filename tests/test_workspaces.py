@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from pocketshell import workspaces as workspaces_mod
+from pocketshell.tree import workspace_cli as workspaces_mod
 from pocketshell.cli import cli
 from pocketshell.tree import TreePaths
 

@@ -43,9 +43,9 @@ from pocketshell.sessions.reap import (
     _reap_aplexer_record,
     _workload_survivor_warning,
 )
-from pocketshell import memcap as _memcap  # noqa: F401  (tests patch sessions._memcap)
+from pocketshell.runtime import memcap as _memcap  # noqa: F401  (tests patch sessions._memcap)
 from pocketshell import profiles as _profiles  # noqa: F401  (tests patch sessions._profiles)
-from pocketshell import session_enum as _session_enum  # noqa: F401  (tests patch sessions._session_enum)
+from pocketshell.runtime import sessions as _session_enum  # noqa: F401  (tests patch sessions._session_enum)
 
 __all__ = [
     "sessions_group",

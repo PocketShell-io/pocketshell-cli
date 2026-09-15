@@ -132,7 +132,7 @@ def _cli_version() -> str:
 
 def _live_session_names(env: Optional[Mapping[str, str]] = None) -> Optional[set[str]]:
     """Return live aplexer session names, or ``None`` when it is unavailable."""
-    from pocketshell.session_enum import enumerate_live_sessions
+    from pocketshell.runtime.sessions import enumerate_live_sessions
 
     rows, errors = enumerate_live_sessions(env=env)
     if errors:

@@ -199,7 +199,7 @@ def _notify_card_pushed_best_effort(
     the CLI. De-dup + configuration guards live in :func:`notify_card_pushed`.
     """
     try:
-        from pocketshell.agent_card_push import notify_card_pushed
+        from pocketshell.cards.push import notify_card_pushed
 
         notify_card_pushed(session, card, card_paths=card_paths)
     except Exception:

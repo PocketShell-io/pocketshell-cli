@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, Optional
-from pocketshell import aplexer
+from pocketshell.runtime import aplexer
 # --- sibling modules ---
 from pocketshell.profiles.model import PROFILE_ENGINES, Profile, _ENGINE_DEFAULT_DIRNAME, _ENGINE_DEFAULT_DISPLAY, _ENGINE_MARKERS, _ENGINE_NAME_HINTS, _display_name_for_sibling, _log_profile_divergence
 

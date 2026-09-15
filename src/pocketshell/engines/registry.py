@@ -5,7 +5,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Optional
-from pocketshell import aplexer
+from pocketshell.runtime import aplexer
 # --- sibling modules ---
 from pocketshell.engines.builtin import builtin_manifests
 from pocketshell.engines.harness import resolve_harnesses
