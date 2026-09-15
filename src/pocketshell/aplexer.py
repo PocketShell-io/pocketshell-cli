@@ -139,6 +139,63 @@ def _sibling_worker(cli_path: str) -> Optional[str]:
     return str(worker) if worker.exists() else None
 
 
+def _explicit_resolution(source: dict[str, str]) -> Optional[AplexerResolution]:
+    """The ``APLEXER_BIN`` override, when set. The one debug/test seam."""
+    explicit = source.get(BIN_ENV)
+    if not explicit:
+        return None
+    return AplexerResolution(
+        path=explicit,
+        source=BIN_ENV,
+        worker=_sibling_worker(explicit),
+        tried=(f"{BIN_ENV}={explicit}",),
+    )
+
+
+def _bundled_candidate(
+    candidate: Path,
+    tried: list[str],
+) -> Optional[AplexerResolution]:
+    """Resolve one bundled ``a`` candidate; ``None`` means keep looking.
+
+    A candidate without its sibling ``aplexer`` worker is a HALF-INSTALLED
+    BUNDLE (#2553): ``aplexer/src/lib.rs::worker_executable`` resolves the
+    worker next to ``current_exe`` and, failing that, runs a BARE ``aplexer``
+    off PATH — so returning this ``a`` would either start an unpinned worker
+    (the separate-install hazard #2543 removed, one level down) or die with a
+    low-level startup error. Treated exactly like an absent ``a``.
+    """
+    if not candidate.exists():
+        tried.append(f"{candidate} (bundled, missing)")
+        return None
+    worker = _sibling_worker(str(candidate))
+    if worker is None:
+        tried.append(
+            f"{candidate} (bundled, found; sibling `aplexer` worker "
+            "missing — half-installed)"
+        )
+        return None
+    return AplexerResolution(
+        path=str(candidate),
+        source="bundled",
+        worker=worker,
+        tried=tuple([*tried, f"{candidate} (bundled, found)"]),
+    )
+
+
+def _bundled_resolution(
+    bin_dirs: list[Path],
+    tried: list[str],
+) -> Optional[AplexerResolution]:
+    """First bundled ``a`` with a sibling worker; ``None`` keeps looking."""
+    tried.append(f"{BIN_ENV} (unset)")
+    for bin_dir in bin_dirs:
+        found = _bundled_candidate(bin_dir / "a", tried)
+        if found is not None:
+            return found
+    return None
+
+
 def resolve_a(env: Optional[Mapping[str, str]] = None) -> AplexerResolution:
     """Resolve the ``a`` CLI: ``APLEXER_BIN``, else the BUNDLED copy. No PATH.
 
@@ -149,54 +206,69 @@ def resolve_a(env: Optional[Mapping[str, str]] = None) -> AplexerResolution:
     A bundled ``a`` missing its sibling ``aplexer`` worker counts as
     unresolvable (#2553), for the reason the module docstring gives.
     """
-    source = env_map(env)
+    explicit = _explicit_resolution(env_map(env))
+    if explicit is not None:
+        return explicit
+
     tried: list[str] = []
-
-    explicit = source.get(BIN_ENV)
-    if explicit:
-        return AplexerResolution(
-            path=explicit,
-            source=BIN_ENV,
-            worker=_sibling_worker(explicit),
-            tried=(f"{BIN_ENV}={explicit}",),
-        )
-    tried.append(f"{BIN_ENV} (unset)")
-
-    for bin_dir in _bundled_bin_dirs():
-        candidate = bin_dir / "a"
-        if candidate.exists():
-            worker = _sibling_worker(str(candidate))
-            if worker is None:
-                # HALF-INSTALLED BUNDLE (#2553). `a` alone is not usable:
-                # `aplexer/src/lib.rs::worker_executable` resolves the worker
-                # next to `current_exe` and, failing that, runs a BARE
-                # `aplexer` off PATH — so returning this `a` would either
-                # start an unpinned worker (the separate-install hazard #2543
-                # removed, one level down) or die with a low-level startup
-                # error. Treated exactly like an absent `a`: keep looking, and
-                # if nothing answers, fail loud with this candidate named.
-                tried.append(
-                    f"{candidate} (bundled, found; sibling `aplexer` worker "
-                    "missing — half-installed)"
-                )
-                continue
-            return AplexerResolution(
-                path=str(candidate),
-                source="bundled",
-                worker=worker,
-                tried=tuple([*tried, f"{candidate} (bundled, found)"]),
-            )
-        tried.append(f"{candidate} (bundled, missing)")
-
     # No PATH lookup by design (D22 hard cut, issue #2543): resolution ends
     # here. An `a` that exists only on PATH is a SEPARATE install, which is the
     # mode this change removes — it must not be picked up silently.
+    bundled = _bundled_resolution(_bundled_bin_dirs(), tried)
+    if bundled is not None:
+        return bundled
     return AplexerResolution(tried=tuple(tried))
 
 
 def which_a(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     """Path to the ``a`` CLI, or ``None``. Thin wrapper over :func:`resolve_a`."""
     return resolve_a(env).path
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the whole ``a`` process group; fall back to the child only."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        proc.kill()
+
+
+def _communicate(proc: subprocess.Popen, timeout: float) -> Optional[str]:
+    """stdout of ``proc``, or ``None`` when it outlives ``timeout``."""
+    try:
+        stdout, _stderr = proc.communicate(timeout=timeout)
+    except _TimeoutExpired:
+        _kill_process_group(proc)
+        proc.communicate()
+        return None
+    except OSError:
+        return None
+    return stdout
+
+
+def _probe_stdout(
+    cli: str,
+    args: list[str],
+    *,
+    env: Optional[Mapping[str, str]],
+    timeout: float,
+) -> Optional[str]:
+    """Run ``a --json <args>``; its stdout, or ``None`` on any failure."""
+    try:
+        proc = _Popen(
+            [cli, "--json", *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env_map(env),
+            start_new_session=True,
+        )
+    except OSError:
+        return None
+    stdout = _communicate(proc, timeout)
+    if stdout is None or proc.returncode != 0:
+        return None
+    return stdout
 
 
 def run_json(
@@ -214,27 +286,8 @@ def run_json(
     cli = which_a(env)
     if cli is None:
         return None
-    try:
-        proc = _Popen(
-            [cli, "--json", *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env_map(env),
-            start_new_session=True,
-        )
-        try:
-            stdout, _stderr = proc.communicate(timeout=timeout)
-        except _TimeoutExpired:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                proc.kill()
-            proc.communicate()
-            return None
-    except OSError:
-        return None
-    if proc.returncode != 0:
+    stdout = _probe_stdout(cli, args, env=env, timeout=timeout)
+    if stdout is None:
         return None
     try:
         return json.loads(stdout)

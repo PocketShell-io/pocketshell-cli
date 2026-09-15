@@ -37,6 +37,18 @@ from pocketshell import aplexer as _aplexer
 PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
 
+@pytest.fixture(autouse=True)
+def _no_host_aplexer_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hermeticity: a developer-shell APLEXER_BIN must not leak in.
+
+    Resolution order is APLEXER_BIN > bundled copy next to sys.executable;
+    these tests pin the bundled path and the resolution-failure report, so
+    the explicit override is scrubbed unless a test sets it itself (the
+    conftest ``install_fake_a`` factory re-sets it from the test body).
+    """
+    monkeypatch.delenv("APLEXER_BIN", raising=False)
+
+
 def _fake_interpreter_dir(tmp_path: Path, *, with_a: bool) -> Path:
     """A venv-shaped ``bin`` dir; optionally holding a bundled ``a``."""
     bin_dir = tmp_path / "venv" / "bin"

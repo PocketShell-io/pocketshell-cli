@@ -233,6 +233,14 @@ def classify_scope_procs(
     return AGENT_NONE, None
 
 
+def _unknown_pane(
+    pane_id: Optional[str],
+    scope: Optional[str] = None,
+) -> PaneAgentResult:
+    """A pane whose agent kind cannot be determined."""
+    return PaneAgentResult(pane_id=pane_id, agent_kind=AGENT_UNKNOWN, scope=scope)
+
+
 def kind_for_pane(
     pane_pid: int,
     *,
@@ -242,33 +250,33 @@ def kind_for_pane(
 ) -> PaneAgentResult:
     """Resolve one pane's agent kind end-to-end (pane_pid → scope → classify).
 
-    Never raises: an unreadable pane pid yields ``agent_kind="unknown"`` (we
-    cannot even assert "no agent"); a readable scope with no agent process
-    yields ``agent_kind="none"``.
+    Never raises: an unreadable pane pid yields ``"unknown"``; a readable
+    scope with no agent process yields ``"none"``.
     """
     relpath = scope_relpath_for_pid(pane_pid, proc_root=proc_root)
     if relpath is None:
-        # pid gone / cgroup unreadable — we cannot say anything definitive.
-        return PaneAgentResult(
-            pane_id=pane_id, agent_kind=AGENT_UNKNOWN, scope=None
-        )
+        # pid gone / cgroup unreadable — nothing definitive.
+        return _unknown_pane(pane_id)
 
     scope = scope_basename(relpath)
     pids = _scope_procs(relpath, cgroup_mount=cgroup_mount)
     if pids is None:
-        # The cgroup itself is gone/unreadable even though the pane's cgroup
-        # line resolved — treat as unknown (the session likely just ended).
-        return PaneAgentResult(
-            pane_id=pane_id, agent_kind=AGENT_UNKNOWN, scope=scope
-        )
+        # cgroup gone even though the pane's cgroup line resolved — the
+        # session likely just ended; treat as unknown.
+        return _unknown_pane(pane_id, scope)
 
     agent_kind, evidence_pid = classify_scope_procs(pids, proc_root=proc_root)
     return PaneAgentResult(
-        pane_id=pane_id,
-        agent_kind=agent_kind,
-        scope=scope,
-        evidence_pid=evidence_pid,
+        pane_id=pane_id, agent_kind=agent_kind, scope=scope, evidence_pid=evidence_pid,
     )
+
+
+def _parse_pane_pid(raw: object) -> Optional[int]:
+    """The pane's pid as an ``int``, or ``None`` when missing/invalid."""
+    try:
+        return int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def kind_for_panes(
@@ -288,15 +296,9 @@ def kind_for_panes(
     for pane in panes:
         pane_id = pane.get("pane_id")
         pane_id_str = str(pane_id) if pane_id is not None else None
-        raw_pid = pane.get("pane_pid")
-        try:
-            pane_pid = int(raw_pid)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            results.append(
-                PaneAgentResult(
-                    pane_id=pane_id_str, agent_kind=AGENT_UNKNOWN, scope=None
-                ).to_json()
-            )
+        pane_pid = _parse_pane_pid(pane.get("pane_pid"))
+        if pane_pid is None:
+            results.append(_unknown_pane(pane_id_str).to_json())
             continue
         result = kind_for_pane(
             pane_pid,

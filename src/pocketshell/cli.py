@@ -100,6 +100,43 @@ def daemon_group() -> None:
     """Daemon lifecycle subgroup."""
 
 
+def _serve_foreground(
+    ctx: click.Context,
+    socket_path: Path,
+    idle_timeout: Optional[float],
+) -> None:
+    """Run the daemon in this process; propagate a non-zero exit code."""
+    from pocketshell import daemon as _daemon
+
+    exit_code = _daemon.serve_foreground(
+        socket_path=socket_path,
+        idle_timeout=idle_timeout,
+    )
+    if exit_code != 0:
+        ctx.exit(exit_code)
+
+
+def _spawn_and_wait(
+    ctx: click.Context,
+    socket_path: Path,
+    idle_timeout: Optional[float],
+) -> None:
+    """Spawn the detached daemon and wait for its socket; exit 1 on timeout."""
+    from pocketshell import daemon as _daemon
+
+    pid = _daemon.spawn_detached(
+        socket_path=socket_path,
+        idle_timeout=idle_timeout,
+    )
+    if not _daemon.wait_until_ready(socket_path=socket_path):
+        click.echo(
+            f"daemon spawn ({pid}) did not become ready within 5 s",
+            err=True,
+        )
+        ctx.exit(1)
+    click.echo(f"started (pid: {pid}, socket: {socket_path})")
+
+
 @daemon_group.command("start")
 @click.option(
     "--foreground",
@@ -137,27 +174,10 @@ def daemon_start(
     if _daemon.is_daemon_running(socket_path):
         click.echo(f"already running (socket: {socket_path})")
         return
-
     if foreground:
-        exit_code = _daemon.serve_foreground(
-            socket_path=socket_path,
-            idle_timeout=idle_timeout,
-        )
-        if exit_code != 0:
-            ctx.exit(exit_code)
+        _serve_foreground(ctx, socket_path, idle_timeout)
         return
-
-    pid = _daemon.spawn_detached(
-        socket_path=socket_path,
-        idle_timeout=idle_timeout,
-    )
-    if not _daemon.wait_until_ready(socket_path=socket_path):
-        click.echo(
-            f"daemon spawn ({pid}) did not become ready within 5 s",
-            err=True,
-        )
-        ctx.exit(1)
-    click.echo(f"started (pid: {pid}, socket: {socket_path})")
+    _spawn_and_wait(ctx, socket_path, idle_timeout)
 
 
 @daemon_group.command("stop")

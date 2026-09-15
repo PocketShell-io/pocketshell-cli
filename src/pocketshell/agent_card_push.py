@@ -35,6 +35,14 @@ A successful send records a deterministic **content key** under the cards dir
 ``push checklist``) does not re-POST, while an *updated* card (different items /
 title) produces a new key and DOES push. The app's ``PushDedupStore`` is a
 second line of defence on the device; this is the server-side primary guard.
+
+Data-message contract (app's ``AgentCardPushPayload``)
+------------------------------------------------------
+
+:func:`card_to_data` maps a card to these keys: ``type=agent_card``, ``session``
+(deep-link target), ``host`` (best-effort hostname for host resolution), ``card_id``,
+``card_type``, ``title`` (falls back to a type-derived label), ``summary`` (the
+per-type one-line summary), and ``card_key`` (the content-hash de-dup identity).
 """
 
 from __future__ import annotations
@@ -153,16 +161,7 @@ def card_to_data(
 ) -> dict[str, str]:
     """Map a card + its session to the app's ``agent_card`` data-message keys.
 
-    Keys (mirrors the app's ``AgentCardPushPayload`` contract):
-
-    - ``type`` = ``agent_card``
-    - ``session`` = the session the card belongs to (deep-link target)
-    - ``host`` = best-effort host hostname for host resolution (may be empty)
-    - ``card_id`` = the card id
-    - ``card_type`` = e.g. ``checklist``
-    - ``title`` = the card title (falls back to a type-derived label)
-    - ``summary`` = the per-type one-line summary (e.g. ``checklist 1/3 checked``)
-    - ``card_key`` = the content-hash de-dup identity (also the app dedup key)
+    See the module-level "Data-message contract" section for the key list.
     """
     card_type = str(card.get("type", "") or "")
     card_id = str(card.get("id", "") or "")
@@ -212,6 +211,46 @@ def content_key(session: str, card: dict[str, Any]) -> str:
     return f"{session}|{card.get('id')}|{digest}"
 
 
+def _resolve_sender(
+    usage_paths: Any,
+    env: Optional[dict[str, str]],
+) -> Optional["push_mod.FcmSender"]:
+    """Build an FcmSender from the registered service account, or ``None``."""
+    sa_path = push_mod._resolve_service_account_path(usage_paths, env=env)
+    if sa_path is None:
+        return None
+    return push_mod.FcmSender.from_service_account(sa_path)
+
+
+def _push_card(
+    session: str,
+    card: dict[str, Any],
+    *,
+    card_paths: CardPaths,
+    host: Optional[str],
+    sender: Optional["push_mod.FcmSender"],
+    env: Optional[dict[str, str]],
+    sent_log_max_lines: int,
+) -> Optional[str]:
+    """Token/sender/de-dup-guarded send. Returns the pushed key or ``None``."""
+    usage_paths = resolve_usage_paths(env=env)
+    token = push_mod.read_token(usage_paths)
+    if token is None:
+        return None
+    if sender is None:
+        sender = _resolve_sender(usage_paths, env)
+        if sender is None:
+            return None
+    data = card_to_data(session, card, host=host)
+    card_key = data["card_key"]
+    if card_key in sent_card_keys(card_paths):
+        return None
+    if not sender.send_data_message(token=token, data=data):
+        return None
+    _mark_sent(card_key, paths=card_paths, sent_log_max_lines=sent_log_max_lines)
+    return card_key
+
+
 def notify_card_pushed(
     session: str,
     card: dict[str, Any],
@@ -224,40 +263,21 @@ def notify_card_pushed(
 ) -> Optional[str]:
     """Best-effort FCM push for a freshly upserted ``card``. Fail-soft.
 
-    Returns the ``card_key`` actually pushed this call, or ``None`` when push
-    isn't configured / nothing new was sent. NEVER raises — the ``push
-    checklist`` CLI call must succeed even when Firebase isn't set up.
-
-    Guards, in order (mirroring :func:`pocketshell.push.push_reset_events`):
-
-    1. No registered device token -> ``None``.
-    2. No service-account credential / no ``google.auth`` -> ``None`` (pre-S0).
-    3. Already pushed this exact content (de-dup) -> ``None``.
-    4. On a successful send: record the content key so it never re-POSTs.
-       On a failed send: leave it un-recorded so the next push RETRIES.
+    Returns the pushed ``card_key``, or ``None`` when push isn't configured /
+    nothing new was sent. NEVER raises. Guard order mirrors
+    :func:`pocketshell.push.push_reset_events`; a failed send leaves the key
+    un-recorded so the next push retries.
     """
     try:
-        usage_paths = resolve_usage_paths(env=env)
-        token = push_mod.read_token(usage_paths)
-        if token is None:
-            return None
-
-        if sender is None:
-            sa_path = push_mod._resolve_service_account_path(usage_paths, env=env)
-            if sa_path is None:
-                return None
-            sender = push_mod.FcmSender.from_service_account(sa_path)
-            if sender is None:
-                return None
-
-        data = card_to_data(session, card, host=host)
-        card_key = data["card_key"]
-        if card_key in sent_card_keys(card_paths):
-            return None
-        if sender.send_data_message(token=token, data=data):
-            _mark_sent(card_key, paths=card_paths, sent_log_max_lines=sent_log_max_lines)
-            return card_key
-        return None
+        return _push_card(
+            session,
+            card,
+            card_paths=card_paths,
+            host=host,
+            sender=sender,
+            env=env,
+            sent_log_max_lines=sent_log_max_lines,
+        )
     except Exception:
         # Absolute fail-soft backstop: a card push must never wedge the CLI.
         return None

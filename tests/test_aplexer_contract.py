@@ -150,6 +150,18 @@ def _short_runtime_root() -> str:
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_host_aplexer_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hermeticity: a developer-shell APLEXER_BIN must not leak in.
+
+    The contract below exercises the BUNDLED ``a`` (and, via conftest's
+    ``install_fake_a``, an explicit stub when a test asks for one); a real
+    override exported in the maintainer's shell would silently answer for
+    both, so it is scrubbed up front.
+    """
+    monkeypatch.delenv("APLEXER_BIN", raising=False)
+
+
 @pytest.fixture
 def aplexer_fixture(tmp_path: Path):
     """A throwaway aplexer config + state + runtime, and an env that uses them.

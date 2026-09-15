@@ -237,6 +237,33 @@ def aplexer_record_is_alive(
     return _aplexer_within_starting_grace(raw, now_ms)
 
 
+def _aplexer_live_session(raw: Mapping[str, Any], now_ms: int) -> LiveSession:
+    """Build the :class:`LiveSession` row for one aplexer snapshot record."""
+    ident = str(raw.get("id") or "").strip()
+    epoch = _created_epoch_from_ms(raw.get("created_at_ms"))
+    workspace = raw.get("workspace") or raw.get("cwd")
+    tag = raw.get("tag")
+    profile = raw.get("profile")
+    state, state_source = aplexer_agent_state(raw, now_ms)
+    return LiveSession(
+        name=aplexer_display_name(raw),
+        created=_format_epoch(epoch),
+        created_epoch=epoch,
+        workspace=str(workspace) if workspace else None,
+        tag=str(tag) if tag else None,
+        engine=_aplexer_engine(raw),
+        profile=str(profile) if profile else None,
+        aplexer_id=ident or None,
+        agent=_aplexer_agent(raw),
+        agent_state=state,
+        agent_state_source=state_source,
+        attached=_aplexer_attached(raw),
+        activity_epoch=_created_epoch_from_ms(raw.get("last_activity_ms")),
+        phase=aplexer_phase(raw),
+        alive=aplexer_record_is_alive(raw, now_ms),
+    )
+
+
 def _aplexer_rows(payload: Any, now_ms: Optional[int]) -> list[LiveSession]:
     """Convert every snapshot record to a :class:`LiveSession`."""
     if not isinstance(payload, list):
@@ -249,38 +276,13 @@ def _aplexer_rows(payload: Any, now_ms: Optional[int]) -> list[LiveSession]:
     for raw in payload:
         if not isinstance(raw, Mapping):
             continue
-        name = aplexer_display_name(raw)
         ident = str(raw.get("id") or "").strip()
-        if not name:
-            continue
+        name = aplexer_display_name(raw)
         key = ident or name
-        if key in seen:
+        if not name or key in seen:
             continue
         seen.add(key)
-        epoch = _created_epoch_from_ms(raw.get("created_at_ms"))
-        workspace = raw.get("workspace") or raw.get("cwd")
-        tag = raw.get("tag")
-        profile = raw.get("profile")
-        state, state_source = aplexer_agent_state(raw, now_ms)
-        rows.append(
-            LiveSession(
-                name=name,
-                created=_format_epoch(epoch),
-                created_epoch=epoch,
-                workspace=str(workspace) if workspace else None,
-                tag=str(tag) if tag else None,
-                engine=_aplexer_engine(raw),
-                profile=str(profile) if profile else None,
-                aplexer_id=ident or None,
-                agent=_aplexer_agent(raw),
-                agent_state=state,
-                agent_state_source=state_source,
-                attached=_aplexer_attached(raw),
-                activity_epoch=_created_epoch_from_ms(raw.get("last_activity_ms")),
-                phase=aplexer_phase(raw),
-                alive=aplexer_record_is_alive(raw, now_ms),
-            )
-        )
+        rows.append(_aplexer_live_session(raw, now_ms))
     return rows
 
 
