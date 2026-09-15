@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 # --- sibling modules ---
-from pocketshell.agent_log.roots import _claude_projects_root, _codex_sessions_root, _contained_candidate, _encode_claude_cwd, _encode_grok_cwd, _grok_sessions_root, _opencode_root
+from pocketshell.agents.conversations.roots import _claude_projects_root, _codex_sessions_root, _contained_candidate, _encode_claude_cwd, _encode_grok_cwd, _grok_sessions_root, _opencode_root
 
 
 def _ensure_jsonl_suffix(session: str) -> str:

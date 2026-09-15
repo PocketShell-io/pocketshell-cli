@@ -1,4 +1,4 @@
-"""`pocketshell agent-log` subcommand.
+"""`pocketshell agent-log` conversation domain.
 
 Mirrors the per-engine JSONL conversation-log reads the Android app
 currently runs over SSH (see ``AgentConversationRepository`` in
@@ -44,14 +44,14 @@ Why direct file read instead of a subprocess delegation:
 """
 from __future__ import annotations
 
-from pocketshell.agent_log.cli import (
+from pocketshell.agents.conversations.cli import (
     agent_log_command,
     handoff_command,
 )
-from pocketshell.agent_log.messages import (
+from pocketshell.agents.conversations.messages import (
     HandoffMessage,
 )
-from pocketshell.agent_log.resolve import (
+from pocketshell.agents.conversations.resolve import (
     _resolve_claude_path,
     _resolve_codex_path,
     _resolve_grok_path,

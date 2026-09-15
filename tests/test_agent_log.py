@@ -42,9 +42,9 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from pocketshell import agent_log as agent_log_module
-from pocketshell.agent_log import agent_log_command
-from pocketshell.agent_log import cli as agent_log_cli
+from pocketshell.agents import conversations as agent_log_module
+from pocketshell.agents.conversations import agent_log_command
+from pocketshell.agents.conversations import cli as agent_log_cli
 from pocketshell.cli import cli
 
 

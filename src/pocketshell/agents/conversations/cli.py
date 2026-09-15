@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import List, Optional
 import click
 # --- sibling modules ---
-from pocketshell.agent_log.handoff import _DEFAULT_HANDOFF_MAX_CHARS, _DEFAULT_HANDOFF_MAX_TURNS, _bound_handoff_messages, _render_handoff_markdown, _write_handoff_output
-from pocketshell.agent_log.messages import _handoff_messages_from_lines
-from pocketshell.agent_log.readers import _clamp_line_bytes, _read_lines, _tail
-from pocketshell.agent_log.resolve import _resolve_log_path
-from pocketshell.agent_log.roots import _claude_projects_root, _codex_sessions_root, _grok_sessions_root, _opencode_root
+from pocketshell.agents.conversations.handoff import _DEFAULT_HANDOFF_MAX_CHARS, _DEFAULT_HANDOFF_MAX_TURNS, _bound_handoff_messages, _render_handoff_markdown, _write_handoff_output
+from pocketshell.agents.conversations.messages import _handoff_messages_from_lines
+from pocketshell.agents.conversations.readers import _clamp_line_bytes, _read_lines, _tail
+from pocketshell.agents.conversations.resolve import _resolve_log_path
+from pocketshell.agents.conversations.roots import _claude_projects_root, _codex_sessions_root, _grok_sessions_root, _opencode_root
 
 
 # Sentinel exit codes (mirrors the convention used by ``usage`` / ``jobs``):

@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 # --- sibling modules ---
-from pocketshell.agent_log.messages import HandoffMessage
+from pocketshell.agents.conversations.messages import HandoffMessage
 
 
 _DEFAULT_HANDOFF_MAX_TURNS = 30

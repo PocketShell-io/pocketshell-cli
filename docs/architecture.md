@@ -12,9 +12,15 @@ src/pocketshell/
 ├── cli.py                       # root Click composition and daemon lifecycle
 ├── github.py                    # one-file `github status` integration
 ├── serve.py                     # one-file foreground HTTP integration
-├── agent_log/                   # conversation-log discovery and handoff
 ├── agents/                      # agent domain
 │   ├── kind.py                  # `pocketshell agents kind`
+│   ├── conversations/            # conversation-log discovery and handoff
+│   │   ├── cli.py               # `pocketshell agent-log`
+│   │   ├── handoff.py           # compact cross-agent handoff export
+│   │   ├── messages.py          # conversation message extraction
+│   │   ├── readers.py           # bounded JSONL reads
+│   │   ├── resolve.py           # provider log resolution
+│   │   └── roots.py             # provider storage roots
 │   └── launch/                  # launch application and execution support
 │       ├── cli.py               # `pocketshell agent`
 │       ├── command.py            # argv construction

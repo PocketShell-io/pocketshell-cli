@@ -22,7 +22,7 @@ from typing import Optional, Sequence
 import click
 
 from pocketshell import __version__
-from pocketshell.agent_log import agent_log_command
+from pocketshell.agents.conversations.cli import agent_log_command
 from pocketshell.cards import register_push_card_commands
 from pocketshell.agents import agents_group
 from pocketshell.agents.launch.cli import agent_group
