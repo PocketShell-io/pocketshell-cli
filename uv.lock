@@ -218,7 +218,7 @@ wheels = [
 
 [[package]]
 name = "pocketshell"
-version = "0.5.7"
+version = "0.5.8"
 source = { editable = "." }
 dependencies = [
     { name = "aplexer", marker = "sys_platform == 'linux'" },
@@ -247,7 +247,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "quse", specifier = "==0.0.15" },
+    { name = "quse", specifier = ">=0.0.15" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
 ]
 provides-extras = ["dev"]
@@ -370,14 +370,14 @@ wheels = [
 
 [[package]]
 name = "quse"
-version = "0.0.15"
+version = "0.0.16"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b5/9c/350becbcaf1c17c7f2cd88df871cd8452522784d3505c1bb90b4730d48a1/quse-0.0.15.tar.gz", hash = "sha256:00cb1427973ba78592c37f6991b4170db29392e29cb8ae0d1beb03c3ef755502", size = 72125, upload-time = "2026-08-28T12:09:08.169Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/95/a4fa4beb36c7c5a6c1a2970cfb5c272670c3878c5df9da31f0e630097485/quse-0.0.16.tar.gz", hash = "sha256:80f6ad4c711d9db52a371663e60f8048ee2c652ff43378b1b6d80737863d162a", size = 75264, upload-time = "2026-09-04T17:20:45.591Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/68/05/ae749c530c9e0af12130914a112253eac6c3873723bf4ae391ea0ea674d5/quse-0.0.15-py3-none-any.whl", hash = "sha256:a9138ed2e4f12a01812103332fe27b94de9f96a2413212c59558052481815793", size = 35099, upload-time = "2026-08-28T12:09:07.098Z" },
+    { url = "https://files.pythonhosted.org/packages/91/81/bfdcd51edee00438636c7ee17fb899f4eb858b0af94365f884d4a923555d/quse-0.0.16-py3-none-any.whl", hash = "sha256:69b64c5768898c8868f5a2d0cf43a9991604e2fe405d692af08cd34e47916c96", size = 37508, upload-time = "2026-09-04T17:20:44.678Z" },
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 """`pocketshell usage` subcommand.
 
-Implementation delegates to the **pinned** `quse` CLI via `subprocess.run`
+Implementation delegates to the bundled `quse` CLI via `subprocess.run`
 and normalizes its provider-keyed `--json` document into the per-provider
 NDJSON the Android app consumes. Human output is proxied verbatim.
 
@@ -9,7 +9,7 @@ Modules
 
 - :mod:`pocketshell.usage.normalize` — the producer boundary: flattens
   quse's provider-keyed `--json` object into per-provider NDJSON.
-- :mod:`pocketshell.usage.quse` — resolves and runs the pinned `quse`
+- :mod:`pocketshell.usage.quse` — resolves and runs the bundled `quse`
   binary shipped next to the interpreter.
 - :mod:`pocketshell.usage.cli` — the Click command: daemon proxy, the
   `--capture` / `--cached` / `--reset-events` special modes, fall-through.

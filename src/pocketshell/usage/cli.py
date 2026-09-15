@@ -110,7 +110,7 @@ def _proxy_daemon_envelope(envelope: dict[str, Any]) -> int:
 
 
 def _run_fallback(provider: Optional[str], *, json_output: bool) -> int:
-    """Run the one-shot pinned quse subprocess; return its exit code."""
+    """Run the one-shot bundled quse subprocess; return its exit code."""
     args: list[str] = []
     if provider:
         args.append(provider)
@@ -233,7 +233,7 @@ def usage_command(
 ) -> None:
     """Report quota / usage for coding-agent providers on this host.
 
-    Probes the IPC daemon's socket first, falling through to the pinned
+    Probes the IPC daemon's socket first, falling through to the bundled
     ``quse`` one-shot. JSON output is FLATTENED into per-provider NDJSON
     (quse owns the schema); ``--capture``/``--cached`` add the SWR cache.
     """
@@ -261,7 +261,7 @@ def _fetch_usage_ndjson(
     """Fetch live usage NDJSON for the cache capture.
 
     Returns ``(stdout, stderr, returncode)`` where ``stdout`` is the flattened
-    per-provider NDJSON (or ``None`` when the pinned ``quse`` is missing).
+    per-provider NDJSON (or ``None`` when the bundled ``quse`` is missing).
     Mirrors the command's own daemon-then-subprocess fall-through so a
     scheduled ``--capture`` benefits from the daemon cache when one is live.
     """

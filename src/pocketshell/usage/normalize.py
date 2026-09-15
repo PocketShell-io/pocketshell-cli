@@ -1,19 +1,18 @@
 """Normalize quse's provider-keyed JSON into per-provider NDJSON.
 
-The pinned PyPI `quse==0.0.15` contract (upstream a86959e, issue #2293) is a
-six-provider, provider-keyed object whose records ALREADY carry the canonical
+The supported PyPI `quse>=0.0.15` contract is a provider-keyed object whose
+records carry the canonical
 top-level `windows` map the Android parser reads — `claude`, `codex`,
 `copilot`, `go` (OpenCode on the Go backend), `grok`, `zai`. PocketShell's
 producer boundary is therefore a passthrough: it injects the provider name
 from the object key and forwards the record unchanged. It never re-derives
 quota values, reset times, window labels, or provider details.
 
-#2283's `short_term` / `long_term` translation existed only because the
-published wheel lagged quse HEAD; with the pin at 0.0.15 that producer no
-longer exists, so the translation is hard-cut (D22) and a legacy-shaped record
-now fails loudly. A schema mismatch (non-JSON / non-object payload, malformed
-window container, or a missing canonical `windows` map) raises rather than
-silently emptying the panel.
+#2283's `short_term` / `long_term` translation supported older quse wheels;
+the supported lower bound now produces the canonical shape, so that translation
+is hard-cut (D22) and a legacy-shaped record fails loudly. A schema mismatch
+(non-JSON / non-object payload, malformed window container, or a missing
+canonical `windows` map) raises rather than silently emptying the panel.
 """
 
 from __future__ import annotations
@@ -78,8 +77,8 @@ def _canonicalize_quse_record(
 ) -> dict[str, Any]:
     """Normalize one provider record at the PocketShell producer boundary.
 
-    The pinned ``quse==0.0.15`` wheel IS the canonical producer: every record
-    already carries the top-level ``windows`` map the Android parser reads. The
+    Supported quse releases are canonical producers: every record carries the
+    top-level ``windows`` map the Android parser reads. The
     only thing this boundary does is inject the ``provider`` name that quse
     keeps in the object key — quse's ``--json`` document is provider-keyed and
     the app wire is one self-describing record per line. Nothing else is
@@ -119,8 +118,8 @@ def _parse_quse_document(stdout: str) -> dict[str, Any]:
 def normalize_usage_stdout(stdout: str) -> str:
     """Flatten quse's provider-keyed object into per-provider NDJSON.
 
-    Published ``quse==0.0.15`` records already carry the canonical top-level
-    ``windows`` map, so each record passes through unchanged apart from the
+    Supported quse records already carry the canonical top-level ``windows``
+    map, so each record passes through unchanged apart from the
     injected ``provider`` key. This function never invents percentages or
     reset times.
 

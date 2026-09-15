@@ -1,4 +1,4 @@
-"""Unit tests for `pocketshell usage` (issue #1318, repinned by #2293).
+"""Unit tests for `pocketshell usage` (issue #1318, evolved by #2293).
 
 Published ``quse==0.0.15`` (upstream ``a86959e``) IS the canonical producer:
 every provider record carries a top-level ``windows`` map and there are no
@@ -12,14 +12,15 @@ silently re-shaped.
 The tests use a live output captured from the published 0.0.15 wheel
 (``tests/data/quse-0.0.15-usage.json``, provenance in the adjacent
 ``.provenance.txt``). That capture contains the ``go`` provider — the OpenCode
-Go quota the Usage panel needs — which the 0.0.14 pin could not report at all.
+Go quota the Usage panel needs — which the 0.0.14 release could not report at all.
 
 Most tests stub ``pocketshell.usage.quse._resolve_quse_binary`` and
 ``subprocess.run`` so they never invoke a real ``quse`` binary; the contract
-under test is "pocketshell resolves the PINNED quse and flattens its schema
-correctly". The two ``test_pinned_quse_*`` tests deliberately do NOT stub: they
-exercise the REAL pinned wheel installed alongside the interpreter, which is
-what actually broke the maintainer's ``pocketshell usage go --json`` (#2293).
+under test is "pocketshell resolves the bundled quse and flattens its schema
+correctly". The two ``test_installed_quse_*`` tests deliberately do NOT stub:
+they exercise the REAL compatible wheel installed alongside the interpreter,
+which is what actually broke the maintainer's ``pocketshell usage go --json``
+(#2293).
 """
 
 from __future__ import annotations
@@ -99,64 +100,62 @@ def _quse_keyed_json() -> str:
 
 
 # ---------------------------------------------------------------------------
-# quse is a PINNED dependency, resolved next to sys.executable, never PATH
+# quse is a bundled dependency, resolved next to sys.executable, never PATH
 # ---------------------------------------------------------------------------
 
 
-def test_pyproject_pins_quse_exactly() -> None:
-    # AC (#2293): pocketshell pins the published quse==0.0.15 release — the
-    # first wheel containing a86959e (unified `windows` map + the `go`
-    # provider). The 0.0.14 pin (and its boundary translation) is hard-cut.
+def test_pyproject_allows_compatible_quse_releases() -> None:
+    # AC (#2293): pocketshell requires the first canonical quse release but
+    # accepts later compatible releases. The 0.0.14 shape (and its boundary
+    # translation) is hard-cut.
     text = _PYPROJECT.read_text()
-    assert '"quse==0.0.15"' in text, "pyproject must pin quse==0.0.15 in dependencies"
-    assert '"quse==0.0.14"' not in text, "the 0.0.14 pin must not remain"
+    assert '"quse>=0.0.15"' in text
+    assert '"quse==' not in text
     lock = _LOCK.read_text()
     assert 'name = "quse"' in lock
-    assert 'version = "0.0.15"' in lock
-    assert 'specifier = "==0.0.15"' in lock
-    assert 'specifier = "==0.0.14"' not in lock
+    assert 'specifier = ">=0.0.15"' in lock
+    assert '{ name = "quse", specifier = "==' not in lock
 
 
 def test_pyproject_documents_canonical_windows_contract() -> None:
-    """The dependency comment must describe the pin we actually ship.
+    """The dependency comment must describe the compatible producer contract.
 
     #2283's comment described 0.0.14 as a "five-provider" legacy producer and
     explicitly disclaimed OpenCode Go support. 0.0.15 IS the canonical
     producer and DOES report `go`, so that disclaimer must be gone.
     """
     text = _PYPROJECT.read_text()
-    assert "published 0.0.15 wheel" in text
-    assert "six-provider" in text
-    assert "five-provider" not in text
-    assert "OpenCode Go" in text
+    assert "lower bound is the first canonical producer" in text
+    assert "Later quse releases may add providers" in text
     # The legacy translation must be described as RETIRED, not as live
-    # behaviour of the pinned wheel.
+    # behaviour of the supported producer contract.
     assert "hard-cut" in text
-    # The #2283 disclaimer that OpenCode Go was NOT part of the pinned
-    # wheel's provider list must be gone — with 0.0.15 it is.
+    # The old disclaimer that OpenCode Go was NOT part of the provider list
+    # must be gone.
     assert "separate top-level `windows` producer contract" not in text
     assert "not to the published-wheel provider list" not in text
 
 
 # ---------------------------------------------------------------------------
-# #2293 reproduction: the PINNED wheel itself must know the `go` provider.
+# #2293 reproduction: the installed compatible wheel must know the `go` provider.
 # These two tests deliberately use the REAL installed quse — the maintainer's
-# symptom was produced by the pinned wheel, not by pocketshell's own code, so
+# symptom was produced by the installed wheel, not by pocketshell's own code, so
 # a stubbed subprocess could never have caught it.
 # ---------------------------------------------------------------------------
 
 
-def test_pinned_quse_wheel_advertises_the_go_provider() -> None:
-    """RED on quse==0.0.14: the pinned wheel had no `go` provider at all.
+def test_installed_quse_wheel_advertises_the_go_provider() -> None:
+    """RED on quse==0.0.14: that wheel had no `go` provider at all.
 
     `pocketshell usage` has NO provider allowlist of its own — the positional
-    `provider` argument is forwarded verbatim to the pinned quse, which owns
-    validation. So "Unknown provider 'go'" could only be fixed by the pin.
+    `provider` argument is forwarded verbatim to the bundled quse, which owns
+    validation. So "Unknown provider 'go'" is fixed by the dependency floor,
+    not by a PocketShell provider allowlist.
     """
     from quse.usage import SUPPORTED_USAGE_PROVIDERS, USAGE_PROVIDER_CHOICES
 
     assert "go" in USAGE_PROVIDER_CHOICES, (
-        "the PINNED quse must advertise the `go` provider; got "
+        "the installed quse must advertise the `go` provider; got "
         f"{USAGE_PROVIDER_CHOICES}"
     )
     assert "go" in SUPPORTED_USAGE_PROVIDERS, (
@@ -165,10 +164,10 @@ def test_pinned_quse_wheel_advertises_the_go_provider() -> None:
     )
 
 
-def test_pocketshell_usage_go_json_reaches_the_pinned_quse() -> None:
+def test_pocketshell_usage_go_json_reaches_the_installed_quse() -> None:
     """End-to-end reproduction of the maintainer's #2293 symptom.
 
-    Runs the REAL `pocketshell usage go --json` CLI against the REAL pinned
+    Runs the REAL `pocketshell usage go --json` CLI against the REAL installed
     quse console-script next to the interpreter (no subprocess stub, no
     daemon). On quse==0.0.14 this exits 1 with
     `Unknown provider 'go'. Valid provider names: codex, claude, zai, copilot,
@@ -180,14 +179,14 @@ def test_pocketshell_usage_go_json_reaches_the_pinned_quse() -> None:
     broke, never a live quota number.
     """
     assert _resolve_quse_binary() is not None, (
-        "the pinned quse console-script must be installed next to the "
+        "the bundled quse console-script must be installed next to the "
         "interpreter for this end-to-end check"
     )
     runner = CliRunner()
     result = runner.invoke(usage_command, ["go", "--json", "--no-daemon"])
 
     assert "Unknown provider" not in result.output, (
-        "#2293 symptom: the pinned quse rejected the `go` provider — "
+        "#2293 symptom: the installed quse rejected the `go` provider — "
         f"{result.output.strip()}"
     )
     assert result.exit_code == 0, result.output
@@ -198,20 +197,20 @@ def test_pocketshell_usage_go_json_reaches_the_pinned_quse() -> None:
     assert isinstance(record["windows"], dict)
 
 
-def test_resolve_quse_binary_uses_pinned_env_next_to_interpreter(tmp_path: Path) -> None:
-    # AC: `pocketshell usage` invokes the PINNED quse (next to sys.executable),
+def test_resolve_quse_binary_uses_bundled_env_next_to_interpreter(tmp_path: Path) -> None:
+    # AC: `pocketshell usage` invokes the BUNDLED quse (next to sys.executable),
     # not PATH. A quse living next to the interpreter is resolved.
     bin_dir = tmp_path / "venv" / "bin"
     bin_dir.mkdir(parents=True)
     (bin_dir / "python").write_text("#!/bin/sh\n")
-    pinned = bin_dir / "quse"
-    pinned.write_text("#!/bin/sh\n")
-    pinned.chmod(0o755)
+    bundled = bin_dir / "quse"
+    bundled.write_text("#!/bin/sh\n")
+    bundled.chmod(0o755)
 
     with patch.object(sys, "executable", str(bin_dir / "python")):
         resolved = _resolve_quse_binary()
 
-    assert resolved == str(pinned)
+    assert resolved == str(bundled)
 
 
 def test_resolve_quse_binary_does_not_fall_back_to_path(tmp_path: Path) -> None:
@@ -232,7 +231,7 @@ def test_resolve_quse_binary_does_not_fall_back_to_path(tmp_path: Path) -> None:
     ):
         resolved = _resolve_quse_binary()
 
-    assert resolved is None, "a PATH-only quse must not shadow the pinned copy"
+    assert resolved is None, "a PATH-only quse must not shadow the bundled copy"
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +353,7 @@ def test_flatten_rejects_legacy_short_long_record_after_hard_cut() -> None:
     """D22 hard cut: the retired 0.0.14 shape must fail LOUD, not be re-shaped.
 
     #2283's boundary translation existed only because the published wheel was
-    behind quse HEAD. With the pin at 0.0.15 that producer is gone, so a
+    behind quse HEAD. With the supported lower bound that producer is gone, so a
     legacy-shaped record can only mean a mis-installed / shadowed quse — a
     schema drift the panel must surface, never silently absorb.
     """
@@ -563,7 +562,7 @@ def test_actionable_error_rewrites_grok_auth_json_miss() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI wiring: forwards to the pinned quse and flattens JSON output
+# CLI wiring: forwards to the bundled quse and flattens JSON output
 # ---------------------------------------------------------------------------
 
 
@@ -595,7 +594,7 @@ def test_usage_json_flattens_quse_keyed_object() -> None:
     assert result.exit_code == 0, result.output
     providers = [json.loads(ln)["provider"] for ln in result.output.splitlines()]
     assert providers == ["claude", "codex", "copilot", "go", "grok", "zai"]
-    # Args forwarded to the pinned quse subprocess must include `--json`.
+    # Args forwarded to the bundled quse subprocess must include `--json`.
     invoked: Sequence[str] = run.call_args.args[0]
     assert invoked == ["/fake/quse", "--json"]
 
@@ -673,10 +672,10 @@ def test_usage_forwards_grok_provider_and_json() -> None:
 def test_usage_forwards_go_provider_and_json_without_an_allowlist() -> None:
     """#2293: pocketshell has NO provider allowlist of its own.
 
-    The positional `provider` argument is forwarded verbatim to the pinned
+    The positional `provider` argument is forwarded verbatim to the bundled
     quse, which owns validation — so the fix for the maintainer's
-    "Unknown provider 'go'" is the PIN, and nothing in this CLI may start
-    filtering provider names.
+    "Unknown provider 'go'" is the dependency floor, and nothing in this CLI
+    may start filtering provider names.
     """
     runner = CliRunner()
     single = json.dumps(
@@ -713,7 +712,7 @@ def test_usage_forwards_go_provider_and_json_without_an_allowlist() -> None:
     assert record["windows"]["monthly"]["percent_remaining"] == 86.0
 
 
-def test_usage_fails_loud_when_pinned_quse_missing() -> None:
+def test_usage_fails_loud_when_bundled_quse_missing() -> None:
     # AC: quse missing => packaging-integrity error, fail loud (NOT a PATH nag,
     # NOT exit 127 which the app reserves for "pocketshell not found").
     runner = CliRunner()

@@ -1,16 +1,16 @@
-"""Run the pinned `quse` CLI as a one-shot subprocess.
+"""Run the bundled `quse` CLI as a one-shot subprocess.
 
 quse is a hard dependency of pocketshell (see `pyproject.toml`), so its
 console-script ships in the SAME bin directory as the running interpreter.
-`_resolve_quse_binary` resolves that pinned copy next to `sys.executable`
-and NEVER falls back to PATH — a host-level `quse` upgrade must not shadow
-the pinned copy, and a missing pinned copy is a packaging-integrity error
+`_resolve_quse_binary` resolves that bundled copy next to `sys.executable`
+and NEVER falls back to PATH — a host-level `quse` must not shadow the bundled
+copy, and a missing bundled copy is a packaging-integrity error
 (fail loud), not a user "install quse" nag.
 
 `pocketshell usage` keeps NO provider allowlist of its own: the positional
-`provider` argument is forwarded verbatim to the pinned quse, which owns
-provider validation and its error message. That is why "Unknown provider 'go'"
-was only ever fixable by bumping the pin.
+`provider` argument is forwarded verbatim to the bundled quse, which owns
+provider validation and its error message. New providers can therefore arrive
+through a compatible quse upgrade without a PocketShell provider list.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ import click
 
 from pocketshell.usage.normalize import normalize_usage_stdout
 
-# quse is bundled WITH pocketshell as a pinned dependency (issue #1318). A
-# missing pinned quse is therefore a packaging-integrity error, NOT a user
+# quse is bundled WITH pocketshell as a hard dependency (issue #1318). A
+# missing bundled quse is therefore a packaging-integrity error, NOT a user
 # "install quse" nag: the fix is reinstalling pocketshell, not installing a
 # separate host tool. Exit non-zero (but NOT 127 — 127 is reserved for
 # "pocketshell itself not found" on the app side) with a clear message.
@@ -38,12 +38,12 @@ _QUSE_MISSING_EXIT_CODE = 1
 
 
 def _resolve_quse_binary() -> Optional[str]:
-    """Resolve the PINNED `quse` console-script shipped with pocketshell.
+    """Resolve the bundled `quse` console-script shipped with pocketshell.
 
     quse is a hard dependency, so its console-script lands in the SAME ``bin``
     directory as the ``pocketshell`` interpreter. We resolve it next to
-    ``sys.executable`` — never via ``PATH`` (a host upgrade must not shadow
-    the pinned copy) — and return ``None`` when it is missing (a
+    ``sys.executable`` — never via ``PATH`` (a host executable must not shadow
+    the bundled copy) — and return ``None`` when it is missing (a
     packaging-integrity error, not an "install quse" nag).
 
     Console-scripts live next to the UNRESOLVED ``sys.executable``: in a venv
@@ -64,7 +64,7 @@ def _resolve_quse_binary() -> Optional[str]:
 
 
 def _run_quse(args: Sequence[str]) -> int:
-    """Invoke the pinned `quse` with [args]; proxy stdout/stderr and exit.
+    """Invoke the bundled `quse` with [args]; proxy stdout/stderr and exit.
 
     Used for the human-readable (non-JSON) path where output stays
     byte-identical to `quse`.
@@ -89,7 +89,7 @@ def _run_quse(args: Sequence[str]) -> int:
 
 
 def _run_quse_json(args: Sequence[str]) -> int:
-    """Invoke the pinned `quse --json` and flatten its output before proxying.
+    """Invoke the bundled `quse --json` and flatten its output before proxying.
 
     quse emits a provider-keyed JSON object; ``normalize_usage_stdout``
     flattens it into per-provider NDJSON for the app. On a non-zero exit the
