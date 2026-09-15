@@ -78,13 +78,13 @@ from pocketshell.tree.storage import (
     _read_registry,
     _write_registry,
 )
-from pocketshell.tree.workspace import (
+from pocketshell.tree.workspaces.membership import (
     WORKSPACE_KEY,
     MAX_OPEN_TABS,
     get_workspace,
     upsert_workspace,
 )
-from pocketshell.tree.workspace_cli import (
+from pocketshell.tree.workspaces.cli import (
     WORKSPACES_KEY,
     WORKSPACES_SCHEMA,
     add_workspace,

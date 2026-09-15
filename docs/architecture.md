@@ -36,7 +36,10 @@ src/pocketshell/
 │   └── sessions.py              # live-session wire model and probing
 ├── sessions/                    # aplexer session lifecycle commands
 ├── tree/                        # durable tree/workspace registry
-│   └── workspace_cli.py         # `pocketshell workspaces`
+│   ├── workspaces/              # workspace membership subdomain
+│   │   ├── membership.py        # durable workspace records
+│   │   └── cli.py               # `pocketshell workspaces`
+│   └── ...                       # tree registry and reconciliation
 └── usage/                       # the complete usage boundary
     ├── cli.py                   # live/cache/reset-events command modes
     ├── quse.py                  # thin process boundary to quse

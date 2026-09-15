@@ -36,7 +36,8 @@ from pocketshell.push import push_group
 from pocketshell.repos import repos_group
 from pocketshell.sessions import sessions_group
 from pocketshell.serve import serve_command
-from pocketshell.tree import tree_group, workspaces_group
+from pocketshell.tree import tree_group
+from pocketshell.tree.workspaces.cli import workspaces_group
 from pocketshell.usage import usage_command
 
 

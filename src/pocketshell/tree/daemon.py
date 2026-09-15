@@ -6,7 +6,7 @@ from typing import Any, Mapping, Optional
 import click
 # --- sibling modules ---
 from pocketshell.tree.model import get_tree, reconcile_tree, upsert_tree
-from pocketshell.tree.workspace import get_workspace, upsert_workspace
+from pocketshell.tree.workspaces.membership import get_workspace, upsert_workspace
 
 
 def daemon_handler_get(params: Mapping[str, Any]) -> dict[str, Any]:

@@ -5,7 +5,7 @@ import click
 # --- sibling modules ---
 from pocketshell.tree.daemon import _read_stdin_params, _try_daemon_call
 from pocketshell.tree.model import get_tree, reconcile_tree, upsert_tree
-from pocketshell.tree.workspace import get_workspace, upsert_workspace
+from pocketshell.tree.workspaces.membership import get_workspace, upsert_workspace
 
 
 @click.group(
