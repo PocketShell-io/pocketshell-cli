@@ -10,7 +10,6 @@ from click.testing import CliRunner
 from pocketshell import sessions
 from pocketshell.runtime import aplexer, sessions as session_enum
 from pocketshell.sessions import kill as kill_mod
-from pocketshell.sessions import reap as reap_mod
 
 
 def _resolution() -> aplexer.AplexerResolution:
@@ -23,7 +22,7 @@ def _row() -> session_enum.LiveSession:
     )
 
 
-def test_kill_stops_and_reaps_the_selected_aplexer_record(monkeypatch) -> None:
+def test_kill_uses_aplexer_record_removal_result(monkeypatch) -> None:
     calls: list[list[str]] = []
 
     monkeypatch.setattr(kill_mod, "_attach_live_rows", lambda: ([_row()], []))
@@ -31,12 +30,13 @@ def test_kill_stops_and_reaps_the_selected_aplexer_record(monkeypatch) -> None:
 
     def run(argv):
         calls.append(list(argv))
-        return subprocess.CompletedProcess(argv, 0, stdout="{}", stderr="")
+        return subprocess.CompletedProcess(
+            argv, 0, stdout='{"record_removed": true}', stderr=""
+        )
 
-    # sessions_kill and the reap loop each resolve _run_session_command in
-    # their own module namespace, so both bindings need the fake.
+    # sessions_kill resolves _run_session_command through its own module
+    # namespace; no second force-forget command should be issued.
     monkeypatch.setattr(kill_mod, "_run_session_command", run)
-    monkeypatch.setattr(reap_mod, "_run_session_command", run)
     result = CliRunner().invoke(
         sessions.sessions_group, ["kill", "project:shell", "--json"]
     )
@@ -51,8 +51,7 @@ def test_kill_stops_and_reaps_the_selected_aplexer_record(monkeypatch) -> None:
         "reaped": True,
     }
     assert calls == [
-        ["/fake/a", "kill", "b3feff71-4a78-4055-a2d3-6c99187ecffb"],
-        ["/fake/a", "--json", "forget", "--force", "b3feff71-4a78-4055-a2d3-6c99187ecffb"],
+        ["/fake/a", "--json", "kill", "b3feff71-4a78-4055-a2d3-6c99187ecffb"],
     ]
 
 

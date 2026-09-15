@@ -1,4 +1,4 @@
-"""Stop a live session and reap its aplexer record."""
+"""Stop a live session through aplexer and adapt its result for the client."""
 from __future__ import annotations
 import json
 import subprocess
@@ -8,7 +8,7 @@ import click
 from pocketshell.sessions.attach import ATTACH_EXIT_AMBIGUOUS, ATTACH_EXIT_NOT_FOUND, ATTACH_EXIT_NO_BINARY, _attach_live_rows, _match_attach_target
 from pocketshell.sessions.cli import sessions_group
 from pocketshell.sessions.create import CREATE_SCHEMA_VERSION, _aplexer_unresolved_message, _resolve_aplexer
-from pocketshell.sessions.reap import _reap_aplexer_record, _run_session_command, _workload_survivor_warning
+from pocketshell.sessions.reap import _run_session_command
 
 
 KILL_SCHEMA_VERSION = CREATE_SCHEMA_VERSION
@@ -80,9 +80,11 @@ def _kill_aplexer_path(
 def _run_kill_command(
     ctx: click.Context, row: Any, aplexer_path: str, *, as_json: bool
 ) -> Optional[Any]:
-    """Run ``a kill <id>``, mapping timeout/OS failures to kill failures."""
+    """Run ``a --json kill <id>``, mapping failures to kill failures."""
     try:
-        return _run_session_command([aplexer_path, "kill", str(row.aplexer_id)])
+        return _run_session_command(
+            [aplexer_path, "--json", "kill", str(row.aplexer_id)]
+        )
     except subprocess.TimeoutExpired:
         _emit_kill_failure(
             ctx, f"pocketshell: `a kill {row.aplexer_id}` timed out.",
@@ -110,18 +112,20 @@ def _emit_nonzero_kill(
     return True
 
 
-def _reap_and_emit(
-    ctx: click.Context, row: Any, aplexer_path: str, *, as_json: bool
+def _emit_kill_result(
+    ctx: click.Context, row: Any, completed: Any, *, as_json: bool
 ) -> None:
-    """Reap the killed record, emit survivor/reap warnings and the envelope."""
-    outcome = _reap_aplexer_record(aplexer_path, str(row.aplexer_id))
-    if outcome.workload_may_survive:
-        click.echo(_workload_survivor_warning(row.name, str(row.aplexer_id)), err=True)
-    if not outcome.reaped:
+    """Adapt aplexer's structured record-removal result without re-forgetting."""
+    try:
+        payload = json.loads(completed.stdout or "")
+    except (TypeError, ValueError):
+        payload = {}
+    reaped = isinstance(payload, dict) and payload.get("record_removed") is True
+    if not reaped:
         click.echo(
             f"pocketshell: stopped {row.name!r}, but its aplexer record could "
-            f"not be reaped; run `a forget --force {row.aplexer_id}` if it "
-            "keeps showing up.",
+            "not be removed; inspect it with `a status` before taking any "
+            "further recovery action.",
             err=True,
         )
     if as_json:
@@ -132,7 +136,7 @@ def _reap_and_emit(
                     "name": row.name,
                     "id": row.aplexer_id,
                     "killed": True,
-                    "reaped": outcome.reaped,
+                    "reaped": reaped,
                 },
                 indent=2,
             )
@@ -156,4 +160,4 @@ def sessions_kill(ctx: click.Context, name: str, as_json: bool) -> None:
         return
     if _emit_nonzero_kill(ctx, row, completed, as_json=as_json):
         return
-    _reap_and_emit(ctx, row, aplexer_path, as_json=as_json)
+    _emit_kill_result(ctx, row, completed, as_json=as_json)
