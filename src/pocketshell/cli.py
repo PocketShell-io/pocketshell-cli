@@ -31,7 +31,7 @@ from pocketshell.github import github_group
 from pocketshell.hooks import hooks_group
 from pocketshell.logs import logs_group
 from pocketshell.profiles import profiles_group
-from pocketshell.prune_attachments import prune_attachments_command
+from pocketshell.attachments import prune_attachments_command
 from pocketshell.push import push_group
 from pocketshell.repos import repos_group
 from pocketshell.sessions import sessions_group

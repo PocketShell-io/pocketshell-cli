@@ -25,7 +25,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from pocketshell.cli import cli
-from pocketshell.prune_attachments import (
+from pocketshell.attachments import (
     DEFAULT_MAX_TOTAL_BYTES,
     DEFAULT_TTL_DAYS,
     PROTECT_NEWEST_HOURS,

@@ -24,7 +24,9 @@ src/pocketshell/
 ├── hooks/                       # agent hook installation and event handlers
 ├── logs/                        # normalized host-side event log
 ├── profiles/                    # aplexer profile discovery/resolution
-├── prune_attachments/           # attachment cleanup command
+├── attachments/                 # uploaded attachment domain
+│   ├── cli.py                   # `pocketshell prune-attachments`
+│   └── retention.py             # TTL and size-cap policy
 ├── push/                        # FCM transport and usage-reset pushes
 ├── repos/                       # local/remote repository discovery
 ├── runtime/                     # shared host-runtime primitives

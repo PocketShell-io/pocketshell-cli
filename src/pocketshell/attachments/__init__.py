@@ -42,14 +42,14 @@ continues, so a single bad file can't wedge the whole prune.
 Modules
 -------
 
-- :mod:`pocketshell.prune_attachments.core` — the retention passes and
+- :mod:`pocketshell.attachments.retention` — the retention passes and
   their result summary (importable without Click).
-- :mod:`pocketshell.prune_attachments.cli` — the Click command and its
+- :mod:`pocketshell.attachments.cli` — the Click command and its
   output rendering.
 """
 from __future__ import annotations
 
-from pocketshell.prune_attachments.core import (
+from pocketshell.attachments.retention import (
     ATTACHMENTS_RELATIVE_ROOT,
     DEFAULT_MAX_TOTAL_BYTES,
     DEFAULT_TTL_DAYS,
@@ -59,7 +59,7 @@ from pocketshell.prune_attachments.core import (
     prune_attachments,
     resolve_attachments_root,
 )
-from pocketshell.prune_attachments.cli import prune_attachments_command
+from pocketshell.attachments.cli import prune_attachments_command
 
 __all__ = [
     "DEFAULT_TTL_DAYS",

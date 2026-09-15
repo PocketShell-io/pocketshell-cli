@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from pocketshell.prune_attachments.core import (
+from pocketshell.attachments.retention import (
     DEFAULT_MAX_TOTAL_BYTES,
     DEFAULT_TTL_DAYS,
     PROTECT_NEWEST_HOURS,

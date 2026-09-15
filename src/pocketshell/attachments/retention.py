@@ -1,4 +1,4 @@
-"""The attachment retention passes: TTL sweep, size-cap trim, result summary.
+"""Attachment retention passes: TTL sweep, size-cap trim, result summary.
 
 Pure filesystem work with injected ``now`` — no Click, no ``$HOME`` access
 (the caller owns the containment check). Everything funnels into

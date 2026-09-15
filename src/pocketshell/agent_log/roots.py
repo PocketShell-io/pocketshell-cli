@@ -65,7 +65,7 @@ def _encode_claude_cwd(cwd: str) -> str:
 def _is_within(path: Path, root: Path) -> bool:
     """True when ``path`` is ``root`` or a descendant, after resolving both.
 
-    Mirrors ``prune_attachments._is_within`` / the ``repos.safe_clone_target``
+    Mirrors ``attachments._is_within`` / the ``repos.safe_clone_target``
     containment pattern used elsewhere in this package. Both sides are
     ``resolve()``-d first so a legitimately symlinked HOME (e.g. ``/home`` ->
     ``/data/home``) does not falsely trip the guard — only genuine traversal
