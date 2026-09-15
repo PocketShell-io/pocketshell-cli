@@ -33,6 +33,7 @@ from unittest.mock import patch
 import pytest
 
 from pocketshell.runtime import aplexer as _aplexer
+from pocketshell.runtime import console_scripts as _console_scripts
 
 PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
@@ -364,6 +365,144 @@ def test_resolved_dir_candidate_used_when_interpreter_is_a_symlink(
         report = _aplexer.resolve_a({"PATH": ""})
 
     assert report.path == str(real_dir / "a")
+
+
+# ---------------------------------------------------------------------------
+# Issue #6: the `pip install --user` layout
+# ---------------------------------------------------------------------------
+
+
+def _patch_user_install_layout(
+    monkeypatch: pytest.MonkeyPatch, user_site: Path, user_bin: Path
+) -> None:
+    """Fake "pocketshell is installed in the user site-packages" (#6 layout).
+
+    :mod:`pocketshell.runtime.console_scripts` reads the user gate through the
+    ``site`` module and the user scripts dir through ``sysconfig``, so both
+    are patchable without a real user-site install; the package-location half
+    of the gate is the module's own ``__file__``.
+    """
+    import site as site_mod
+    import sysconfig
+
+    real_get_path = sysconfig.get_path
+
+    monkeypatch.setattr(site_mod, "ENABLE_USER_SITE", True)
+    monkeypatch.setattr(site_mod, "getusersitepackages", lambda: str(user_site))
+
+    def fake_get_path(name, scheme=None, vars=None, expand=True):
+        if name == "scripts" and scheme == "posix_user":
+            return str(user_bin)
+        return real_get_path(name, scheme, vars=vars, expand=expand)
+
+    monkeypatch.setattr(sysconfig, "get_path", fake_get_path)
+    fake_module = user_site / "pocketshell" / "runtime" / "console_scripts.py"
+    monkeypatch.setattr(_console_scripts, "__file__", str(fake_module))
+
+
+def test_pip_user_layout_resolves_the_user_scripts_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6: under ``pip install --user``, the scripts live in the user bin dir.
+
+    ``sys.executable`` stays the system interpreter there, which holds no
+    console-scripts — exactly the layout where aplexer (and quse) used to
+    silently vanish. The user scripts dir is an explicitly-anchored candidate
+    (the running interpreter's own user scheme), never a PATH search.
+    """
+    user_site = tmp_path / "user" / "site-packages"
+    user_bin = tmp_path / "user" / "bin"
+    user_bin.mkdir(parents=True)
+    for name in ("a", "aplexer"):
+        binary = user_bin / name
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    system_bin = tmp_path / "usr" / "bin"
+    system_bin.mkdir(parents=True)
+    (system_bin / "python3").write_text("#!/bin/sh\n")
+    _patch_user_install_layout(monkeypatch, user_site, user_bin)
+
+    with patch.object(sys, "executable", str(system_bin / "python3")):
+        report = _aplexer.resolve_a({"PATH": ""})
+
+    assert report.path == str(user_bin / "a"), (
+        "a `pip install --user` pocketshell must resolve `a` from the user "
+        "scripts dir (issue #6)"
+    )
+    assert report.source == "bundled"
+    assert report.worker == str(user_bin / "aplexer")
+
+
+def test_user_scripts_dir_requires_pocketshell_itself_to_be_user_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``~/.local/bin/a`` must NOT be picked up by a non-user install.
+
+    Under ``uv tool`` / ``pipx`` / a venv, pocketshell lives in its own
+    environment, so the user scripts dir — where an unrelated, unpinned ``a``
+    may sit — stays out of the candidate list. Opening that candidate purely
+    on directory presence would re-create the #2543 separate-install hazard;
+    the gate is "pocketshell itself is user-installed", not "the dir exists".
+    """
+    import site as site_mod
+
+    # getuserbase() caches the interpreter-startup HOME, so patch it — the
+    # tmp HOME from conftest is invisible to it, and the real ~/.local/bin
+    # must never be touched by a test.
+    user_base = tmp_path / "userbase"
+    monkeypatch.setattr(site_mod, "getuserbase", lambda: str(user_base))
+    user_bin = user_base / "bin"
+    user_bin.mkdir(parents=True)
+    for name in ("a", "aplexer"):
+        binary = user_bin / name
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    bin_dir = _fake_interpreter_dir(tmp_path, with_a=False)
+
+    with patch.object(sys, "executable", str(bin_dir / "python")):
+        report = _aplexer.resolve_a({"PATH": ""})
+
+    assert report.path is None, (
+        "an unrelated ~/.local/bin/a must not satisfy a non-user install"
+    )
+    assert str(user_bin) not in " ".join(report.tried), (
+        "the user scripts dir must not even be a candidate when pocketshell "
+        "is not user-installed"
+    )
+
+
+def test_user_scripts_dir_gate_is_closed_without_user_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``python -s`` / isolated mode: no user site, no user candidate."""
+    import site as site_mod
+
+    from pocketshell.runtime import console_scripts
+
+    monkeypatch.setattr(site_mod, "ENABLE_USER_SITE", False)
+    assert console_scripts.user_scripts_dir() is None
+
+
+def test_user_scripts_dir_gate_requires_the_package_in_user_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """User site enabled but pocketshell installed elsewhere: no candidate.
+
+    The venv/uv-tool case: user site is on, but this package is not the thing
+    inside it, so the gate stays shut even though the directory exists.
+    """
+    import site as site_mod
+
+    from pocketshell.runtime import console_scripts
+
+    monkeypatch.setattr(site_mod, "ENABLE_USER_SITE", True)
+    monkeypatch.setattr(
+        site_mod, "getusersitepackages", lambda: str(tmp_path / "user-site")
+    )
+
+    assert console_scripts.user_scripts_dir() is None, (
+        "the gate is the package location, not user-site availability"
+    )
 
 
 # ---------------------------------------------------------------------------

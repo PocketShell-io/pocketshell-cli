@@ -303,20 +303,35 @@ def dead_sessions_from_aplexer_snapshot(
 def _probe_aplexer(
     env: Optional[Mapping[str, str]],
 ) -> tuple[Any, Optional[str]]:
-    """Return ``(payload, error_message)`` for the required backend."""
+    """Return ``(payload, error_message)`` for the required backend.
+
+    Issue #2: the probe used to re-derive off/absent/failed and then throw
+    aplexer's self-diagnosing stderr away, so a bricked registry reached the
+    phone as a silent tmux-only tree. The failure taxonomy now comes from
+    :func:`aplexer.run_json_reported` and the message carries it verbatim.
+    """
     if not aplexer.enabled("sessions", env):
         return None, "aplexer session support is disabled by configuration"
-    binary = aplexer.which_a(env)
-    if binary is None:
-        return None, "aplexer is unavailable: the bundled `a` executable was not found"
-    payload = aplexer.run_json(["snapshot"], env=env, feature="sessions")
-    if payload is None:
-        payload = aplexer.run_json(["list"], env=env, feature="sessions")
-    if payload is None:
+    resolution = aplexer.resolve_a(env)
+    if resolution.path is None:
         return None, (
-            f"`{binary} --json snapshot` and `{binary} --json list` both "
-            "failed or returned unreadable JSON"
+            "aplexer is unavailable: the bundled `a` executable was not found "
+            f"(tried: {'; '.join(resolution.tried) or 'no candidates'})"
         )
+    binary = resolution.path
+    payload, snapshot_failure = aplexer.run_json_reported(
+        ["snapshot"], env=env, feature="sessions"
+    )
+    if payload is None:
+        payload, list_failure = aplexer.run_json_reported(
+            ["list"], env=env, feature="sessions"
+        )
+        if payload is None:
+            return None, (
+                f"`{binary} --json snapshot` and `{binary} --json list` both "
+                "failed or returned unreadable JSON "
+                f"(snapshot {snapshot_failure}; list {list_failure})"
+            )
     if not isinstance(payload, list):
         return None, (
             f"`{binary} --json snapshot` returned "

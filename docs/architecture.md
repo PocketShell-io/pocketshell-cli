@@ -50,6 +50,7 @@ src/pocketshell/
 ├── repos/                       # local/remote repository discovery
 ├── runtime/                     # shared host-runtime primitives
 │   ├── aplexer.py               # bundled `a` backend adapter
+│   ├── console_scripts.py       # interpreter-anchored console-script dirs
 │   ├── cgroups.py               # cgroup/proc agent classifier
 │   ├── memcap.py                # session memory-cap policy
 │   └── sessions.py              # live-session wire model and probing

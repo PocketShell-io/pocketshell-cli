@@ -234,6 +234,51 @@ def test_resolve_quse_binary_does_not_fall_back_to_path(tmp_path: Path) -> None:
     assert resolved is None, "a PATH-only quse must not shadow the bundled copy"
 
 
+def test_resolve_quse_binary_covers_pip_user_layout(tmp_path, monkeypatch) -> None:
+    """#6: under `pip install --user pocketshell`, quse lands in ~/.local/bin.
+
+    `sys.executable` stays the system interpreter in that layout, so the
+    interpreter-anchored candidates are empty and the user scripts dir — an
+    explicitly-anchored candidate of the shared console_scripts module — is
+    where the bundled `quse` actually is.
+    """
+    import site as site_mod
+    import sysconfig
+
+    from pocketshell.runtime import console_scripts
+
+    user_site = tmp_path / "user" / "site-packages"
+    user_bin = tmp_path / "user" / "bin"
+    user_bin.mkdir(parents=True)
+    user_quse = user_bin / "quse"
+    user_quse.write_text("#!/bin/sh\n")
+    user_quse.chmod(0o755)
+    system_bin = tmp_path / "usr" / "bin"
+    system_bin.mkdir(parents=True)
+    (system_bin / "python3").write_text("#!/bin/sh\n")
+
+    real_get_path = sysconfig.get_path
+    monkeypatch.setattr(site_mod, "ENABLE_USER_SITE", True)
+    monkeypatch.setattr(site_mod, "getusersitepackages", lambda: str(user_site))
+
+    def fake_get_path(name, scheme=None, vars=None, expand=True):
+        if name == "scripts" and scheme == "posix_user":
+            return str(user_bin)
+        return real_get_path(name, scheme, vars=vars, expand=expand)
+
+    monkeypatch.setattr(sysconfig, "get_path", fake_get_path)
+    fake_module = user_site / "pocketshell" / "runtime" / "console_scripts.py"
+    monkeypatch.setattr(console_scripts, "__file__", str(fake_module))
+
+    with patch.object(sys, "executable", str(system_bin / "python3")):
+        resolved = _resolve_quse_binary()
+
+    assert resolved == str(user_quse), (
+        "a `pip install --user` pocketshell must resolve the bundled quse "
+        "from the user scripts dir (issue #6)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # normalize_usage_stdout: canonical passthrough at the producer boundary
 # ---------------------------------------------------------------------------

@@ -1,8 +1,10 @@
 """Host-local client for the ``a`` binary (aplexer Phase A).
 
 PocketShell and aplexer share a machine: the helper invokes ``a --json …``
-and overlays presentation concerns. Probe failures are silent and
-return ``None`` so every call site can fall back to the native path.
+and overlays presentation concerns. :func:`run_json` returns ``None`` on any
+failure so every call site can fall back to the native path; :func:`run_json_reported`
+returns WHY it failed instead (:class:`AplexerFailure`, issue #2) for call
+sites that surface the reason.
 
 Kill switches (any one is enough to skip):
 
@@ -61,10 +63,11 @@ import json
 import os
 import signal
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
+
+from pocketshell.runtime.console_scripts import bundled_bin_dirs
 
 JSON_TIMEOUT_S = 2.0
 LAUNCH_TIMEOUT_S = 5.0
@@ -116,21 +119,17 @@ class AplexerResolution:
 def _bundled_bin_dirs() -> list[Path]:
     """Directories that can hold the pinned aplexer console-scripts.
 
-    Console-scripts live next to the UNRESOLVED ``sys.executable``: in a venv
-    (or a ``uv tool`` install) ``bin/python`` is a symlink to the underlying
-    interpreter, so ``Path(sys.executable).resolve()`` points at the shared
-    interpreter dir where ``a`` is NOT installed. Check the interpreter's own
-    ``bin`` dir first and only fall through to the resolved dir for layouts
-    where the two coincide. Both candidates are anchored to ``sys.executable``
-    — this is NOT a PATH search. Same trap, same handling, as
-    ``usage.py::_resolve_quse_binary``.
+    Delegates to :mod:`pocketshell.runtime.console_scripts`, whose candidate
+    list this resolver shares with ``usage.quse._resolve_quse_binary`` so the
+    two cannot drift: next to the UNRESOLVED ``sys.executable`` (venv /
+    ``uv tool`` / ``pipx``, where console-scripts land), next to the RESOLVED
+    interpreter (layouts where ``bin/python`` is a real file), and — only when
+    pocketshell itself is user-installed — the user scripts dir, which is
+    where a ``pip install --user`` layout keeps them (issue #6). Every
+    candidate is anchored to the interpreter or its user scheme; this is NOT
+    a PATH search, and a separately-installed ``a`` elsewhere is invisible.
     """
-    exe_dir = Path(sys.executable).parent
-    dirs = [exe_dir]
-    resolved_dir = Path(sys.executable).resolve().parent
-    if resolved_dir != exe_dir:
-        dirs.append(resolved_dir)
-    return dirs
+    return bundled_bin_dirs()
 
 
 def _sibling_worker(cli_path: str) -> Optional[str]:
@@ -225,6 +224,29 @@ def which_a(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     return resolve_a(env).path
 
 
+@dataclass(frozen=True)
+class AplexerFailure:
+    """Why one ``a --json`` probe produced nothing (issue #2).
+
+    ``run_json`` collapses every failure to ``None`` on purpose — the native
+    fallback is deliberate, and the issue is explicit that failures must not
+    raise — but a silent fallback cannot be told apart from "aplexer is not
+    here". :func:`run_json_reported` returns one of these alongside so a
+    caller can say WHY. ``kind`` is one of: ``disabled`` (kill switch),
+    ``unresolved`` (no bundled binary), ``spawn`` / ``timeout`` / ``exit``
+    (the subprocess), ``decode`` (exit 0, unparseable output). ``detail``
+    carries aplexer's stderr verbatim wherever one exists — the
+    self-diagnosing line (``a: load session registry entry …``) that #2
+    found being thrown away at every layer.
+    """
+
+    kind: str
+    detail: str = ""
+
+    def __str__(self) -> str:
+        return f"{self.kind}: {self.detail}" if self.detail else self.kind
+
+
 def _kill_process_group(proc: subprocess.Popen) -> None:
     """SIGKILL the whole ``a`` process group; fall back to the child only."""
     try:
@@ -233,27 +255,19 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def _communicate(proc: subprocess.Popen, timeout: float) -> Optional[str]:
-    """stdout of ``proc``, or ``None`` when it outlives ``timeout``."""
-    try:
-        stdout, _stderr = proc.communicate(timeout=timeout)
-    except _TimeoutExpired:
-        _kill_process_group(proc)
-        proc.communicate()
-        return None
-    except OSError:
-        return None
-    return stdout
-
-
-def _probe_stdout(
+def _probe_captured(
     cli: str,
     args: list[str],
     *,
     env: Optional[Mapping[str, str]],
     timeout: float,
-) -> Optional[str]:
-    """Run ``a --json <args>``; its stdout, or ``None`` on any failure."""
+) -> tuple[Optional[str], Optional[AplexerFailure]]:
+    """Run ``a --json <args>``; ``(stdout, failure)`` — exactly one is ``None``.
+
+    stderr is captured on every path and threaded into the failure detail:
+    a non-zero exit and a timeout are operationally unrelated (#2) and each
+    carries its own diagnostic.
+    """
     try:
         proc = _Popen(
             [cli, "--json", *args],
@@ -263,12 +277,69 @@ def _probe_stdout(
             env=env_map(env),
             start_new_session=True,
         )
-    except OSError:
-        return None
-    stdout = _communicate(proc, timeout)
-    if stdout is None or proc.returncode != 0:
-        return None
-    return stdout
+    except OSError as exc:
+        return None, AplexerFailure("spawn", str(exc))
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except _TimeoutExpired:
+        _kill_process_group(proc)
+        _stdout, stderr = proc.communicate()
+        detail = (stderr or "").strip()
+        return None, AplexerFailure(
+            "timeout",
+            f"no output within {timeout:g}s"
+            + (f"; stderr: {detail}" if detail else ""),
+        )
+    except OSError as exc:
+        return None, AplexerFailure("spawn", str(exc))
+    if proc.returncode != 0:
+        detail = (
+            (stderr or "").strip()
+            or (stdout or "").strip()
+            or "no output"
+        )
+        return None, AplexerFailure("exit", f"exit {proc.returncode}: {detail}")
+    return stdout, None
+
+
+def run_json_reported(
+    args: list[str],
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    timeout: Optional[float] = None,
+    feature: Optional[str] = None,
+) -> tuple[Any | None, Optional[AplexerFailure]]:
+    """Run ``a --json <args>``; ``(payload, failure)`` — exactly one is ``None``.
+
+    The failure taxonomy of issue #2: timeout / non-zero exit / decode
+    failure / spawn error are distinguished from "switched off" and "not
+    resolvable", and aplexer's stderr is never discarded on a failure.
+    """
+    if timeout is None:
+        timeout = JSON_TIMEOUT_S
+    if feature and not enabled(feature, env):
+        return None, AplexerFailure(
+            "disabled", f"{feature} support is disabled by configuration"
+        )
+    cli = which_a(env)
+    if cli is None:
+        return None, AplexerFailure(
+            "unresolved", "the bundled `a` executable was not found"
+        )
+    stdout, failure = _probe_captured(cli, args, env=env, timeout=timeout)
+    if failure is not None:
+        return None, failure
+    try:
+        return json.loads(stdout or ""), None
+    except json.JSONDecodeError as exc:
+        snippet = (stdout or "").strip()
+        if len(snippet) > 200:
+            snippet = snippet[:200] + "…"
+        return None, AplexerFailure(
+            "decode",
+            f"{exc}"
+            + (f"; output: {snippet!r}" if snippet else "; empty output"),
+        )
 
 
 def run_json(
@@ -278,18 +349,13 @@ def run_json(
     timeout: Optional[float] = None,
     feature: Optional[str] = None,
 ) -> Any | None:
-    """Run ``a --json <args>`` and parse stdout. None on skip or any failure."""
-    if timeout is None:
-        timeout = JSON_TIMEOUT_S
-    if feature and not enabled(feature, env):
-        return None
-    cli = which_a(env)
-    if cli is None:
-        return None
-    stdout = _probe_stdout(cli, args, env=env, timeout=timeout)
-    if stdout is None:
-        return None
-    try:
-        return json.loads(stdout)
-    except json.JSONDecodeError:
-        return None
+    """Run ``a --json <args>`` and parse stdout. None on skip or any failure.
+
+    The silent fallback is deliberate (issue #2: never raise — a host without
+    aplexer must degrade quietly); call sites that must report WHY a probe
+    failed use :func:`run_json_reported`.
+    """
+    payload, _failure = run_json_reported(
+        args, env=env, timeout=timeout, feature=feature
+    )
+    return payload

@@ -46,26 +46,96 @@ def test_empty_success_is_healthy() -> None:
 
 def test_missing_aplexer_is_visible_as_an_enumeration_error(monkeypatch) -> None:
     monkeypatch.setattr(session_enum.aplexer, "enabled", lambda *args, **kwargs: True)
-    monkeypatch.setattr(session_enum.aplexer, "which_a", lambda *args, **kwargs: None)
-
-    rows, errors = session_enum.enumerate_live_sessions()
-
-    assert rows == []
-    assert errors == [
-        {"message": "aplexer is unavailable: the bundled `a` executable was not found"}
-    ]
-
-
-def test_failed_probe_is_not_silently_returned_as_empty(monkeypatch) -> None:
-    monkeypatch.setattr(session_enum.aplexer, "enabled", lambda *args, **kwargs: True)
-    monkeypatch.setattr(session_enum.aplexer, "which_a", lambda *args, **kwargs: "/opt/a")
-    monkeypatch.setattr(session_enum.aplexer, "run_json", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        session_enum.aplexer,
+        "resolve_a",
+        lambda *args, **kwargs: session_enum.aplexer.AplexerResolution(
+            tried=("APLEXER_BIN (unset)", "/gone/bin/a (bundled, missing)")
+        ),
+    )
 
     rows, errors = session_enum.enumerate_live_sessions()
 
     assert rows == []
     assert len(errors) == 1
-    assert "failed or returned unreadable JSON" in errors[0]["message"]
+    message = errors[0]["message"]
+    assert "the bundled `a` executable was not found" in message
+    assert "/gone/bin/a (bundled, missing)" in message, (
+        "the unresolved error must name the candidates it tried (issue #2543)"
+    )
+
+
+def test_failed_probe_is_not_silently_returned_as_empty(monkeypatch) -> None:
+    monkeypatch.setattr(session_enum.aplexer, "enabled", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        session_enum.aplexer,
+        "resolve_a",
+        lambda *args, **kwargs: session_enum.aplexer.AplexerResolution(path="/opt/a"),
+    )
+    monkeypatch.setattr(
+        session_enum.aplexer,
+        "run_json_reported",
+        lambda *args, **kwargs: (
+            None,
+            session_enum.aplexer.AplexerFailure("exit", "exit 1: boom"),
+        ),
+    )
+
+    rows, errors = session_enum.enumerate_live_sessions()
+
+    assert rows == []
+    assert len(errors) == 1
+    message = errors[0]["message"]
+    assert "failed or returned unreadable JSON" in message
+    assert "exit 1: boom" in message, (
+        "aplexer's stderr must reach the error entry, not be discarded (issue #2)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #2: the failure taxonomy is visible in the enumeration error
+# ---------------------------------------------------------------------------
+
+_PROBE_ENV = {"POCKETSHELL_APLEXER": "1"}
+
+
+def test_probe_timeout_is_distinguished_from_a_non_zero_exit(install_fake_a) -> None:
+    install_fake_a(sleep=3)  # outlives both 2s probes
+
+    rows, errors = session_enum.enumerate_live_sessions(env=_PROBE_ENV)
+
+    assert rows == []
+    assert len(errors) == 1
+    message = errors[0]["message"]
+    assert "timeout: no output within 2s" in message, message
+    assert "exit 1" not in message, (
+        "a hung probe must not be reported as a non-zero exit (issue #2)"
+    )
+
+
+def test_probe_non_zero_exit_carries_aplexer_stderr(install_fake_a) -> None:
+    install_fake_a(exit_code=1)
+
+    rows, errors = session_enum.enumerate_live_sessions(env=_PROBE_ENV)
+
+    assert rows == []
+    assert len(errors) == 1
+    message = errors[0]["message"]
+    assert "exit 1: fail" in message, message
+    assert "timeout" not in message, message
+
+
+def test_probe_decode_failure_is_distinguished_from_an_exit(install_fake_a) -> None:
+    install_fake_a(stdout="this is not json")
+
+    rows, errors = session_enum.enumerate_live_sessions(env=_PROBE_ENV)
+
+    assert rows == []
+    assert len(errors) == 1
+    message = errors[0]["message"]
+    assert "decode" in message, message
+    assert "this is not json" in message, message
+    assert "exit 1" not in message, message
 
 
 def test_dead_records_are_filtered_but_remain_available_for_diagnostics() -> None:

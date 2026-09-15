@@ -2,10 +2,10 @@
 
 quse is a hard dependency of pocketshell (see `pyproject.toml`), so its
 console-script ships in the SAME bin directory as the running interpreter.
-`_resolve_quse_binary` resolves that bundled copy next to `sys.executable`
-and NEVER falls back to PATH — a host-level `quse` must not shadow the bundled
-copy, and a missing bundled copy is a packaging-integrity error
-(fail loud), not a user "install quse" nag.
+`_resolve_quse_binary` resolves that bundled copy via the shared interpreter-
+anchored candidate list and NEVER falls back to PATH — a host-level `quse`
+must not shadow the bundled copy, and a missing bundled copy is a
+packaging-integrity error (fail loud), not a user "install quse" nag.
 
 `pocketshell usage` keeps NO provider allowlist of its own: the positional
 `provider` argument is forwarded verbatim to the bundled quse, which owns
@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 from typing import Optional, Sequence
 
 import click
 
+from pocketshell.runtime.console_scripts import bundled_bin_dirs
 from pocketshell.usage.normalize import normalize_usage_stdout
 
 # quse is bundled WITH pocketshell as a hard dependency (issue #1318). A
@@ -41,22 +41,16 @@ def _resolve_quse_binary() -> Optional[str]:
     """Resolve the bundled `quse` console-script shipped with pocketshell.
 
     quse is a hard dependency, so its console-script lands in the SAME ``bin``
-    directory as the ``pocketshell`` interpreter. We resolve it next to
-    ``sys.executable`` — never via ``PATH`` (a host executable must not shadow
-    the bundled copy) — and return ``None`` when it is missing (a
-    packaging-integrity error, not an "install quse" nag).
-
-    Console-scripts live next to the UNRESOLVED ``sys.executable``: in a venv
-    ``bin/python`` is a symlink, so the resolved dir is only a fallback for
-    layouts where the two coincide. Both candidates are anchored to
-    ``sys.executable`` — this is NOT a PATH search.
+    directory as the ``pocketshell`` interpreter. We resolve it via the shared
+    candidate list (:mod:`pocketshell.runtime.console_scripts`) — never via
+    ``PATH`` (a host executable must not shadow the bundled copy) — and return
+    ``None`` when it is missing (a packaging-integrity error, not an
+    "install quse" nag). The candidates cover the interpreter's own ``bin``
+    dir, its resolved dir, and — only for a ``pip install --user`` pocketshell
+    — the user scripts dir (issue #6); every candidate is anchored to the
+    running interpreter, so an unrelated host binary is never picked up.
     """
-    exe_dir = Path(sys.executable).parent
-    candidates = [exe_dir]
-    resolved_dir = Path(sys.executable).resolve().parent
-    if resolved_dir != exe_dir:
-        candidates.append(resolved_dir)
-    for bin_dir in candidates:
+    for bin_dir in bundled_bin_dirs():
         candidate = bin_dir / "quse"
         if candidate.exists():
             return str(candidate)
