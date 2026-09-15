@@ -12,7 +12,6 @@ from pocketshell import profiles as _profiles
 from pocketshell.runtime import sessions as _session_enum
 # --- sibling modules ---
 from pocketshell.sessions.cli import sessions_group
-from pocketshell.sessions.reap import _aplexer_existing_record, _reap_aplexer_blockers, _workload_survivor_warning
 
 
 CREATE_SCHEMA_VERSION = _session_enum.SCHEMA_VERSION
@@ -68,6 +67,35 @@ def _aplexer_snapshot() -> Any:
     if payload is None:
         payload = _aplexer.run_json(["list"], feature="sessions")
     return payload
+
+
+def _aplexer_records_holding(
+    payload: Any, *, workspace: str, tag: str
+) -> list[Mapping[str, Any]]:
+    """Return snapshot records matching the requested workspace and tag."""
+    if not isinstance(payload, list):
+        return []
+    target = os.path.realpath(workspace)
+    records: list[Mapping[str, Any]] = []
+    for raw in payload:
+        if not isinstance(raw, Mapping):
+            continue
+        if str(raw.get("tag") or "") != tag:
+            continue
+        raw_workspace = raw.get("workspace") or raw.get("cwd") or ""
+        if os.path.realpath(str(raw_workspace)) == target:
+            records.append(raw)
+    return records
+
+
+def _aplexer_existing_record(
+    payload: Any, *, workspace: str, tag: str
+) -> Optional[Mapping[str, Any]]:
+    """Return the live aplexer record for a workspace and tag, if any."""
+    for raw in _aplexer_records_holding(payload, workspace=workspace, tag=tag):
+        if _session_enum.aplexer_record_is_alive(raw):
+            return raw
+    return None
 
 
 def _systemd_scope_argv(argv: list[str], memory_bytes: int) -> list[str]:
@@ -161,36 +189,6 @@ def _reused_record_payload(
     }
 
 
-def _reused_payload_and_blockers(
-    snapshot: Any, *, aplexer_path: str, name: str, workspace: str
-) -> tuple[Optional[dict[str, Any]], Any]:
-    """Check the snapshot for a live record; otherwise collect reap blockers."""
-    reused = _reused_record_payload(snapshot, name, workspace)
-    if reused is not None:
-        return reused, None
-    blockers = _reap_aplexer_blockers(
-        snapshot, aplexer_path=aplexer_path, workspace=workspace, tag=name
-    )
-    return None, blockers
-
-
-def _workload_blocker_error(
-    name: str, workspace: str, blockers: Any
-) -> Optional[_CreateError]:
-    """Error for a dead record whose workload is still running, if any."""
-    if not blockers.workload_alive:
-        return None
-    detail = "; ".join(
-        f"record {ident} still has workload pid {pid} running"
-        for ident, pid in blockers.workload_alive
-    )
-    return _CreateError(
-        f"pocketshell: cannot create {name!r} in {workspace!r}: a dead "
-        f"aplexer record still holds that workspace+tag and its workload "
-        f"is still running ({detail}); stop it before retrying."
-    )
-
-
 def _start_argv(
     aplexer_path: str,
     workspace: str,
@@ -219,21 +217,11 @@ def _start_failure(
     code: int,
     stdout: str,
     stderr: str,
-    blockers: Any,
-    workspace: str,
     name: str,
     memory_bytes: int,
 ) -> _CreateError:
     """Map a non-zero ``a start`` exit to the right create error."""
     detail = stderr.strip() or stdout.strip() or "no output"
-    if blockers.unreaped:
-        stuck = ", ".join(blockers.unreaped)
-        return _CreateError(
-            f"pocketshell: dead aplexer record ({stuck}) still holds "
-            f"{workspace!r}:{name}; it could not be reaped. "
-            f"(`a start` exited {code}: {detail})",
-            exit_code=code,
-        )
     return _CreateError(
         f"pocketshell: `a start --tag {name}` exited {code}: {detail}"
         + _cap_unenforceable_hint(memory_bytes, detail),
@@ -274,7 +262,6 @@ def _start_new_record(
     engine: Optional[str],
     profile: Optional[str],
     memory_bytes: int,
-    blockers: Any,
 ) -> dict[str, Any]:
     """Run ``a start`` and return the created-record envelope."""
     argv = _start_argv(
@@ -283,12 +270,10 @@ def _start_new_record(
     code, stdout, stderr = _run_aplexer(argv)
     if code != 0:
         raise _start_failure(
-            code=code, stdout=stdout, stderr=stderr, blockers=blockers,
-            workspace=workspace, name=name, memory_bytes=memory_bytes,
+            code=code, stdout=stdout, stderr=stderr,
+            name=name, memory_bytes=memory_bytes,
         )
     record = _parse_start_record(stdout)
-    for ident in blockers.may_survive:
-        click.echo(_workload_survivor_warning(name, ident), err=True)
     return _created_record_payload(record, name)
 
 
@@ -302,14 +287,9 @@ def _create_on_aplexer(
     memory_bytes = _memory_bytes_or_error(name, workspace, mem)
     snapshot = _aplexer_snapshot()
 
-    reused, blockers = _reused_payload_and_blockers(
-        snapshot, aplexer_path=aplexer_path, name=name, workspace=workspace
-    )
+    reused = _reused_record_payload(snapshot, name, workspace)
     if reused is not None:
         return reused
-    workload_error = _workload_blocker_error(name, workspace, blockers)
-    if workload_error is not None:
-        raise workload_error
 
     return _start_new_record(
         aplexer_path=aplexer_path,
@@ -318,7 +298,6 @@ def _create_on_aplexer(
         engine=engine,
         profile=profile,
         memory_bytes=memory_bytes,
-        blockers=blockers,
     )
 
 

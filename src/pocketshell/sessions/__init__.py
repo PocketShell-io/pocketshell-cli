@@ -37,12 +37,6 @@ from pocketshell.sessions.listing import (
     daemon_handler_list,
     sessions_list,
 )
-from pocketshell.sessions.reap import (
-    _reap_aplexer_blockers,
-    _run_session_command,
-    _reap_aplexer_record,
-    _workload_survivor_warning,
-)
 from pocketshell.runtime import memcap as _memcap  # noqa: F401  (tests patch sessions._memcap)
 from pocketshell import profiles as _profiles  # noqa: F401  (tests patch sessions._profiles)
 from pocketshell.runtime import sessions as _session_enum  # noqa: F401  (tests patch sessions._session_enum)
@@ -62,13 +56,9 @@ __all__ = [
     "_run_aplexer",
     "_aplexer_snapshot",
     "aplexer_start_argv",
-    "_reap_aplexer_blockers",
     "_cap_unenforceable_hint",
     "_create_on_aplexer",
     "sessions_create",
-    "_run_session_command",
-    "_reap_aplexer_record",
-    "_workload_survivor_warning",
     "ATTACH_EXIT_NOT_FOUND",
     "ATTACH_EXIT_AMBIGUOUS",
     "ATTACH_EXIT_NO_BINARY",

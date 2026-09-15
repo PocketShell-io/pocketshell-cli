@@ -115,6 +115,31 @@ def test_create_reuses_a_live_record_without_starting_again(monkeypatch, tmp_pat
     assert starts == []
 
 
+def test_create_leaves_dead_record_reclamation_to_aplexer(monkeypatch, tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    dead = {
+        **_record(),
+        "workspace": str(tmp_path),
+        "phase": "exited",
+        "worker_alive": False,
+    }
+    monkeypatch.setattr(create_mod, "_resolve_aplexer", lambda: _resolution("/fake/a"))
+    monkeypatch.setattr(create_mod, "_aplexer_snapshot", lambda: [dead])
+    monkeypatch.setattr(sessions._memcap, "resolve_session_mem_bytes", lambda **_: 123)
+    monkeypatch.setattr(create_mod, "uuid4", lambda: SimpleNamespace(hex="deadbeefcafe"))
+    monkeypatch.setattr(create_mod, "_run_aplexer", _start_recording(calls))
+
+    result = CliRunner().invoke(
+        sessions.sessions_group,
+        ["create", "shell", "--cwd", str(tmp_path), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["created"] is True
+    assert calls and "start" in calls[0]
+    assert "forget" not in calls[0]
+
+
 def test_create_fails_loudly_when_aplexer_cannot_resolve(monkeypatch) -> None:
     monkeypatch.setattr(create_mod, "_resolve_aplexer", lambda: _resolution(None))
     result = CliRunner().invoke(sessions.sessions_group, ["create", "shell", "--json"])

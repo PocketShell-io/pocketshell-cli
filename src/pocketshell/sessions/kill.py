@@ -2,16 +2,28 @@
 from __future__ import annotations
 import json
 import subprocess
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 import click
 # --- sibling modules ---
 from pocketshell.sessions.attach import ATTACH_EXIT_AMBIGUOUS, ATTACH_EXIT_NOT_FOUND, ATTACH_EXIT_NO_BINARY, _attach_live_rows, _match_attach_target
 from pocketshell.sessions.cli import sessions_group
 from pocketshell.sessions.create import CREATE_SCHEMA_VERSION, _aplexer_unresolved_message, _resolve_aplexer
-from pocketshell.sessions.reap import _run_session_command
 
 
 KILL_SCHEMA_VERSION = CREATE_SCHEMA_VERSION
+
+_SESSION_COMMAND_TIMEOUT_S = 5.0
+
+
+def _run_session_command(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    """Run one bounded aplexer lifecycle command."""
+    return subprocess.run(
+        list(argv),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=_SESSION_COMMAND_TIMEOUT_S,
+    )
 
 
 def _emit_kill_failure(
@@ -148,7 +160,7 @@ def _emit_kill_result(
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit the schema-3 kill envelope.")
 @click.pass_context
 def sessions_kill(ctx: click.Context, name: str, as_json: bool) -> None:
-    """Stop a live aplexer session and reap its record."""
+    """Stop a live aplexer session and report its record-removal result."""
     row = _resolve_kill_target(ctx, name, as_json=as_json)
     if row is None:
         return
