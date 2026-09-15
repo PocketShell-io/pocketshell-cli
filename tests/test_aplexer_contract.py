@@ -48,6 +48,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -492,8 +493,10 @@ def test_session_being_created_does_not_erase_live_aplexer_sessions(
     for key, value in aplexer_fixture.env.items():
         monkeypatch.setenv(key, value)
 
+    started_records: dict[str, dict[str, Any]] = {}
+
     def start(tag: str) -> subprocess.CompletedProcess:
-        return aplexer_fixture.run(
+        completed = aplexer_fixture.run(
             [
                 "--json", "start",
                 "--workspace", str(aplexer_fixture.workspace),
@@ -501,11 +504,35 @@ def test_session_being_created_does_not_erase_live_aplexer_sessions(
                 "--engine", "aplxregression",
             ]
         )
+        if completed.returncode == 0:
+            started_records[tag] = json.loads(completed.stdout)
+        return completed
 
     def kill(tag: str) -> None:
-        aplexer_fixture.run(
+        """`a kill`, with a pid-based fallback so the RED path self-cleans.
+
+        On a broken registry (exactly what this test simulates for the
+        0.1.2 red baseline) `a kill` fails the same registry scan `list`
+        does, so a cleanup that only runs `a kill` leaves the fixture's
+        `sleep 60` behind on every red-baseline run. The `start` record
+        names the pids, so kill those process groups directly when `a
+        kill` reports failure — best-effort, CI only ever runs 0.1.3+
+        where the primary path succeeds.
+        """
+        completed = aplexer_fixture.run(
             ["kill", "--workspace", str(aplexer_fixture.workspace), "--tag", tag]
         )
+        if completed.returncode == 0:
+            return
+        record = started_records.get(tag)
+        for key in ("worker_pid", "workload_pid"):
+            pid = (record or {}).get(key)
+            if not pid:
+                continue
+            try:
+                os.killpg(int(pid), signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
 
     live_tag = f"aplx-live-{uuid.uuid4().hex[:8]}"
     second_tag = f"aplx-second-{uuid.uuid4().hex[:8]}"
@@ -555,6 +582,80 @@ def test_session_being_created_does_not_erase_live_aplexer_sessions(
     finally:
         kill(live_tag)
         kill(second_tag)
+
+
+# ---------------------------------------------------------------------------
+# issue #4 — the skip is narrow: a GENUINELY corrupt record still hard-fails
+# ---------------------------------------------------------------------------
+#
+# 0.1.3 stopped failing the whole scan on a record-less directory because
+# `start_session` legitimately creates that state for 26-43 ms on every `a
+# start`. The trio above pins that narrow skip. Nothing pins the NEGATIVE
+# side: a future aplexer bump that broadened the skip into "swallow all
+# registry-load errors" would pass everything above silently and re-create
+# the same invisible blanking through a different door — real corruption
+# reported to the phone as an empty session list. Verified by hand against
+# 0.1.2 and 0.1.3 during the #2547 review (garbage rc=1, wrong schema rc=1);
+# these two tests turn that verification into a pin.
+
+
+def test_bundled_aplexer_hard_fails_on_an_unparseable_record(aplexer_fixture) -> None:
+    """`session.json` that is not JSON at all must fail the scan, not skip."""
+    aplexer_fixture.write_config("version = 1\n")
+    corrupt = aplexer_fixture.sessions_root / str(uuid.uuid4())
+    corrupt.mkdir(parents=True)
+    (corrupt / "session.json").write_text("not json at all {{{", encoding="utf-8")
+
+    completed = aplexer_fixture.run(["--json", "list"])
+
+    assert completed.returncode != 0, (
+        "the bundled aplexer silently skipped a session record that is not "
+        "parseable JSON; a genuinely corrupt registry must hard-fail, or real "
+        "corruption reaches the phone as an empty session list (issue #4). "
+        f"exit={completed.returncode} stdout={completed.stdout!r}"
+    )
+    assert corrupt.exists(), "the fixture record must not be consumed"
+
+
+def test_bundled_aplexer_hard_fails_on_an_unsupported_schema_version(
+    aplexer_fixture,
+) -> None:
+    """Valid JSON, well-formed record, wrong `schema_version` -> hard fail.
+
+    Every field aplexer's own `SessionRecord` requires is present (the
+    defaults `read_record` honours are omitted), so serde parses the record
+    and the failure comes from the schema check itself — the exact branch a
+    broadened skip would have to swallow to regress.
+    """
+    aplexer_fixture.write_config("version = 1\n")
+    corrupt = aplexer_fixture.sessions_root / str(uuid.uuid4())
+    corrupt.mkdir(parents=True)
+    record = {
+        "schema_version": 424242,
+        "id": str(corrupt.name),
+        "workspace": "/tmp/ps4-ws",
+        "tag": "ps4-schema",
+        "engine": "shell",
+        "command": ["/bin/true"],
+        "cwd": "/tmp/ps4-ws",
+        "history_bytes": 0,
+        "created_at_ms": 0,
+        "updated_at_ms": 0,
+        "phase": "running",
+        "socket_path": "/tmp/ps4-sock",
+        "history_path": "/tmp/ps4-hist",
+    }
+    (corrupt / "session.json").write_text(json.dumps(record), encoding="utf-8")
+
+    completed = aplexer_fixture.run(["--json", "list"])
+
+    assert completed.returncode != 0, (
+        "the bundled aplexer accepted a record with an unsupported "
+        "`schema_version`; a future-schema record must hard-fail so a "
+        "downgraded CLI cannot quietly drop sessions it cannot understand "
+        f"(issue #4). exit={completed.returncode} stdout={completed.stdout!r}"
+    )
+    assert corrupt.exists(), "the fixture record must not be consumed"
 
 
 # ---------------------------------------------------------------------------
