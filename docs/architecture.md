@@ -17,6 +17,10 @@ src/pocketshell/
 │   ├── cli.py                   # `pocketshell agent`
 │   └── kind.py                  # `pocketshell agents kind`
 ├── cards/                       # typed agent→app cards
+│   ├── types/                   # registry and concrete card behaviors
+│   │   ├── registry.py
+│   │   ├── checklist.py
+│   │   └── note.py
 │   └── push.py                  # card FCM notification adapter
 ├── daemon/                      # Unix-socket JSON-RPC server/client
 ├── engines/                     # engine registry and harness probes

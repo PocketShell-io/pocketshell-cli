@@ -7,7 +7,7 @@ import click
 # --- sibling modules ---
 from pocketshell.cards.paths import CardPaths, detect_session
 from pocketshell.cards.storage import _session_lock, _write_private
-from pocketshell.cards.types import get_card_type
+from pocketshell.cards.types.registry import get_card_type
 
 
 def _now_iso() -> str:

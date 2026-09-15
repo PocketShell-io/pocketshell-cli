@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 import click
 # --- sibling modules ---
-from pocketshell.cards.checklist import DEFAULT_CHECKLIST_ID, _slug, parse_checklist_markdown
-from pocketshell.cards.note import DEFAULT_NOTE_ID
+from pocketshell.cards.types.checklist import DEFAULT_CHECKLIST_ID, _slug, parse_checklist_markdown
+from pocketshell.cards.types.note import DEFAULT_NOTE_ID
 from pocketshell.cards.paths import resolve_paths
 from pocketshell.cards.store import _import_yaml, _notify_card_pushed_best_effort, _require_session, apply_interaction, build_card, read_cards, upsert_card
-from pocketshell.cards.types import get_card_type
+from pocketshell.cards.types.registry import get_card_type
 
 
 def _stdin_text() -> str:

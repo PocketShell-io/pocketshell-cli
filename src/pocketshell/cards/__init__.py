@@ -54,14 +54,14 @@ is proven, not merely asserted in a docstring.
 """
 from __future__ import annotations
 
-from pocketshell.cards.checklist import (
+from pocketshell.cards.types.checklist import (
     DEFAULT_CHECKLIST_ID,
     parse_checklist_markdown,
 )
 from pocketshell.cards.cli import (
     register_push_card_commands,
 )
-from pocketshell.cards.note import (
+from pocketshell.cards.types.note import (
     DEFAULT_NOTE_ID,
 )
 from pocketshell.cards.paths import (
@@ -82,7 +82,7 @@ from pocketshell.cards.store import (
     upsert_card,
     apply_interaction,
 )
-from pocketshell.cards.types import (
+from pocketshell.cards.types.registry import (
     CardType,
     REGISTRY,
     register_card_type,

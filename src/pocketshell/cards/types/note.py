@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 # --- sibling modules ---
 from pocketshell.cards.store import _now_iso
-from pocketshell.cards.types import CardType, register_card_type
+from pocketshell.cards.types.registry import CardType, register_card_type
 
 
 # Default note card id used when ``--id`` is omitted (one default note per

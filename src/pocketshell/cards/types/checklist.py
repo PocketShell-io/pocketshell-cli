@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 # --- sibling modules ---
-from pocketshell.cards.types import CardType, register_card_type
+from pocketshell.cards.types.registry import CardType, register_card_type
 
 
 # Default checklist card id used when ``--id`` is omitted: a session has exactly

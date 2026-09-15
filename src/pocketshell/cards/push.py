@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from pocketshell import push as push_mod
-from pocketshell.cards import CardPaths
+from pocketshell.cards.paths import CardPaths
 from pocketshell.usage.capture import _append_history, resolve_paths as resolve_usage_paths
 
 # The app contract: an agent-card push is a `type=agent_card` FCM data message.
@@ -117,7 +117,7 @@ def _summarise(card: dict[str, Any]) -> str:
     notification body matches what the agent sees. Falls back to a generic line
     for an unknown type (forward-compatible).
     """
-    from pocketshell.cards import get_card_type
+    from pocketshell.cards.types.registry import get_card_type
 
     card_type = card.get("type", "")
     handler = get_card_type(card_type) if isinstance(card_type, str) else None
