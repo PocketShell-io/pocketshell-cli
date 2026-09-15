@@ -7,6 +7,7 @@ import json
 from click.testing import CliRunner
 
 from pocketshell import sessions, session_enum
+from pocketshell.sessions import listing as listing_mod
 
 
 def test_help_exposes_only_the_four_session_lifecycle_commands() -> None:
@@ -21,7 +22,7 @@ def test_help_exposes_only_the_four_session_lifecycle_commands() -> None:
 def test_list_json_is_schema_three_and_aplexer_only(monkeypatch) -> None:
     row = session_enum.LiveSession(name="project:shell", aplexer_id="id-1")
     monkeypatch.setattr(
-        sessions,
+        listing_mod,
         "_try_daemon_sessions_list",
         lambda **_: None,
     )
@@ -46,7 +47,7 @@ def test_list_returns_nonzero_when_aplexer_is_unavailable(monkeypatch) -> None:
         "enumerate_live_sessions",
         lambda: ([], [{"message": "aplexer is unavailable"}]),
     )
-    monkeypatch.setattr(sessions, "_try_daemon_sessions_list", lambda **_: None)
+    monkeypatch.setattr(listing_mod, "_try_daemon_sessions_list", lambda **_: None)
 
     result = CliRunner().invoke(sessions.sessions_group, ["list", "--json"])
 

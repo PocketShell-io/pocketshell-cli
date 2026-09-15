@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from click.testing import CliRunner
 
 from pocketshell import aplexer, sessions
+from pocketshell.sessions import create as create_mod
 
 
 def _resolution(path: str | None) -> aplexer.AplexerResolution:
@@ -33,16 +34,16 @@ def _record() -> dict[str, object]:
 
 def test_create_uses_only_aplexer_and_emits_schema_three(monkeypatch, tmp_path: Path) -> None:
     calls: list[list[str]] = []
-    monkeypatch.setattr(sessions, "_resolve_aplexer", lambda: _resolution("/fake/a"))
-    monkeypatch.setattr(sessions, "_aplexer_snapshot", lambda: [])
+    monkeypatch.setattr(create_mod, "_resolve_aplexer", lambda: _resolution("/fake/a"))
+    monkeypatch.setattr(create_mod, "_aplexer_snapshot", lambda: [])
     monkeypatch.setattr(sessions._memcap, "resolve_session_mem_bytes", lambda **_: 123)
-    monkeypatch.setattr(sessions, "uuid4", lambda: SimpleNamespace(hex="deadbeefcafe"))
+    monkeypatch.setattr(create_mod, "uuid4", lambda: SimpleNamespace(hex="deadbeefcafe"))
 
     def start(argv):
         calls.append(list(argv))
         return 0, json.dumps(_record()), ""
 
-    monkeypatch.setattr(sessions, "_run_aplexer", start)
+    monkeypatch.setattr(create_mod, "_run_aplexer", start)
     result = CliRunner().invoke(
         sessions.sessions_group,
         ["create", "shell", "--cwd", str(tmp_path), "--engine", "codex", "--json"],
@@ -94,14 +95,14 @@ def test_uncapped_start_is_not_wrapped() -> None:
 
 def test_create_reuses_a_live_record_without_starting_again(monkeypatch, tmp_path: Path) -> None:
     starts: list[list[str]] = []
-    monkeypatch.setattr(sessions, "_resolve_aplexer", lambda: _resolution("/fake/a"))
+    monkeypatch.setattr(create_mod, "_resolve_aplexer", lambda: _resolution("/fake/a"))
     monkeypatch.setattr(
-        sessions,
+        create_mod,
         "_aplexer_snapshot",
         lambda: [{**_record(), "workspace": str(tmp_path)}],
     )
     monkeypatch.setattr(sessions._memcap, "resolve_session_mem_bytes", lambda **_: 123)
-    monkeypatch.setattr(sessions, "_run_aplexer", lambda argv: starts.append(list(argv)))
+    monkeypatch.setattr(create_mod, "_run_aplexer", lambda argv: starts.append(list(argv)))
 
     result = CliRunner().invoke(
         sessions.sessions_group,
@@ -114,7 +115,7 @@ def test_create_reuses_a_live_record_without_starting_again(monkeypatch, tmp_pat
 
 
 def test_create_fails_loudly_when_aplexer_cannot_resolve(monkeypatch) -> None:
-    monkeypatch.setattr(sessions, "_resolve_aplexer", lambda: _resolution(None))
+    monkeypatch.setattr(create_mod, "_resolve_aplexer", lambda: _resolution(None))
     result = CliRunner().invoke(sessions.sessions_group, ["create", "shell", "--json"])
 
     assert result.exit_code == 127
@@ -134,10 +135,10 @@ def test_create_translates_a_profile_display_name_onto_the_aplexer_id(
 ) -> None:
     """#2661: the picker sends display names; aplexer wants dir-stem ids."""
     calls: list[list[str]] = []
-    monkeypatch.setattr(sessions, "_resolve_aplexer", lambda: _resolution("/fake/a"))
-    monkeypatch.setattr(sessions, "_aplexer_snapshot", lambda: [])
+    monkeypatch.setattr(create_mod, "_resolve_aplexer", lambda: _resolution("/fake/a"))
+    monkeypatch.setattr(create_mod, "_aplexer_snapshot", lambda: [])
     monkeypatch.setattr(sessions._memcap, "resolve_session_mem_bytes", lambda **_: 123)
-    monkeypatch.setattr(sessions, "_run_aplexer", _start_recording(calls))
+    monkeypatch.setattr(create_mod, "_run_aplexer", _start_recording(calls))
     monkeypatch.setattr(
         sessions._profiles,
         "resolve_aplexer_profile_arg",
@@ -161,10 +162,10 @@ def test_create_drops_the_profile_flag_for_the_engine_default_display_name(
 ) -> None:
     """#2661: aplexer omits default dirs, so `--profile Codex` must go away."""
     calls: list[list[str]] = []
-    monkeypatch.setattr(sessions, "_resolve_aplexer", lambda: _resolution("/fake/a"))
-    monkeypatch.setattr(sessions, "_aplexer_snapshot", lambda: [])
+    monkeypatch.setattr(create_mod, "_resolve_aplexer", lambda: _resolution("/fake/a"))
+    monkeypatch.setattr(create_mod, "_aplexer_snapshot", lambda: [])
     monkeypatch.setattr(sessions._memcap, "resolve_session_mem_bytes", lambda **_: 123)
-    monkeypatch.setattr(sessions, "_run_aplexer", _start_recording(calls))
+    monkeypatch.setattr(create_mod, "_run_aplexer", _start_recording(calls))
     monkeypatch.setattr(
         sessions._profiles,
         "resolve_aplexer_profile_arg",

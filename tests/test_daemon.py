@@ -31,7 +31,13 @@ from typing import Iterator
 import pytest
 from click.testing import CliRunner
 
-from pocketshell import daemon as daemon_mod
+from pocketshell.daemon import cache as dcache
+from pocketshell.daemon import client as dclient
+from pocketshell.daemon import failures as dfailures
+from pocketshell.daemon import methods as dmethods
+from pocketshell.daemon import paths as dpaths
+from pocketshell.daemon import protocol as dprotocol
+from pocketshell.daemon import server as dserver
 from pocketshell.cli import cli
 from pocketshell.usage import usage_command
 
@@ -123,7 +129,7 @@ def _spawn_daemon(
         env=env,
         start_new_session=True,
     )
-    assert daemon_mod.wait_until_ready(
+    assert dclient.wait_until_ready(
         socket_path=socket_path, deadline=10.0
     ), f"daemon did not become ready: {proc.stderr.read().decode(errors='replace') if proc.stderr else ''}"
     return proc
@@ -159,7 +165,7 @@ def running_daemon(sandbox_socket: Path) -> Iterator[subprocess.Popen]:
 def test_resolve_socket_path_prefers_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("POCKETSHELL_DAEMON_SOCKET", "/tmp/explicit.sock")
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
-    assert daemon_mod.resolve_socket_path() == Path("/tmp/explicit.sock")
+    assert dpaths.resolve_socket_path() == Path("/tmp/explicit.sock")
 
 
 def test_resolve_socket_path_falls_back_to_cache_without_xdg(
@@ -169,7 +175,7 @@ def test_resolve_socket_path_falls_back_to_cache_without_xdg(
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     monkeypatch.setenv("HOME", "/home/test")
     expected = Path("/home/test/.cache/pocketshell/daemon.sock")
-    assert daemon_mod.resolve_socket_path() == expected
+    assert dpaths.resolve_socket_path() == expected
 
 
 def test_resolve_socket_path_uses_xdg_when_available(
@@ -177,7 +183,7 @@ def test_resolve_socket_path_uses_xdg_when_available(
 ) -> None:
     monkeypatch.delenv("POCKETSHELL_DAEMON_SOCKET", raising=False)
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/9999")
-    assert daemon_mod.resolve_socket_path() == Path(
+    assert dpaths.resolve_socket_path() == Path(
         "/run/user/9999/pocketshell/daemon.sock"
     )
 
@@ -186,8 +192,8 @@ def test_framing_roundtrip_short_payload() -> None:
     """Length-prefix framing handles small payloads correctly."""
     a, b = socket.socketpair()
     try:
-        daemon_mod.send_json(a, {"hello": "world"})
-        assert daemon_mod.recv_json(b) == {"hello": "world"}
+        dprotocol.send_json(a, {"hello": "world"})
+        assert dprotocol.recv_json(b) == {"hello": "world"}
     finally:
         a.close()
         b.close()
@@ -198,8 +204,8 @@ def test_framing_roundtrip_large_payload() -> None:
     a, b = socket.socketpair()
     payload = {"data": "x" * (200 * 1024)}  # ~200 KB
     try:
-        daemon_mod.send_json(a, payload)
-        assert daemon_mod.recv_json(b) == payload
+        dprotocol.send_json(a, payload)
+        assert dprotocol.recv_json(b) == payload
     finally:
         a.close()
         b.close()
@@ -208,8 +214,8 @@ def test_framing_roundtrip_large_payload() -> None:
 def test_framing_rejects_oversized_send() -> None:
     a, b = socket.socketpair()
     try:
-        with pytest.raises(daemon_mod.FramingError):
-            daemon_mod.send_frame(a, b"x" * (5 * 1024 * 1024))
+        with pytest.raises(dprotocol.FramingError):
+            dprotocol.send_frame(a, b"x" * (5 * 1024 * 1024))
     finally:
         a.close()
         b.close()
@@ -230,7 +236,7 @@ def test_daemon_creates_socket_and_responds_to_ping(
     mode = sandbox_socket.stat().st_mode & 0o777
     assert mode == 0o600, f"socket mode is {oct(mode)}, expected 0600"
 
-    result = daemon_mod.call(
+    result = dclient.call(
         "daemon.ping",
         socket_path=sandbox_socket,
         timeout=2.0,
@@ -242,14 +248,14 @@ def test_is_daemon_running_true_when_socket_responds(
     running_daemon: subprocess.Popen,
     sandbox_socket: Path,
 ) -> None:
-    assert daemon_mod.is_daemon_running(sandbox_socket) is True
+    assert dclient.is_daemon_running(sandbox_socket) is True
 
 
 def test_is_daemon_running_false_when_no_socket(sandbox_socket: Path) -> None:
     # sandbox_socket fixture sets the env var but does not start a
     # daemon; the path therefore does not exist.
     assert not sandbox_socket.exists()
-    assert daemon_mod.is_daemon_running(sandbox_socket) is False
+    assert dclient.is_daemon_running(sandbox_socket) is False
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +302,7 @@ def test_usage_fetch_round_trip(
 
     proc = _spawn_daemon(sandbox_socket, python_exe=python_exe)
     try:
-        result = daemon_mod.call(
+        result = dclient.call(
             "usage.fetch",
             params={},
             socket_path=sandbox_socket,
@@ -346,11 +352,11 @@ def test_two_concurrent_clients_cache_hit_is_faster(
         socket_obj.settimeout(5.0)
         socket_obj.connect(str(sandbox_socket))
         try:
-            daemon_mod.send_json(
+            dprotocol.send_json(
                 socket_obj,
                 {"jsonrpc": "2.0", "id": 1, "method": "usage.fetch", "params": {}},
             )
-            cold_response = daemon_mod.recv_json(socket_obj)
+            cold_response = dprotocol.recv_json(socket_obj)
         finally:
             socket_obj.close()
         cold_elapsed = time.monotonic() - cold_start
@@ -367,11 +373,11 @@ def test_two_concurrent_clients_cache_hit_is_faster(
         socket_obj2.settimeout(5.0)
         socket_obj2.connect(str(sandbox_socket))
         try:
-            daemon_mod.send_json(
+            dprotocol.send_json(
                 socket_obj2,
                 {"jsonrpc": "2.0", "id": 2, "method": "usage.fetch", "params": {}},
             )
-            warm_response = daemon_mod.recv_json(socket_obj2)
+            warm_response = dprotocol.recv_json(socket_obj2)
         finally:
             socket_obj2.close()
         warm_elapsed = time.monotonic() - warm_start
@@ -416,15 +422,15 @@ def test_no_cache_param_bypasses_cache(
     proc = _spawn_daemon(sandbox_socket, python_exe=python_exe)
     try:
         # First call populates the cache.
-        first = daemon_mod.call("usage.fetch", socket_path=sandbox_socket)
+        first = dclient.call("usage.fetch", socket_path=sandbox_socket)
         assert json.loads(first["stdout"].strip())["call"] == 1
 
         # Second without no_cache must hit the cache and not increment.
-        cached = daemon_mod.call("usage.fetch", socket_path=sandbox_socket)
+        cached = dclient.call("usage.fetch", socket_path=sandbox_socket)
         assert json.loads(cached["stdout"].strip())["call"] == 1
 
         # Third with no_cache must re-run upstream — counter increments.
-        fresh = daemon_mod.call(
+        fresh = dclient.call(
             "usage.fetch",
             params={"no_cache": True},
             socket_path=sandbox_socket,
@@ -463,7 +469,7 @@ def test_daemon_start_cleans_up_stale_socket(
     env = {"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"}
     proc = _spawn_daemon(sandbox_socket, extra_env=env)
     try:
-        assert daemon_mod.is_daemon_running(sandbox_socket)
+        assert dclient.is_daemon_running(sandbox_socket)
     finally:
         _terminate(proc)
 
@@ -485,7 +491,7 @@ def test_daemon_recovers_after_sigkill(
 
     proc1 = _spawn_daemon(sandbox_socket, extra_env=env)
     try:
-        assert daemon_mod.is_daemon_running(sandbox_socket)
+        assert dclient.is_daemon_running(sandbox_socket)
         # SIGKILL — the daemon cannot run its atexit/signal handler.
         proc1.send_signal(signal.SIGKILL)
         proc1.wait(timeout=5.0)
@@ -495,13 +501,13 @@ def test_daemon_recovers_after_sigkill(
 
     # The socket file may still be present (or absent depending on
     # kernel cleanup); either way the daemon should NOT be running.
-    assert not daemon_mod.is_daemon_running(sandbox_socket)
+    assert not dclient.is_daemon_running(sandbox_socket)
 
     # Start a fresh daemon over the stale file; must succeed.
     proc2 = _spawn_daemon(sandbox_socket, extra_env=env)
     try:
-        assert daemon_mod.is_daemon_running(sandbox_socket)
-        result = daemon_mod.call("daemon.ping", socket_path=sandbox_socket)
+        assert dclient.is_daemon_running(sandbox_socket)
+        result = dclient.call("daemon.ping", socket_path=sandbox_socket)
         assert result["ok"] is True
         assert result["pid"] == proc2.pid
     finally:
@@ -547,11 +553,11 @@ def test_no_daemon_flag_skips_daemon_probe(
     proc = _spawn_daemon(sandbox_socket, python_exe=daemon_python)
     try:
         # Confirm the daemon is up and would answer the call.
-        assert daemon_mod.is_daemon_running(sandbox_socket)
+        assert dclient.is_daemon_running(sandbox_socket)
 
         # Point the CLI's quse lookup at the subprocess_payload script.
         monkeypatch.setattr(
-            "pocketshell.usage._resolve_quse_binary",
+            "pocketshell.usage.quse._resolve_quse_binary",
             lambda: str(fake_bin / "quse"),
         )
 
@@ -597,7 +603,7 @@ def test_usage_uses_daemon_by_default(
     proc = _spawn_daemon(sandbox_socket, python_exe=daemon_python)
     try:
         monkeypatch.setattr(
-            "pocketshell.usage._resolve_quse_binary",
+            "pocketshell.usage.quse._resolve_quse_binary",
             lambda: str(fake_bin / "quse"),
         )
         runner = CliRunner()
@@ -630,7 +636,7 @@ def test_usage_falls_through_when_daemon_absent(
     )
     _write_fake_quse(fake_bin, payload=payload)
     monkeypatch.setattr(
-        "pocketshell.usage._resolve_quse_binary",
+        "pocketshell.usage.quse._resolve_quse_binary",
         lambda: str(fake_bin / "quse"),
     )
 
@@ -654,7 +660,7 @@ def test_daemon_exits_after_idle_timeout(sandbox_socket: Path) -> None:
     proc = _spawn_daemon(sandbox_socket, idle_timeout=1.5)
     try:
         # Initially up.
-        assert daemon_mod.is_daemon_running(sandbox_socket)
+        assert dclient.is_daemon_running(sandbox_socket)
         # Wait past the idle window; the daemon polls every 1 s for
         # the idle check, so we give it generous slack.
         deadline = time.monotonic() + 8.0
@@ -706,7 +712,7 @@ def test_cli_daemon_stop_terminates_running_daemon(
     env = {"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"}
     proc = _spawn_daemon(sandbox_socket, extra_env=env)
     try:
-        assert daemon_mod.is_daemon_running(sandbox_socket)
+        assert dclient.is_daemon_running(sandbox_socket)
 
         runner = CliRunner()
         result = runner.invoke(cli, ["daemon", "stop"], catch_exceptions=False)
@@ -736,11 +742,11 @@ def test_stop_does_not_signal_stale_reused_pid(
     sandbox_socket: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pid_path = daemon_mod.resolve_pid_path(sandbox_socket)
+    pid_path = dpaths.resolve_pid_path(sandbox_socket)
     pid_path.write_text(f"{os.getpid()}\n")
     signalled: list[tuple[int, int]] = []
     monkeypatch.setattr(os, "kill", lambda pid, sig: signalled.append((pid, sig)))
-    assert daemon_mod.stop_daemon(socket_path=sandbox_socket, timeout=0.01) is False
+    assert dclient.stop_daemon(socket_path=sandbox_socket, timeout=0.01) is False
     assert signalled == []
 
 
@@ -750,9 +756,9 @@ def _serve_after_ordered_bind(
     second_attempted: multiprocessing.synchronize.Event,
     role: str,
 ) -> None:
-    original_bind = daemon_mod.Daemon._bind
+    original_bind = dserver.Daemon._bind
 
-    def ordered_bind(daemon: daemon_mod.Daemon) -> socket.socket:
+    def ordered_bind(daemon: dserver.Daemon) -> socket.socket:
         if role == "second":
             assert first_bound.wait(timeout=5)
         try:
@@ -765,8 +771,8 @@ def _serve_after_ordered_bind(
             assert second_attempted.wait(timeout=5)
         return bound
 
-    daemon_mod.Daemon._bind = ordered_bind
-    daemon_mod.serve_foreground(socket_path=Path(socket_path), idle_timeout=30)
+    dserver.Daemon._bind = ordered_bind
+    dclient.serve_foreground(socket_path=Path(socket_path), idle_timeout=30)
 
 
 def test_concurrent_foreground_starts_have_one_owner(sandbox_socket: Path) -> None:
@@ -789,13 +795,13 @@ def test_concurrent_foreground_starts_have_one_owner(sandbox_socket: Path) -> No
         assert second_attempted.wait(timeout=5)
         second.join(timeout=1)
         assert second.exitcode == 0, "the second contender did not lose ownership"
-        assert daemon_mod.wait_until_ready(socket_path=sandbox_socket, deadline=10)
-        owner_pid = daemon_mod.call("daemon.ping", socket_path=sandbox_socket)["pid"]
+        assert dclient.wait_until_ready(socket_path=sandbox_socket, deadline=10)
+        owner_pid = dclient.call("daemon.ping", socket_path=sandbox_socket)["pid"]
         assert owner_pid == first.pid
-        assert daemon_mod.is_daemon_running(sandbox_socket)
-        assert daemon_mod.read_pid(daemon_mod.resolve_pid_path(sandbox_socket)) == owner_pid
+        assert dclient.is_daemon_running(sandbox_socket)
+        assert dpaths.read_pid(dpaths.resolve_pid_path(sandbox_socket)) == owner_pid
     finally:
-        daemon_mod.stop_daemon(socket_path=sandbox_socket)
+        dclient.stop_daemon(socket_path=sandbox_socket)
         for process in processes:
             if process.pid is not None:
                 process.join(timeout=2)
@@ -826,9 +832,9 @@ def test_cli_daemon_start_lazy_spawns_daemon(
         result = runner.invoke(cli, ["daemon", "start"], catch_exceptions=False)
         assert result.exit_code == 0, result.output
         assert "started" in result.output
-        assert daemon_mod.is_daemon_running(sandbox_socket)
+        assert dclient.is_daemon_running(sandbox_socket)
         # Clean up explicitly so the test does not leave a process.
-        daemon_mod.stop_daemon(socket_path=sandbox_socket)
+        dclient.stop_daemon(socket_path=sandbox_socket)
     finally:
         if saved_socket is None:
             os.environ.pop("POCKETSHELL_DAEMON_SOCKET", None)
@@ -861,16 +867,16 @@ def test_unknown_method_returns_method_not_found(
     sandbox_socket: Path,
 ) -> None:
     with pytest.raises(RuntimeError) as excinfo:
-        daemon_mod.call("not.a.real.method", socket_path=sandbox_socket)
+        dclient.call("not.a.real.method", socket_path=sandbox_socket)
     assert "-32601" in str(excinfo.value) or "unknown method" in str(excinfo.value)
 
 
 def test_cache_invalidate_method_drops_only_that_method() -> None:
     """`_Cache.invalidate_method` evicts every key for one method only."""
-    cache = daemon_mod._Cache()
-    key_a1 = daemon_mod._CacheKey.of("repos.list_local", {"roots": ["/a"]})
-    key_a2 = daemon_mod._CacheKey.of("repos.list_local", {"roots": ["/b"]})
-    key_b = daemon_mod._CacheKey.of("usage.fetch", {})
+    cache = dcache._Cache()
+    key_a1 = dcache._CacheKey.of("repos.list_local", {"roots": ["/a"]})
+    key_a2 = dcache._CacheKey.of("repos.list_local", {"roots": ["/b"]})
+    key_b = dcache._CacheKey.of("usage.fetch", {})
     cache.put(key_a1, ["a1"], ttl_secs=999)
     cache.put(key_a2, ["a2"], ttl_secs=999)
     cache.put(key_b, {"stdout": "x"}, ttl_secs=999)
@@ -885,16 +891,16 @@ def test_cache_invalidate_method_drops_only_that_method() -> None:
     assert cache.invalidate_method("repos.list_local") == 0
 
 
-def _dispatch_in_memory(daemon: daemon_mod.Daemon, method: str, params: dict) -> dict:
+def _dispatch_in_memory(daemon: dserver.Daemon, method: str, params: dict) -> dict:
     """Send one request through ``Daemon._handle_one`` using a socketpair."""
     client, server = socket.socketpair()
     try:
-        daemon_mod.send_json(
+        dprotocol.send_json(
             client,
             {"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
         )
         daemon._handle_one(server)
-        response = daemon_mod.recv_json(client)
+        response = dprotocol.recv_json(client)
         assert isinstance(response, dict)
         return response
     finally:
@@ -917,7 +923,7 @@ def test_handler_exception_returns_generic_message_and_logs_detail(
         # A realistic failure whose text embeds an internal host path.
         raise FileNotFoundError(f"[Errno 2] No such file or directory: {secret_path!r}")
 
-    daemon = daemon_mod.Daemon(
+    daemon = dserver.Daemon(
         socket_path=tmp_path / "daemon.sock",
         methods={"boom.now": exploding_handler},
     )
@@ -927,7 +933,7 @@ def test_handler_exception_returns_generic_message_and_logs_detail(
     # The wire response carries only a generic message + the method name.
     assert "error" in response
     error = response["error"]
-    assert error["code"] == daemon_mod.JSONRPC_INTERNAL_ERROR
+    assert error["code"] == dfailures.JSONRPC_INTERNAL_ERROR
     message = error["message"]
     assert "boom.now" in message
     # The internal path, the exception text, and even the exception type
@@ -945,44 +951,44 @@ def test_handler_exception_returns_generic_message_and_logs_detail(
 
 
 def test_daemon_registry_includes_sessions_methods() -> None:
-    assert "sessions.list" in daemon_mod.DEFAULT_METHODS
-    assert daemon_mod.METHOD_TTLS["sessions.list"] == 5.0
+    assert "sessions.list" in dmethods.DEFAULT_METHODS
+    assert dcache.METHOD_TTLS["sessions.list"] == 5.0
 
 
 def test_daemon_registry_includes_agents_kind_for_panes() -> None:
-    assert "agents.kind_for_panes" in daemon_mod.DEFAULT_METHODS
+    assert "agents.kind_for_panes" in dmethods.DEFAULT_METHODS
     # No TTL: agent processes change live, so the method must never be cached
     # (the spike explicitly forbids a TTL cache here — procs change live).
-    assert "agents.kind_for_panes" not in daemon_mod.METHOD_TTLS
+    assert "agents.kind_for_panes" not in dcache.METHOD_TTLS
 
 
 def test_daemon_registry_includes_tree_methods() -> None:
     """Epic #821 slice C: the three `tree.*` methods are registered, only
     `tree.get` is cached (short TTL), and both mutations invalidate it."""
-    assert "tree.get" in daemon_mod.DEFAULT_METHODS
-    assert "tree.upsert" in daemon_mod.DEFAULT_METHODS
-    assert "tree.reconcile" in daemon_mod.DEFAULT_METHODS
+    assert "tree.get" in dmethods.DEFAULT_METHODS
+    assert "tree.upsert" in dmethods.DEFAULT_METHODS
+    assert "tree.reconcile" in dmethods.DEFAULT_METHODS
     # Only the read carries a TTL; the mutations are never cached.
-    assert daemon_mod.METHOD_TTLS["tree.get"] == 5.0
-    assert "tree.upsert" not in daemon_mod.METHOD_TTLS
-    assert "tree.reconcile" not in daemon_mod.METHOD_TTLS
+    assert dcache.METHOD_TTLS["tree.get"] == 5.0
+    assert "tree.upsert" not in dcache.METHOD_TTLS
+    assert "tree.reconcile" not in dcache.METHOD_TTLS
     # Both mutations evict the cached cold-start read.
-    assert daemon_mod.METHOD_CACHE_INVALIDATIONS["tree.upsert"] == ("tree.get",)
-    assert daemon_mod.METHOD_CACHE_INVALIDATIONS["tree.reconcile"] == ("tree.get",)
+    assert dmethods.METHOD_CACHE_INVALIDATIONS["tree.upsert"] == ("tree.get",)
+    assert dmethods.METHOD_CACHE_INVALIDATIONS["tree.reconcile"] == ("tree.get",)
     # Issue #1715: workspace verbs are registered independently of the session tree.
-    assert "tree.workspace.get" in daemon_mod.DEFAULT_METHODS
-    assert "tree.workspace.upsert" in daemon_mod.DEFAULT_METHODS
-    assert daemon_mod.METHOD_TTLS["tree.workspace.get"] == 5.0
-    assert "tree.workspace.upsert" not in daemon_mod.METHOD_TTLS
-    assert daemon_mod.METHOD_CACHE_INVALIDATIONS["tree.workspace.upsert"] == (
+    assert "tree.workspace.get" in dmethods.DEFAULT_METHODS
+    assert "tree.workspace.upsert" in dmethods.DEFAULT_METHODS
+    assert dcache.METHOD_TTLS["tree.workspace.get"] == 5.0
+    assert "tree.workspace.upsert" not in dcache.METHOD_TTLS
+    assert dmethods.METHOD_CACHE_INVALIDATIONS["tree.workspace.upsert"] == (
         "tree.workspace.get",
     )
     # Two writers, two caches: a tree mutation must not evict the workspace
     # hydrate, and a workspace mutation must not evict tree.get.
-    assert "tree.workspace.get" not in daemon_mod.METHOD_CACHE_INVALIDATIONS.get(
+    assert "tree.workspace.get" not in dmethods.METHOD_CACHE_INVALIDATIONS.get(
         "tree.upsert", ()
     )
-    assert "tree.get" not in daemon_mod.METHOD_CACHE_INVALIDATIONS.get(
+    assert "tree.get" not in dmethods.METHOD_CACHE_INVALIDATIONS.get(
         "tree.workspace.upsert", ()
     )
 
@@ -1000,7 +1006,7 @@ def test_tree_upsert_invalidates_tree_get_cache(tmp_path: Path) -> None:
     def upsert_handler(params: dict) -> dict:
         return tree_mod.upsert_tree(params, paths=paths)
 
-    daemon = daemon_mod.Daemon(
+    daemon = dserver.Daemon(
         socket_path=tmp_path / "daemon.sock",
         methods={"tree.get": get_handler, "tree.upsert": upsert_handler},
     )
@@ -1036,7 +1042,7 @@ def test_workspace_upsert_invalidates_workspace_get_cache(tmp_path: Path) -> Non
     def upsert_handler(params: dict) -> dict:
         return tree_mod.upsert_workspace(params, paths=paths)
 
-    daemon = daemon_mod.Daemon(
+    daemon = dserver.Daemon(
         socket_path=tmp_path / "daemon.sock",
         methods={
             "tree.workspace.get": get_handler,
@@ -1077,7 +1083,7 @@ def test_agents_kind_for_panes_round_trip(
     This exercises the full JSON-RPC framing + handler dispatch, not just the
     in-process classifier.
     """
-    result = daemon_mod.call(
+    result = dclient.call(
         "agents.kind_for_panes",
         {"panes": [{"pane_id": "%1", "pane_pid": 999999999}]},
         socket_path=sandbox_socket,
@@ -1098,7 +1104,7 @@ def test_agents_kind_for_panes_rejects_non_list_panes(
 ) -> None:
     """A `panes` param that is not a list is an invalid-params error."""
     with pytest.raises(RuntimeError, match="must be a list"):
-        daemon_mod.call(
+        dclient.call(
             "agents.kind_for_panes",
             {"panes": "not-a-list"},
             socket_path=sandbox_socket,
@@ -1110,7 +1116,7 @@ def test_agents_kind_for_panes_empty_when_no_panes(
     sandbox_socket: Path,
 ) -> None:
     """Omitting `panes` yields an empty results list, not an error."""
-    result = daemon_mod.call(
+    result = dclient.call(
         "agents.kind_for_panes", {}, socket_path=sandbox_socket
     )
     assert result == {"results": []}
@@ -1137,9 +1143,9 @@ def test_failed_usage_fetch_is_not_cached(
     script.chmod(0o755)
     proc = _spawn_daemon(sandbox_socket, python_exe=python_exe)
     try:
-        first = daemon_mod.call("usage.fetch", socket_path=sandbox_socket)
+        first = dclient.call("usage.fetch", socket_path=sandbox_socket)
         assert first["returncode"] == 2
-        second = daemon_mod.call("usage.fetch", socket_path=sandbox_socket)
+        second = dclient.call("usage.fetch", socket_path=sandbox_socket)
         # Counter must have incremented => no cache reuse.
         assert counter_file.read_text().strip() == "2"
         assert second["returncode"] == 2

@@ -5,6 +5,7 @@ import json
 from click.testing import CliRunner
 
 from pocketshell import agents, engines
+from pocketshell.engines import harness as engines_harness
 from pocketshell.cli import cli
 
 
@@ -154,7 +155,7 @@ def test_manifest_probe_checks_each_registered_harness_once(tmp_path, monkeypatc
         probed.append(name)
         return f"/fixture/{name}"
 
-    monkeypatch.setattr(engines.shutil, "which", record_probe)
+    monkeypatch.setattr(engines_harness.shutil, "which", record_probe)
     registry = engines.load_registry()
 
     assert probed == [item.harness for item in registry]

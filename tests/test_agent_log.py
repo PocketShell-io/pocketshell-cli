@@ -44,6 +44,7 @@ from click.testing import CliRunner
 
 from pocketshell import agent_log as agent_log_module
 from pocketshell.agent_log import agent_log_command
+from pocketshell.agent_log import cli as agent_log_cli
 from pocketshell.cli import cli
 
 
@@ -787,7 +788,7 @@ def test_unknown_engine_rejected_by_click(fake_home: Path) -> None:
     """
     # If the resolver were reached, this monkeypatch would crash the
     # test (no real `_resolve_log_path` call should happen).
-    with patch.object(agent_log_module, "_resolve_log_path") as resolve:
+    with patch.object(agent_log_cli, "_resolve_log_path") as resolve:
         runner = CliRunner()
         result = runner.invoke(
             agent_log_command,

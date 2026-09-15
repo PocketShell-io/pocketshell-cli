@@ -26,6 +26,7 @@ import pytest
 from click.testing import CliRunner
 
 from pocketshell import usage_capture
+from pocketshell.usage_capture import history as capture_history
 from pocketshell.cli import cli
 from pocketshell.usage_capture import (
     UsagePaths,
@@ -204,7 +205,7 @@ def test_history_write_fails_closed_without_cross_process_locking(
     tmp_path: Path, monkeypatch
 ) -> None:
     history = tmp_path / "usage-history.jsonl"
-    monkeypatch.setattr(usage_capture, "fcntl", None)
+    monkeypatch.setattr(capture_history, "fcntl", None)
 
     with pytest.raises(RuntimeError, match="refusing an unsafe"):
         usage_capture._append_history(
@@ -225,14 +226,14 @@ def test_history_preserves_prior_valid_lines_when_write_fails_before_publish(
         {"captured_at": "2026-06-11T09:00:00Z"},
         history_max_lines=10,
     )
-    real_write = usage_capture._write_private
+    real_write = capture_history._write_private
 
     def fail_history_write(path: Path, text: str) -> None:
         if Path(path) == history:
             raise OSError("simulated crash before history publish")
         real_write(path, text)
 
-    monkeypatch.setattr(usage_capture, "_write_private", fail_history_write)
+    monkeypatch.setattr(capture_history, "_write_private", fail_history_write)
     with pytest.raises(OSError, match="before history publish"):
         usage_capture._append_history(
             history,
@@ -288,7 +289,7 @@ def test_concurrent_history_append_and_trim_keeps_complete_updates(
     tmp_path: Path, monkeypatch
 ) -> None:
     history = tmp_path / "usage-history.jsonl"
-    real_write = usage_capture._write_private
+    real_write = capture_history._write_private
 
     def slow_history_write(path: Path, text: str) -> None:
         if Path(path) == history:
@@ -477,9 +478,9 @@ def _fake_completed(stdout: str = "", stderr: str = "", returncode: int = 0):
 def test_cli_capture_writes_cache_and_history(tmp_path: Path) -> None:
     env = {"XDG_STATE_HOME": str(tmp_path / "state")}
     with (
-        patch("pocketshell.usage._resolve_quse_binary", return_value="/usr/bin/quse"),
-        patch("pocketshell.usage.subprocess.run", return_value=_fake_completed(stdout=_QUSE_KEYED)),
-        patch("pocketshell.usage._try_daemon_usage_fetch", return_value=None),
+        patch("pocketshell.usage.quse._resolve_quse_binary", return_value="/usr/bin/quse"),
+        patch("pocketshell.usage.quse.subprocess.run", return_value=_fake_completed(stdout=_QUSE_KEYED)),
+        patch("pocketshell.usage.cli._try_daemon_usage_fetch", return_value=None),
     ):
         result = CliRunner().invoke(cli, ["usage", "--capture", "--no-daemon"], env=env)
 
@@ -496,12 +497,12 @@ def test_cli_capture_writes_cache_and_history(tmp_path: Path) -> None:
 def test_cli_capture_does_not_cache_a_failed_fetch(tmp_path: Path) -> None:
     env = {"XDG_STATE_HOME": str(tmp_path / "state")}
     with (
-        patch("pocketshell.usage._resolve_quse_binary", return_value="/usr/bin/quse"),
+        patch("pocketshell.usage.quse._resolve_quse_binary", return_value="/usr/bin/quse"),
         patch(
-            "pocketshell.usage.subprocess.run",
+            "pocketshell.usage.quse.subprocess.run",
             return_value=_fake_completed(stderr="boom\n", returncode=7),
         ),
-        patch("pocketshell.usage._try_daemon_usage_fetch", return_value=None),
+        patch("pocketshell.usage.cli._try_daemon_usage_fetch", return_value=None),
     ):
         result = CliRunner().invoke(cli, ["usage", "--capture", "--no-daemon"], env=env)
 

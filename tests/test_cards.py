@@ -28,6 +28,7 @@ import pytest
 from click.testing import CliRunner
 
 from pocketshell import cards as cards_mod
+from pocketshell.cards import storage as cards_storage
 from pocketshell.cli import cli
 
 
@@ -148,8 +149,8 @@ def test_private_write_orders_durability_barriers_around_replace(
 ) -> None:
     target = tmp_path / "cards" / "session.yaml"
     events: list[str] = []
-    real_fsync = cards_mod.os.fsync
-    real_replace = cards_mod.os.replace
+    real_fsync = cards_storage.os.fsync
+    real_replace = cards_storage.os.replace
 
     def record_fsync(fd: int) -> None:
         kind = "directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"
@@ -160,8 +161,8 @@ def test_private_write_orders_durability_barriers_around_replace(
         events.append("replace")
         real_replace(source, destination)
 
-    monkeypatch.setattr(cards_mod.os, "fsync", record_fsync)
-    monkeypatch.setattr(cards_mod.os, "replace", record_replace)
+    monkeypatch.setattr(cards_storage.os, "fsync", record_fsync)
+    monkeypatch.setattr(cards_storage.os, "replace", record_replace)
 
     cards_mod._write_private(target, "durable\n")
 
@@ -184,8 +185,8 @@ def test_private_write_fails_before_replace_when_file_fsync_fails(
         nonlocal replace_called
         replace_called = True
 
-    monkeypatch.setattr(cards_mod.os, "fsync", fail_fsync)
-    monkeypatch.setattr(cards_mod.os, "replace", record_replace)
+    monkeypatch.setattr(cards_storage.os, "fsync", fail_fsync)
+    monkeypatch.setattr(cards_storage.os, "replace", record_replace)
 
     with pytest.raises(OSError, match="simulated storage failure"):
         cards_mod._write_private(target, "new\n")

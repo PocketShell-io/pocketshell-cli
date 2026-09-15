@@ -29,6 +29,8 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from pocketshell import tree as tree_mod
+from pocketshell.tree import cli as tree_cli
+from pocketshell.tree import model as tree_model
 from pocketshell.cli import cli
 
 
@@ -115,7 +117,7 @@ def test_reconcile_envelope_carries_cli_version(tmp_path: Path, monkeypatch) -> 
     assert result["cli_version"] == str(__version__)
     # And on the no-enumeration branch (a live-session probe unavailable) it
     # still stamps it.
-    monkeypatch.setattr(tree_mod, "_live_session_names", lambda env=None: None)
+    monkeypatch.setattr(tree_model, "_live_session_names", lambda env=None: None)
     result_no_enum = tree_mod.reconcile_tree({"host": "h1"}, paths=paths)
     assert result_no_enum["cli_version"] == str(__version__)
 
@@ -228,7 +230,7 @@ def test_concurrent_process_writers_for_different_hosts_lose_neither(
     # same empty document before either writes. With the flock, the first
     # barrier wait times out while the second blocks on the lock; the second
     # then reads the first writer's complete document and preserves both hosts.
-    monkeypatch.setattr(tree_mod, "_read_registry", _barrier_registry_read)
+    monkeypatch.setattr(tree_model, "_read_registry", _barrier_registry_read)
     writers = [
         ctx.Process(target=_concurrent_tree_writer, args=(str(paths.tree_dir), "opaque-a", "a")),
         ctx.Process(target=_concurrent_tree_writer, args=(str(paths.tree_dir), "opaque-b", "b")),
@@ -238,7 +240,7 @@ def test_concurrent_process_writers_for_different_hosts_lose_neither(
     for writer in writers:
         writer.join(10)
         assert writer.exitcode == 0
-    monkeypatch.setattr(tree_mod, "_read_registry", _REAL_READ_REGISTRY)
+    monkeypatch.setattr(tree_model, "_read_registry", _REAL_READ_REGISTRY)
     assert [n["session"] for n in tree_mod.get_tree({"host": "opaque-a"}, paths=paths)["nodes"]] == ["a"]
     assert [n["session"] for n in tree_mod.get_tree({"host": "opaque-b"}, paths=paths)["nodes"]] == ["b"]
 
@@ -439,7 +441,7 @@ def test_reconcile_does_not_prune_when_enumeration_unavailable(
     # Simulate the live-session probe being unavailable:
     # unavailable, so reconcile must not prune. (`live_names` defaults to None
     # here, which means "resolve from the host" — the stub makes that fail.)
-    monkeypatch.setattr(tree_mod, "_live_session_names", lambda env=None: None)
+    monkeypatch.setattr(tree_model, "_live_session_names", lambda env=None: None)
     result = tree_mod.reconcile_tree({"host": "h1"}, paths=paths)
     assert sorted(result["alive"]) == ["a", "b"]
     assert result["gone"] == []
@@ -483,7 +485,7 @@ def test_cli_tree_get_round_trips_via_in_process(
 ) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     # Force the daemon-absent path so the CLI uses the in-process handler.
-    monkeypatch.setattr(tree_mod, "_try_daemon_call", lambda *a, **k: None)
+    monkeypatch.setattr(tree_cli, "_try_daemon_call", lambda *a, **k: None)
 
     runner = CliRunner()
     runner.invoke(
@@ -501,9 +503,9 @@ def test_cli_tree_get_round_trips_via_in_process(
 
 def test_cli_tree_reconcile_emits_deltas(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr(tree_mod, "_try_daemon_call", lambda *a, **k: None)
+    monkeypatch.setattr(tree_cli, "_try_daemon_call", lambda *a, **k: None)
     # Live enumeration is stubbed so reconcile is deterministic.
-    monkeypatch.setattr(tree_mod, "_live_session_names", lambda env=None: {"keep"})
+    monkeypatch.setattr(tree_model, "_live_session_names", lambda env=None: {"keep"})
 
     runner = CliRunner()
     runner.invoke(
@@ -730,7 +732,7 @@ def test_cli_tree_workspace_round_trips_via_in_process(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr(tree_mod, "_try_daemon_call", lambda *a, **k: None)
+    monkeypatch.setattr(tree_cli, "_try_daemon_call", lambda *a, **k: None)
 
     runner = CliRunner()
     upsert = runner.invoke(

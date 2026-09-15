@@ -5,6 +5,7 @@ from __future__ import annotations
 from click.testing import CliRunner
 
 from pocketshell import aplexer, sessions, session_enum
+from pocketshell.sessions import attach as attach_mod
 
 
 def _row(identifier: str = "b3feff71-4a78-4055-a2d3-6c99187ecffb") -> session_enum.LiveSession:
@@ -16,10 +17,10 @@ def _resolution(path: str | None) -> aplexer.AplexerResolution:
 
 
 def test_attach_execs_the_resolved_aplexer_binary(monkeypatch) -> None:
-    monkeypatch.setattr(sessions, "_attach_live_rows", lambda: ([_row()], []))
-    monkeypatch.setattr(sessions, "_resolve_aplexer", lambda: _resolution("/fake/a"))
+    monkeypatch.setattr(attach_mod, "_attach_live_rows", lambda: ([_row()], []))
+    monkeypatch.setattr(attach_mod, "_resolve_aplexer", lambda: _resolution("/fake/a"))
     executed: list[list[str]] = []
-    monkeypatch.setattr(sessions, "_exec", lambda argv: executed.append(argv))
+    monkeypatch.setattr(attach_mod, "_exec", lambda argv: executed.append(argv))
 
     result = CliRunner().invoke(sessions.sessions_group, ["attach", "project:shell"])
 
@@ -31,7 +32,7 @@ def test_attach_execs_the_resolved_aplexer_binary(monkeypatch) -> None:
 
 def test_attach_fails_loudly_when_listing_cannot_reach_aplexer(monkeypatch) -> None:
     monkeypatch.setattr(
-        sessions,
+        attach_mod,
         "_attach_live_rows",
         lambda: ([], [{"message": "aplexer is unavailable"}]),
     )
@@ -44,7 +45,7 @@ def test_attach_fails_loudly_when_listing_cannot_reach_aplexer(monkeypatch) -> N
 
 def test_attach_rejects_ambiguous_id_prefix(monkeypatch) -> None:
     monkeypatch.setattr(
-        sessions,
+        attach_mod,
         "_attach_live_rows",
         lambda: ([_row("12345678-a"), _row("12345678-b")], []),
     )

@@ -1,0 +1,137 @@
+"""Run the pinned `quse` CLI as a one-shot subprocess.
+
+quse is a hard dependency of pocketshell (see `pyproject.toml`), so its
+console-script ships in the SAME bin directory as the running interpreter.
+`_resolve_quse_binary` resolves that pinned copy next to `sys.executable`
+and NEVER falls back to PATH — a host-level `quse` upgrade must not shadow
+the pinned copy, and a missing pinned copy is a packaging-integrity error
+(fail loud), not a user "install quse" nag.
+
+`pocketshell usage` keeps NO provider allowlist of its own: the positional
+`provider` argument is forwarded verbatim to the pinned quse, which owns
+provider validation and its error message. That is why "Unknown provider 'go'"
+was only ever fixable by bumping the pin.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional, Sequence
+
+import click
+
+from pocketshell.usage.normalize import normalize_usage_stdout
+
+# quse is bundled WITH pocketshell as a pinned dependency (issue #1318). A
+# missing pinned quse is therefore a packaging-integrity error, NOT a user
+# "install quse" nag: the fix is reinstalling pocketshell, not installing a
+# separate host tool. Exit non-zero (but NOT 127 — 127 is reserved for
+# "pocketshell itself not found" on the app side) with a clear message.
+_QUSE_MISSING_MESSAGE = (
+    "pocketshell: the bundled `quse` usage backend is missing from this "
+    "pocketshell install. Reinstall pocketshell (e.g. "
+    "`uv tool install --force pocketshell`) to restore it."
+)
+_QUSE_MISSING_EXIT_CODE = 1
+
+
+def _resolve_quse_binary() -> Optional[str]:
+    """Resolve the PINNED `quse` console-script shipped with pocketshell.
+
+    quse is a hard dependency, so its console-script lands in the SAME ``bin``
+    directory as the ``pocketshell`` interpreter. We resolve it next to
+    ``sys.executable`` — never via ``PATH`` (a host upgrade must not shadow
+    the pinned copy) — and return ``None`` when it is missing (a
+    packaging-integrity error, not an "install quse" nag).
+
+    Console-scripts live next to the UNRESOLVED ``sys.executable``: in a venv
+    ``bin/python`` is a symlink, so the resolved dir is only a fallback for
+    layouts where the two coincide. Both candidates are anchored to
+    ``sys.executable`` — this is NOT a PATH search.
+    """
+    exe_dir = Path(sys.executable).parent
+    candidates = [exe_dir]
+    resolved_dir = Path(sys.executable).resolve().parent
+    if resolved_dir != exe_dir:
+        candidates.append(resolved_dir)
+    for bin_dir in candidates:
+        candidate = bin_dir / "quse"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _run_quse(args: Sequence[str]) -> int:
+    """Invoke the pinned `quse` with [args]; proxy stdout/stderr and exit.
+
+    Used for the human-readable (non-JSON) path where output stays
+    byte-identical to `quse`.
+    """
+    quse_path = _resolve_quse_binary()
+    if quse_path is None:
+        click.echo(_QUSE_MISSING_MESSAGE, err=True)
+        return _QUSE_MISSING_EXIT_CODE
+
+    completed = subprocess.run(
+        [quse_path, *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    # Human-readable output stays byte-identical to `quse`.
+    if completed.stdout:
+        sys.stdout.write(completed.stdout)
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
+    return completed.returncode
+
+
+def _run_quse_json(args: Sequence[str]) -> int:
+    """Invoke the pinned `quse --json` and flatten its output before proxying.
+
+    quse emits a provider-keyed JSON object; ``normalize_usage_stdout``
+    flattens it into per-provider NDJSON for the app. On a non-zero exit the
+    raw quse stdout/stderr is proxied verbatim (a failed fetch is not
+    flattened) so the app's exit!=0 provider-error path sees the real output.
+    """
+    quse_path = _resolve_quse_binary()
+    if quse_path is None:
+        click.echo(_QUSE_MISSING_MESSAGE, err=True)
+        return _QUSE_MISSING_EXIT_CODE
+
+    completed = subprocess.run(
+        [quse_path, *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        if completed.stdout:
+            sys.stdout.write(completed.stdout)
+        if completed.stderr:
+            sys.stderr.write(completed.stderr)
+        return completed.returncode
+    if completed.stdout:
+        sys.stdout.write(normalize_usage_stdout(completed.stdout))
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
+    return completed.returncode
+
+
+def _capture_via_quse(provider: Optional[str]) -> tuple[Optional[str], str, int]:
+    """Run quse once and flatten its output; never flattens a failed fetch."""
+    quse_path = _resolve_quse_binary()
+    if quse_path is None:
+        return (None, _QUSE_MISSING_MESSAGE + "\n", _QUSE_MISSING_EXIT_CODE)
+    args: list[str] = [quse_path]
+    if provider:
+        args.append(provider)
+    args.append("--json")
+    completed = subprocess.run(args, check=False, capture_output=True, text=True)
+    if completed.returncode != 0:
+        # A failed live fetch is not flattened/cached — return quse's raw
+        # stdout so the caller can decide (it will not be persisted).
+        return completed.stdout, completed.stderr, completed.returncode
+    return normalize_usage_stdout(completed.stdout), completed.stderr, completed.returncode

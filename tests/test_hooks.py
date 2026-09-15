@@ -34,7 +34,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from pocketshell import hooks as hooks_mod
+from pocketshell.hooks import cli as hooks_cli
 from pocketshell.cli import cli
 from pocketshell.hooks import (
     CLAUDE_HOOK_EVENTS,
@@ -741,7 +741,7 @@ def test_engine_status_reports_legacy_and_broken_cache_installations(tmp_path):
 def test_status_json_command_reports_state(tmp_path, monkeypatch):
     paths = make_paths(tmp_path)
     install_engines(["claude", "codex", "opencode"], paths)
-    monkeypatch.setattr(hooks_mod, "resolve_paths", lambda: paths)
+    monkeypatch.setattr(hooks_cli, "resolve_paths", lambda: paths)
     result = CliRunner().invoke(cli, ["hooks", "status", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -754,7 +754,7 @@ def test_events_json_command_reads_bus(tmp_path, monkeypatch):
     paths = make_paths(tmp_path)
     install_engines(["codex"], paths)
     _fire_codex_handler(paths, {"type": "agent-turn-complete", "thread-id": "th-1"})
-    monkeypatch.setattr(hooks_mod, "resolve_paths", lambda: paths)
+    monkeypatch.setattr(hooks_cli, "resolve_paths", lambda: paths)
     result = CliRunner().invoke(cli, ["hooks", "events", "--json"])
     assert result.exit_code == 0
     records = json.loads(result.output)
@@ -765,7 +765,7 @@ def test_events_json_command_reads_bus(tmp_path, monkeypatch):
 
 def test_install_command_round_trip_via_cli(tmp_path, monkeypatch):
     paths = make_paths(tmp_path)
-    monkeypatch.setattr(hooks_mod, "resolve_paths", lambda: paths)
+    monkeypatch.setattr(hooks_cli, "resolve_paths", lambda: paths)
     runner = CliRunner()
 
     install_res = runner.invoke(cli, ["hooks", "install", "--engine", "all"])

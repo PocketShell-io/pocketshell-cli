@@ -46,7 +46,7 @@ import pytest
 from click.testing import CliRunner
 
 from pocketshell import daemon as daemon_mod
-from pocketshell import repos as repos_mod
+from pocketshell.repos import remote as repos_mod
 from pocketshell.cli import cli
 from pocketshell.repos import (
     CLONE_ERROR_FAILED,

@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 
 import click
 import pytest
@@ -58,20 +56,6 @@ def _restore_cwd():
         yield
     finally:
         os.chdir(original)
-
-
-class _FakePopen:
-    pid = 12345
-
-
-@pytest.fixture(autouse=True)
-def _no_source_recorder_child(monkeypatch):
-    """Keep launch tests from spawning the background source watcher."""
-    monkeypatch.setattr(
-        agents.subprocess,
-        "Popen",
-        lambda *args, **kwargs: _FakePopen(),
-    )
 
 
 # ---------------------------------------------------------------------------

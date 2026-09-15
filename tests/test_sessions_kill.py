@@ -8,6 +8,8 @@ import subprocess
 from click.testing import CliRunner
 
 from pocketshell import aplexer, sessions, session_enum
+from pocketshell.sessions import kill as kill_mod
+from pocketshell.sessions import reap as reap_mod
 
 
 def _resolution() -> aplexer.AplexerResolution:
@@ -23,14 +25,17 @@ def _row() -> session_enum.LiveSession:
 def test_kill_stops_and_reaps_the_selected_aplexer_record(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    monkeypatch.setattr(sessions, "_attach_live_rows", lambda: ([_row()], []))
-    monkeypatch.setattr(sessions, "_resolve_aplexer", _resolution)
+    monkeypatch.setattr(kill_mod, "_attach_live_rows", lambda: ([_row()], []))
+    monkeypatch.setattr(kill_mod, "_resolve_aplexer", _resolution)
 
     def run(argv):
         calls.append(list(argv))
         return subprocess.CompletedProcess(argv, 0, stdout="{}", stderr="")
 
-    monkeypatch.setattr(sessions, "_run_session_command", run)
+    # sessions_kill and the reap loop each resolve _run_session_command in
+    # their own module namespace, so both bindings need the fake.
+    monkeypatch.setattr(kill_mod, "_run_session_command", run)
+    monkeypatch.setattr(reap_mod, "_run_session_command", run)
     result = CliRunner().invoke(
         sessions.sessions_group, ["kill", "project:shell", "--json"]
     )
@@ -51,7 +56,7 @@ def test_kill_stops_and_reaps_the_selected_aplexer_record(monkeypatch) -> None:
 
 
 def test_kill_reports_a_missing_session(monkeypatch) -> None:
-    monkeypatch.setattr(sessions, "_attach_live_rows", lambda: ([], []))
+    monkeypatch.setattr(kill_mod, "_attach_live_rows", lambda: ([], []))
     result = CliRunner().invoke(sessions.sessions_group, ["kill", "missing"])
     assert result.exit_code == sessions.ATTACH_EXIT_NOT_FOUND
     assert "no session named" in result.output

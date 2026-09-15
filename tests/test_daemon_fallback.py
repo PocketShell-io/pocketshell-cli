@@ -19,7 +19,9 @@ from typing import Iterator
 import pytest
 from click.testing import CliRunner
 
-from pocketshell import daemon as daemon_mod
+from pocketshell.daemon import client as dclient
+from pocketshell.daemon import failures as dfailures
+from pocketshell.daemon import protocol as dprotocol
 from pocketshell.agents_kind import agents_group as _agents_group
 from pocketshell.cli import cli
 from pocketshell.cgroup_agents import DEFAULT_CGROUP_MOUNT, DEFAULT_PROC_ROOT
@@ -60,7 +62,7 @@ def old_daemon_socket(tmp_path: Path) -> Iterator[Path]:
             except OSError:
                 break
             try:
-                request = daemon_mod.recv_json(client)
+                request = dprotocol.recv_json(client)
                 method = request.get("method") if isinstance(request, dict) else None
                 request_id = request.get("id") if isinstance(request, dict) else None
                 if method == "daemon.ping":
@@ -74,7 +76,7 @@ def old_daemon_socket(tmp_path: Path) -> Iterator[Path]:
                         "jsonrpc": "2.0",
                         "id": request_id,
                         "error": {
-                            "code": daemon_mod.JSONRPC_METHOD_NOT_FOUND,
+                            "code": dfailures.JSONRPC_METHOD_NOT_FOUND,
                             "message": "unknown method",
                             "data": {
                                 "failure_reason": "supported_skew",
@@ -87,7 +89,7 @@ def old_daemon_socket(tmp_path: Path) -> Iterator[Path]:
                             },
                         },
                     }
-                daemon_mod.send_json(client, response)
+                dprotocol.send_json(client, response)
             finally:
                 client.close()
 
@@ -110,16 +112,16 @@ def test_absent_socket_is_the_only_normal_unavailable_fallback(
 ) -> None:
     missing = tmp_path / "does-not-exist.sock"
     with caplog.at_level(logging.INFO, logger="pocketshell.daemon"):
-        outcome = daemon_mod.call_outcome(
+        outcome = dclient.call_outcome(
             "tree.get",
             params={"host": "prompt=DO_NOT_LOG"},
             socket_path=missing,
         )
 
     assert outcome.failure is not None
-    assert outcome.failure.reason is daemon_mod.DaemonFailureReason.ABSENT_OR_UNAVAILABLE
+    assert outcome.failure.reason is dfailures.DaemonFailureReason.ABSENT_OR_UNAVAILABLE
     assert outcome.failure.fallback_allowed
-    assert daemon_mod.try_call("tree.get", socket_path=missing) is None
+    assert dclient.try_call("tree.get", socket_path=missing) is None
     assert "DO_NOT_LOG" not in caplog.text
     assert "absent_or_unavailable" in caplog.text
 
@@ -129,7 +131,7 @@ def test_old_daemon_method_not_found_is_supported_skew_with_versions(
 ) -> None:
     monkeypatch.setenv("POCKETSHELL_DAEMON_SOCKET", str(old_daemon_socket))
     with caplog.at_level(logging.INFO, logger="pocketshell.daemon"):
-        outcome = daemon_mod.call_outcome(
+        outcome = dclient.call_outcome(
             "tree.get",
             params={"host": "prompt=DO_NOT_LOG"},
             socket_path=old_daemon_socket,
@@ -137,11 +139,11 @@ def test_old_daemon_method_not_found_is_supported_skew_with_versions(
 
     assert outcome.failure is not None
     failure = outcome.failure
-    assert failure.reason is daemon_mod.DaemonFailureReason.SUPPORTED_SKEW
+    assert failure.reason is dfailures.DaemonFailureReason.SUPPORTED_SKEW
     assert failure.fallback_allowed
     assert failure.daemon_version == "0.3.9"
-    assert failure.cli_version == daemon_mod._installed_cli_version()
-    assert daemon_mod.try_call("tree.get", socket_path=old_daemon_socket) is None
+    assert failure.cli_version == dfailures._installed_cli_version()
+    assert dclient.try_call("tree.get", socket_path=old_daemon_socket) is None
     assert "DO_NOT_LOG" not in caplog.text
     assert "supported_skew" in caplog.text
     assert "daemon_version=0.3.9" in str(failure.user_message())
@@ -179,9 +181,9 @@ def test_affected_wrappers_share_supported_skew_fallback(
 
         result = usage._try_daemon_usage_fetch(None, no_cache=False)
     else:
-        from pocketshell import repos
+        from pocketshell.repos.handlers import _try_daemon_call
 
-        result = repos._try_daemon_call("repos.list_local", {})
+        result = _try_daemon_call("repos.list_local", {})
 
     assert result is None
 
@@ -205,21 +207,17 @@ def test_transport_timeout_is_typed_and_never_falls_back(
 ) -> None:
     socket_path = tmp_path / "connected.sock"
     socket_path.touch()
-    monkeypatch.setattr(
-        daemon_mod,
-        "_connect",
+    monkeypatch.setattr(dclient, "_connect",
         lambda _path, timeout: _FakeSocket(),
     )
-    monkeypatch.setattr(daemon_mod, "send_json", lambda *_args: None)
-    monkeypatch.setattr(
-        daemon_mod,
-        "recv_json",
+    monkeypatch.setattr(dclient, "send_json", lambda *_args: None)
+    monkeypatch.setattr(dclient, "recv_json",
         lambda _sock: (_ for _ in ()).throw(socket.timeout()),
     )
 
     with caplog.at_level(logging.INFO, logger="pocketshell.daemon"):
-        with pytest.raises(daemon_mod.DaemonClientError) as exc_info:
-            daemon_mod.try_call(
+        with pytest.raises(dfailures.DaemonClientError) as exc_info:
+            dclient.try_call(
                 "sessions.create",
                 params={"message": "prompt=DO_NOT_LOG"},
                 socket_path=socket_path,
@@ -227,7 +225,7 @@ def test_transport_timeout_is_typed_and_never_falls_back(
             )
 
     failure = exc_info.value.failure
-    assert failure.reason is daemon_mod.DaemonFailureReason.TRANSPORT_TIMEOUT
+    assert failure.reason is dfailures.DaemonFailureReason.TRANSPORT_TIMEOUT
     assert not failure.fallback_allowed
     assert "DO_NOT_LOG" not in str(exc_info.value)
     assert "DO_NOT_LOG" not in caplog.text
@@ -239,20 +237,16 @@ def test_daemon_internal_error_is_typed_and_does_not_echo_rpc_payload(
 ) -> None:
     socket_path = tmp_path / "internal.sock"
     socket_path.touch()
-    monkeypatch.setattr(
-        daemon_mod,
-        "_connect",
+    monkeypatch.setattr(dclient, "_connect",
         lambda _path, timeout: _FakeSocket(),
     )
-    monkeypatch.setattr(daemon_mod, "send_json", lambda *_args: None)
-    monkeypatch.setattr(
-        daemon_mod,
-        "recv_json",
+    monkeypatch.setattr(dclient, "send_json", lambda *_args: None)
+    monkeypatch.setattr(dclient, "recv_json",
         lambda _sock: {
             "jsonrpc": "2.0",
             "id": 1,
             "error": {
-                "code": daemon_mod.JSONRPC_INTERNAL_ERROR,
+                "code": dfailures.JSONRPC_INTERNAL_ERROR,
                 "message": "secret prompt=DO_NOT_LOG token=DO_NOT_LOG",
                 "data": {"daemon_version": "0.4.44"},
             },
@@ -260,15 +254,15 @@ def test_daemon_internal_error_is_typed_and_does_not_echo_rpc_payload(
     )
 
     with caplog.at_level(logging.INFO, logger="pocketshell.daemon"):
-        with pytest.raises(daemon_mod.DaemonClientError) as exc_info:
-            daemon_mod.try_call(
+        with pytest.raises(dfailures.DaemonClientError) as exc_info:
+            dclient.try_call(
                 "tree.upsert",
                 params={"nodes": [{"session": "prompt=DO_NOT_LOG"}]},
                 socket_path=socket_path,
             )
 
     failure = exc_info.value.failure
-    assert failure.reason is daemon_mod.DaemonFailureReason.DAEMON_INTERNAL_ERROR
+    assert failure.reason is dfailures.DaemonFailureReason.DAEMON_INTERNAL_ERROR
     assert not failure.fallback_allowed
     assert failure.daemon_version == "0.4.44"
     assert "DO_NOT_LOG" not in str(exc_info.value)
@@ -282,15 +276,11 @@ def test_invalid_success_shape_is_daemon_internal_not_local_fallback(
     socket_path = tmp_path / "wrong-shape.sock"
     socket_path.touch()
     monkeypatch.setenv("POCKETSHELL_DAEMON_SOCKET", str(socket_path))
-    monkeypatch.setattr(
-        daemon_mod,
-        "_connect",
+    monkeypatch.setattr(dclient, "_connect",
         lambda _path, timeout: _FakeSocket(),
     )
-    monkeypatch.setattr(daemon_mod, "send_json", lambda *_args: None)
-    monkeypatch.setattr(
-        daemon_mod,
-        "recv_json",
+    monkeypatch.setattr(dclient, "send_json", lambda *_args: None)
+    monkeypatch.setattr(dclient, "recv_json",
         lambda _sock: {
             "jsonrpc": "2.0",
             "id": 1,
@@ -298,20 +288,20 @@ def test_invalid_success_shape_is_daemon_internal_not_local_fallback(
         },
     )
 
-    with pytest.raises(daemon_mod.DaemonClientError) as exc_info:
+    with pytest.raises(dfailures.DaemonClientError) as exc_info:
         from pocketshell import tree
 
         tree._try_daemon_call("tree.get", {})
 
-    assert exc_info.value.failure.reason is daemon_mod.DaemonFailureReason.DAEMON_INTERNAL_ERROR
+    assert exc_info.value.failure.reason is dfailures.DaemonFailureReason.DAEMON_INTERNAL_ERROR
     assert exc_info.value.failure.phase == "validate"
 
 
 def test_fallback_policy_has_exactly_the_two_safe_reasons() -> None:
-    assert daemon_mod.LOCAL_FALLBACK_REASONS == frozenset(
+    assert dfailures.LOCAL_FALLBACK_REASONS == frozenset(
         {
-            daemon_mod.DaemonFailureReason.ABSENT_OR_UNAVAILABLE,
-            daemon_mod.DaemonFailureReason.SUPPORTED_SKEW,
+            dfailures.DaemonFailureReason.ABSENT_OR_UNAVAILABLE,
+            dfailures.DaemonFailureReason.SUPPORTED_SKEW,
         }
     )
 

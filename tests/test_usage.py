@@ -14,7 +14,7 @@ The tests use a live output captured from the published 0.0.15 wheel
 ``.provenance.txt``). That capture contains the ``go`` provider — the OpenCode
 Go quota the Usage panel needs — which the 0.0.14 pin could not report at all.
 
-Most tests stub ``pocketshell.usage._resolve_quse_binary`` and
+Most tests stub ``pocketshell.usage.quse._resolve_quse_binary`` and
 ``subprocess.run`` so they never invoke a real ``quse`` binary; the contract
 under test is "pocketshell resolves the PINNED quse and flattens its schema
 correctly". The two ``test_pinned_quse_*`` tests deliberately do NOT stub: they
@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import Sequence
 from unittest.mock import patch
 
-import pytest
 from click.testing import CliRunner
 
 from pocketshell.cli import cli, main
@@ -577,8 +576,8 @@ def test_top_level_help_lists_usage_subcommand() -> None:
 
 def test_usage_help_does_not_call_quse() -> None:
     runner = CliRunner()
-    with patch("pocketshell.usage.subprocess.run") as run, patch(
-        "pocketshell.usage._resolve_quse_binary", return_value="/fake/quse"
+    with patch("pocketshell.usage.quse.subprocess.run") as run, patch(
+        "pocketshell.usage.quse._resolve_quse_binary", return_value="/fake/quse"
     ):
         result = runner.invoke(usage_command, ["--help"])
     assert result.exit_code == 0, result.output
@@ -588,10 +587,10 @@ def test_usage_help_does_not_call_quse() -> None:
 
 def test_usage_json_flattens_quse_keyed_object() -> None:
     runner = CliRunner()
-    with patch("pocketshell.usage._resolve_quse_binary", return_value="/fake/quse"), patch(
-        "pocketshell.usage.subprocess.run",
+    with patch("pocketshell.usage.quse._resolve_quse_binary", return_value="/fake/quse"), patch(
+        "pocketshell.usage.quse.subprocess.run",
         return_value=_fake_completed(stdout=_quse_keyed_json()),
-    ) as run, patch("pocketshell.usage._try_daemon_usage_fetch", return_value=None):
+    ) as run, patch("pocketshell.usage.cli._try_daemon_usage_fetch", return_value=None):
         result = runner.invoke(usage_command, ["--json", "--no-daemon"])
     assert result.exit_code == 0, result.output
     providers = [json.loads(ln)["provider"] for ln in result.output.splitlines()]
@@ -603,8 +602,8 @@ def test_usage_json_flattens_quse_keyed_object() -> None:
 
 def test_usage_forwards_provider_argument() -> None:
     runner = CliRunner()
-    with patch("pocketshell.usage._resolve_quse_binary", return_value="/fake/quse"), patch(
-        "pocketshell.usage.subprocess.run",
+    with patch("pocketshell.usage.quse._resolve_quse_binary", return_value="/fake/quse"), patch(
+        "pocketshell.usage.quse.subprocess.run",
         return_value=_fake_completed(stdout="claude — 12.5% used\n"),
     ) as run:
         result = runner.invoke(usage_command, ["claude"])
@@ -625,10 +624,10 @@ def test_usage_forwards_provider_and_json_flag_together() -> None:
             }
         }
     )
-    with patch("pocketshell.usage._resolve_quse_binary", return_value="/fake/quse"), patch(
-        "pocketshell.usage.subprocess.run",
+    with patch("pocketshell.usage.quse._resolve_quse_binary", return_value="/fake/quse"), patch(
+        "pocketshell.usage.quse.subprocess.run",
         return_value=_fake_completed(stdout=single),
-    ) as run, patch("pocketshell.usage._try_daemon_usage_fetch", return_value=None):
+    ) as run, patch("pocketshell.usage.cli._try_daemon_usage_fetch", return_value=None):
         result = runner.invoke(usage_command, ["claude", "--json", "--no-daemon"])
     assert result.exit_code == 0, result.output
     invoked: Sequence[str] = run.call_args.args[0]
@@ -658,10 +657,10 @@ def test_usage_forwards_grok_provider_and_json() -> None:
             }
         }
     )
-    with patch("pocketshell.usage._resolve_quse_binary", return_value="/fake/quse"), patch(
-        "pocketshell.usage.subprocess.run",
+    with patch("pocketshell.usage.quse._resolve_quse_binary", return_value="/fake/quse"), patch(
+        "pocketshell.usage.quse.subprocess.run",
         return_value=_fake_completed(stdout=single),
-    ) as run, patch("pocketshell.usage._try_daemon_usage_fetch", return_value=None):
+    ) as run, patch("pocketshell.usage.cli._try_daemon_usage_fetch", return_value=None):
         result = runner.invoke(usage_command, ["grok", "--json", "--no-daemon"])
     assert result.exit_code == 0, result.output
     invoked: Sequence[str] = run.call_args.args[0]
@@ -701,10 +700,10 @@ def test_usage_forwards_go_provider_and_json_without_an_allowlist() -> None:
             }
         }
     )
-    with patch("pocketshell.usage._resolve_quse_binary", return_value="/fake/quse"), patch(
-        "pocketshell.usage.subprocess.run",
+    with patch("pocketshell.usage.quse._resolve_quse_binary", return_value="/fake/quse"), patch(
+        "pocketshell.usage.quse.subprocess.run",
         return_value=_fake_completed(stdout=single),
-    ) as run, patch("pocketshell.usage._try_daemon_usage_fetch", return_value=None):
+    ) as run, patch("pocketshell.usage.cli._try_daemon_usage_fetch", return_value=None):
         result = runner.invoke(usage_command, ["go", "--json", "--no-daemon"])
     assert result.exit_code == 0, result.output
     invoked: Sequence[str] = run.call_args.args[0]
@@ -718,9 +717,9 @@ def test_usage_fails_loud_when_pinned_quse_missing() -> None:
     # AC: quse missing => packaging-integrity error, fail loud (NOT a PATH nag,
     # NOT exit 127 which the app reserves for "pocketshell not found").
     runner = CliRunner()
-    with patch("pocketshell.usage._resolve_quse_binary", return_value=None), patch(
-        "pocketshell.usage.subprocess.run"
-    ) as run, patch("pocketshell.usage._try_daemon_usage_fetch", return_value=None):
+    with patch("pocketshell.usage.quse._resolve_quse_binary", return_value=None), patch(
+        "pocketshell.usage.quse.subprocess.run"
+    ) as run, patch("pocketshell.usage.cli._try_daemon_usage_fetch", return_value=None):
         result = runner.invoke(usage_command, ["--json", "--no-daemon"], catch_exceptions=False)
     assert result.exit_code == _QUSE_MISSING_EXIT_CODE
     assert result.exit_code != 127
@@ -731,8 +730,8 @@ def test_usage_fails_loud_when_pinned_quse_missing() -> None:
 
 def test_usage_proxies_nonzero_exit_from_quse() -> None:
     runner = CliRunner()
-    with patch("pocketshell.usage._resolve_quse_binary", return_value="/fake/quse"), patch(
-        "pocketshell.usage.subprocess.run",
+    with patch("pocketshell.usage.quse._resolve_quse_binary", return_value="/fake/quse"), patch(
+        "pocketshell.usage.quse.subprocess.run",
         return_value=_fake_completed(stderr="error: unknown provider\n", returncode=2),
     ):
         result = runner.invoke(usage_command, ["wat"])
@@ -741,10 +740,10 @@ def test_usage_proxies_nonzero_exit_from_quse() -> None:
 
 
 def test_main_returns_int_on_success() -> None:
-    with patch("pocketshell.usage._resolve_quse_binary", return_value="/fake/quse"), patch(
-        "pocketshell.usage.subprocess.run",
+    with patch("pocketshell.usage.quse._resolve_quse_binary", return_value="/fake/quse"), patch(
+        "pocketshell.usage.quse.subprocess.run",
         return_value=_fake_completed(stdout=_quse_keyed_json()),
-    ), patch("pocketshell.usage._try_daemon_usage_fetch", return_value=None):
+    ), patch("pocketshell.usage.cli._try_daemon_usage_fetch", return_value=None):
         exit_code = main(["usage", "--json", "--no-daemon"])
     assert isinstance(exit_code, int)
     assert exit_code == 0
