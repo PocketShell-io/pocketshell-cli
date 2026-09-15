@@ -659,6 +659,135 @@ def test_bundled_aplexer_hard_fails_on_an_unsupported_schema_version(
 
 
 # ---------------------------------------------------------------------------
+# issue #7 — `state`: aplexer's OWN liveness answer, consumed verbatim
+# ---------------------------------------------------------------------------
+#
+# Three rounds of #2554 re-derived liveness from `phase` + `worker_alive` and
+# got it wrong three times; aplexer 355db6e (first released in 0.1.4) answers
+# the question itself with `observed_state()`, on every list/snapshot row.
+# pocketshell now consumes `state` verbatim (runtime/sessions.py) and the
+# local derivation is deleted — D22, no fallback branch. These pins are the
+# other half of that cut: the field must EXIST, its vocabulary must be the
+# documented one, and the "broken" crashed-start answer must be real, or a
+# future aplexer bump silently breaks the contract the session tree now
+# leans on.
+
+APLEXER_STATE_VOCABULARY = frozenset(
+    {"starting", "running", "exiting", "exited", "failed", "broken"}
+)
+
+
+def test_bundled_aplexer_reports_state_on_a_live_session(aplexer_fixture) -> None:
+    """A real session's row carries `state`, inside the documented vocabulary."""
+    tag = f"ps7-{uuid.uuid4().hex[:8]}"
+
+    def listed() -> dict[str, Any]:
+        rows = [
+            row for row in aplexer_fixture.json(["list"]) if row["tag"] == tag
+        ]
+        assert len(rows) == 1, f"expected exactly one `{tag}` row, got {rows}"
+        return rows[0]
+
+    started = aplexer_fixture.run(
+        [
+            "--json", "start",
+            "--workspace", str(aplexer_fixture.workspace),
+            "--tag", tag,
+        ]
+    )
+    assert started.returncode == 0, started.stderr.strip()
+
+    try:
+        started_row = listed()
+        assert "state" in started_row, (
+            "the bundled aplexer emitted no `state` field; pocketshell's "
+            "liveness answer IS this field since issue #7 — a bump that "
+            f"drops it silently dead-ends the whole session tree. Keys: "
+            f"{sorted(started_row)}"
+        )
+        row = _poll(listed, lambda r: r.get("state") == "running")
+        # Vocabulary pin: whatever aplexer prints must be a name pocketshell
+        # knows, or the fail-closed consume in runtime/sessions.py would
+        # classify real sessions as dead. Unknown names fail HERE.
+        assert row["state"] in APLEXER_STATE_VOCABULARY, (
+            f"unknown `state` vocabulary: {row['state']!r}; known: "
+            f"{sorted(APLEXER_STATE_VOCABULARY)}"
+        )
+        assert row["state"] == "running"
+    finally:
+        aplexer_fixture.run(
+            ["kill", "--workspace", str(aplexer_fixture.workspace), "--tag", tag]
+        )
+
+
+def test_bundled_aplexer_calls_a_dead_worker_broken(aplexer_fixture) -> None:
+    """SIGKILL the worker: the running-phase record must read `broken`.
+
+    This is the exact crashed-start-adjacent shape #2554 round 4 found: a
+    record whose worker died without writing an exit, stuck at `phase:
+    running`. aplexer's `observed_state()` folds it to `broken` — the answer
+    the local predicate kept reconstructing wrong — and the second half of
+    this test proves pocketshell consumes it: the row must leave the
+    attachable set the moment aplexer says broken.
+    """
+    tag = f"ps7-{uuid.uuid4().hex[:8]}"
+
+    def listed() -> dict[str, Any]:
+        rows = [
+            row for row in aplexer_fixture.json(["list"]) if row["tag"] == tag
+        ]
+        assert len(rows) == 1, f"expected exactly one `{tag}` row, got {rows}"
+        return rows[0]
+
+    started = aplexer_fixture.run(
+        [
+            "--json", "start",
+            "--workspace", str(aplexer_fixture.workspace),
+            "--tag", tag,
+        ]
+    )
+    assert started.returncode == 0, started.stderr.strip()
+
+    try:
+        row = _poll(listed, lambda r: r.get("state") == "running")
+        worker_pid = row.get("worker_pid")
+        assert worker_pid, f"no worker pid on the running row: {row}"
+
+        os.kill(int(worker_pid), signal.SIGKILL)
+
+        row = _poll(listed, lambda r: r.get("state") == "broken")
+        assert row["phase"] == "running", (
+            "the fixture must reproduce the stale-running-record shape; "
+            f"phase moved to {row['phase']!r} on its own"
+        )
+        assert row["state"] == "broken", (
+            "a worker killed without an exit must surface as `broken`, not "
+            f"{row['state']!r} — this is the classification #2554 got wrong "
+            "three times, now consumed verbatim"
+        )
+
+        # The consumer half: `state` alone decides attachability.
+        payload = aplexer_fixture.json(["snapshot"])
+        live = _session_enum.sessions_from_aplexer_snapshot(payload)
+        dead = _session_enum.dead_sessions_from_aplexer_snapshot(payload)
+        assert all(session.tag != tag for session in live)
+        assert any(
+            session.tag == tag and session.alive is False for session in dead
+        )
+    finally:
+        completed = aplexer_fixture.run(
+            ["kill", "--workspace", str(aplexer_fixture.workspace), "--tag", tag]
+        )
+        if completed.returncode != 0:
+            # The worker is already dead; the record's own pid is the
+            # self-cleaning fallback (the record IS the evidence).
+            try:
+                os.killpg(int(worker_pid), signal.SIGKILL)
+            except (OSError, NameError, ValueError):
+                pass
+
+
+# ---------------------------------------------------------------------------
 # 0.1.4 — the snapshot names WHICH agent is running inside the session
 # ---------------------------------------------------------------------------
 #

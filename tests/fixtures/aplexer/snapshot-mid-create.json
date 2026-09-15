@@ -20,6 +20,7 @@
     "tag": "midcreate",
     "updated_at_ms": 1788684999294,
     "worker_alive": false,
-    "workspace": "/tmp/i2554r3/ws"
+    "workspace": "/tmp/i2554r3/ws",
+    "state": "starting"
   }
 ]

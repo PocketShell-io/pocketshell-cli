@@ -28,6 +28,7 @@ def _record() -> dict[str, object]:
         "workspace": "/work/project",
         "tag": "shell",
         "phase": "running",
+        "state": "running",
         "worker_alive": True,
         "worker_pid": 1234,
     }
@@ -121,6 +122,7 @@ def test_create_leaves_dead_record_reclamation_to_aplexer(monkeypatch, tmp_path:
         **_record(),
         "workspace": str(tmp_path),
         "phase": "exited",
+        "state": "exited",
         "worker_alive": False,
     }
     monkeypatch.setattr(create_mod, "_resolve_aplexer", lambda: _resolution("/fake/a"))

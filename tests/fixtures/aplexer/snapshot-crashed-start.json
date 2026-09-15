@@ -20,6 +20,7 @@
     "tag": "crashed1",
     "updated_at_ms": 1788686781148,
     "worker_alive": false,
-    "workspace": "/tmp/i2554r4/ws"
+    "workspace": "/tmp/i2554r4/ws",
+    "state": "broken"
   }
 ]

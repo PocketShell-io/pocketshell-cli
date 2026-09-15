@@ -30,11 +30,15 @@ AGENT_STATE_SOURCE_HEURISTIC = "heuristic"
 
 APLEXER_TERMINAL_PHASES = frozenset({"exited", "failed"})
 
-# A record without a worker pid is the shape written during the beginning of
-# ``a start``. Keep it visible for a bounded period so a slow start cannot
-# disappear from the list, while an abandoned record eventually stops being
-# offered as an attach target.
-APLEXER_STARTING_GRACE_MS = 60_000
+# aplexer answers "is this session alive" itself: every `a list --json` /
+# `a snapshot` row carries `state` from aplexer's observed_state() — the
+# phase, plus "broken" for the crashed-start shape where the worker died
+# before registering (a record the pinned pin guarantees on every row, so
+# the local phase + worker_alive + grace-window derivation is DELETED, not
+# kept alongside — D22; issue #7). A record whose state names none of the
+# live states is not offered as an attach target: an unknown state is a
+# vocabulary change, and the contract test fails on it before any host does.
+APLEXER_LIVE_STATES = frozenset({"starting", "running", "exiting"})
 APLEXER_ACTIVITY_THRESHOLD_MS = 3_000
 APLEXER_REPORTED_STATE_STALE_MS = 8_000
 
@@ -194,47 +198,26 @@ def aplexer_agent_state(
     return AGENT_STATE_WAITING, AGENT_STATE_SOURCE_HEURISTIC
 
 
-def aplexer_worker_pid(raw: Mapping[str, Any]) -> Optional[int]:
-    """The record's worker pid, or ``None`` before worker registration."""
-    try:
-        pid = int(raw["worker_pid"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    return pid if pid > 0 else None
+def aplexer_record_state(raw: Mapping[str, Any]) -> Optional[str]:
+    """The row's aplexer-computed ``state``, or ``None`` when absent."""
+    state = str(raw.get("state") or "").strip().lower()
+    return state or None
 
 
-def _aplexer_worker_alive_flag(raw: Mapping[str, Any]) -> bool:
-    """Read ``worker_alive`` while failing open for old records."""
-    worker_alive = raw.get("worker_alive")
-    if isinstance(worker_alive, bool):
-        return worker_alive
-    if isinstance(worker_alive, int):
-        return worker_alive > 0
-    return True
+def aplexer_record_is_alive(raw: Mapping[str, Any]) -> bool:
+    """Whether an aplexer record is still an attachable session.
 
-
-def _aplexer_within_starting_grace(
-    raw: Mapping[str, Any], now_ms: Optional[int]
-) -> bool:
-    updated = _coerce_ms(raw.get("updated_at_ms"))
-    if updated is None:
-        return True
-    if now_ms is None:
-        now_ms = int(time.time() * 1000)
-    return now_ms - updated <= APLEXER_STARTING_GRACE_MS
-
-
-def aplexer_record_is_alive(
-    raw: Mapping[str, Any], now_ms: Optional[int] = None
-) -> bool:
-    """Whether an aplexer record is still an attachable session."""
-    if aplexer_phase(raw) in APLEXER_TERMINAL_PHASES:
-        return False
-    if _aplexer_worker_alive_flag(raw):
-        return True
-    if aplexer_worker_pid(raw) is not None:
-        return False
-    return _aplexer_within_starting_grace(raw, now_ms)
+    Aplexer's own ``state`` is the authoritative answer (issue #7): it
+    already folds the phase, worker liveness, and the starting-grace window
+    into one value computed next to the registry — including "broken" for
+    the crashed-start record whose worker never registered, which is exactly
+    the shape three rounds of local derivation in #2554 kept getting wrong.
+    The local phase + worker_alive derivation that used to sit here is
+    deleted, not kept as a fallback (D22): the pinned aplexer guarantees the
+    field, and a missing or unknown state reads as dead — fail closed for
+    attachability — while the contract test pins the vocabulary itself.
+    """
+    return aplexer_record_state(raw) in APLEXER_LIVE_STATES
 
 
 def _aplexer_live_session(raw: Mapping[str, Any], now_ms: int) -> LiveSession:
@@ -260,7 +243,7 @@ def _aplexer_live_session(raw: Mapping[str, Any], now_ms: int) -> LiveSession:
         attached=_aplexer_attached(raw),
         activity_epoch=_created_epoch_from_ms(raw.get("last_activity_ms")),
         phase=aplexer_phase(raw),
-        alive=aplexer_record_is_alive(raw, now_ms),
+        alive=aplexer_record_is_alive(raw),
     )
 
 

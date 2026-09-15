@@ -23,7 +23,8 @@
     "worker_alive": true,
     "worker_pid": 3588676,
     "workload_pid": 3588687,
-    "workspace": "/tmp/i2554cap/ws"
+    "workspace": "/tmp/i2554cap/ws",
+    "state": "exiting"
   },
   {
     "command": [
@@ -48,7 +49,8 @@
     "worker_alive": false,
     "worker_pid": 3588610,
     "workload_pid": 3588621,
-    "workspace": "/tmp/i2554cap/ws"
+    "workspace": "/tmp/i2554cap/ws",
+    "state": "broken"
   },
   {
     "command": [
@@ -74,6 +76,7 @@
     "worker_alive": true,
     "worker_pid": 3574746,
     "workload_pid": 3574747,
-    "workspace": "/tmp/i2554cap/ws"
+    "workspace": "/tmp/i2554cap/ws",
+    "state": "running"
   }
 ]

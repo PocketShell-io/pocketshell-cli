@@ -103,7 +103,8 @@
     "worker_alive": false,
     "worker_pid": 841581,
     "workload_pid": 841584,
-    "workspace": "/home/alexey/git/zcode-acp"
+    "workspace": "/home/alexey/git/zcode-acp",
+    "state": "exited"
   },
   {
     "command": [
@@ -200,7 +201,8 @@
     "worker_alive": false,
     "worker_pid": 1666018,
     "workload_pid": 1666019,
-    "workspace": "/tmp/aplexer-follow"
+    "workspace": "/tmp/aplexer-follow",
+    "state": "broken"
   },
   {
     "command": [
@@ -300,7 +302,8 @@
     "worker_alive": false,
     "worker_pid": 1665978,
     "workload_pid": 1665994,
-    "workspace": "/tmp/aplexer-follow"
+    "workspace": "/tmp/aplexer-follow",
+    "state": "broken"
   },
   {
     "command": [
@@ -397,6 +400,7 @@
     "worker_alive": false,
     "worker_pid": 1602375,
     "workload_pid": 1602408,
-    "workspace": "/tmp/aplexer-follow"
+    "workspace": "/tmp/aplexer-follow",
+    "state": "broken"
   }
 ]

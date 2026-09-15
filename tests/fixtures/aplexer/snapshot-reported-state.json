@@ -22,7 +22,8 @@
     "worker_alive": true,
     "worker_pid": 3476612,
     "workload_pid": 3476729,
-    "workspace": "/tmp/h1-fixture-ws"
+    "workspace": "/tmp/h1-fixture-ws",
+    "state": "running"
   },
   {
     "command": [
@@ -119,7 +120,8 @@
     "worker_alive": true,
     "worker_pid": 3476327,
     "workload_pid": 3476397,
-    "workspace": "/tmp/h1-fixture-ws"
+    "workspace": "/tmp/h1-fixture-ws",
+    "state": "running"
   },
   {
     "command": [
@@ -221,6 +223,7 @@
     "worker_alive": true,
     "worker_pid": 3476306,
     "workload_pid": 3476307,
-    "workspace": "/tmp/h1-fixture-ws"
+    "workspace": "/tmp/h1-fixture-ws",
+    "state": "running"
   }
 ]
