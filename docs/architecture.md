@@ -40,6 +40,8 @@ src/pocketshell/
 ├── env/                         # .env/.envrc parsing and persistence
 ├── hooks/                       # agent hook installation and event handlers
 │   └── providers/               # provider-specific configuration formats
+│       ├── claude.py
+│       └── codex.py
 ├── logs/                        # normalized host-side event log
 ├── profiles/                    # aplexer profile discovery/resolution
 ├── attachments/                 # uploaded attachment domain
@@ -82,14 +84,22 @@ single-file external-tool adapter does not need a package solely to gain an
   session enumeration. It has no eager feature-package imports.
 - `sessions` owns aplexer lifecycle commands and delegates shared policy and
   enumeration to `runtime`.
-- `agents` owns agent launch and the CLI seam for runtime process-kind
-  detection. The plural `agents` command and singular `agent` command are
-  separate Click commands exposed from the same package.
-- `tree` owns the registry and its workspace membership extension. Live
-  session enumeration is imported from `runtime`, never duplicated in the
-  tree store.
-- `cards` owns card persistence and card-specific notification payloads;
-  `push` owns the FCM transport and usage-reset payloads.
+- `agents` owns three related but separate domains: launch preparation and
+  execution under `launch/`, conversation discovery and handoff under
+  `conversations/`, and live process-kind detection in `kind.py`. The plural
+  `agents` command and singular `agent` command remain separate Click
+  commands.
+- `attachments` owns the uploaded-attachment domain. `cli.py` is only the
+  command surface; `prune.py` contains the deletion policy and filesystem
+  sweep.
+- `tree` owns the registry and reconciliation. Workspace membership is a
+  nested subdomain under `tree/workspaces/`; live session enumeration is
+  imported from `runtime`, never duplicated in the tree store.
+- `cards` owns card persistence and delivery. Concrete card behavior and its
+  registry live under `cards/types/`, while FCM notification construction
+  remains in `cards/push.py`; `push` owns usage-reset transport.
+- `hooks/providers` owns provider-specific configuration formats; installation
+  orchestration and generated handlers remain in the parent `hooks` package.
 - `usage` owns PocketShell-specific persistence and client integration:
   capture history, reset-event detection, daemon caching, and push hooks.
   Provider collection, provider schemas, and provider-specific formatting
@@ -107,9 +117,13 @@ root CLI
 
 Implementation modules may depend downward on shared adapters, but shared
 adapters must not import Click command registration. Persistence code should
-be reusable by both a CLI command and a daemon handler. Tests should patch the
-module that owns the symbol being exercised rather than a re-exporting
-package.
+be reusable by both a CLI command and a daemon handler. The daemon method
+table is an application-composition boundary and may import feature handlers;
+transport and protocol modules underneath it must stay reusable. Usage and
+push intentionally share capture paths and reset-event records, so that
+cross-domain dependency is documented rather than hidden behind re-exports.
+Tests should patch the module that owns the symbol being exercised rather than
+a re-exporting package.
 
 ## Usage boundary with quse
 
