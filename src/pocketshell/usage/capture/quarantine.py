@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 # --- sibling modules ---
-from pocketshell.usage_capture.durability import _write_private
-from pocketshell.usage_capture.paths import DEFAULT_MALFORMED_MAX_LINES, HISTORY_FILENAME, MALFORMED_HISTORY_FILENAME, MAX_MALFORMED_LINE_LENGTH, _ensure_dir
+from pocketshell.usage.capture.durability import _write_private
+from pocketshell.usage.capture.paths import DEFAULT_MALFORMED_MAX_LINES, HISTORY_FILENAME, MALFORMED_HISTORY_FILENAME, MAX_MALFORMED_LINE_LENGTH, _ensure_dir
 
 
 def _truncate_malformed_line(line: str) -> str:
@@ -95,7 +95,7 @@ def _bounded_retained_list(
     retained_list = list(retained)[-cap:]
     if total_count > cap:
         marker = {
-            "source": "pocketshell.usage_capture",
+            "source": "pocketshell.usage.capture",
             "reason": "diagnostics_truncated",
             "dropped": total_count - cap,
         }

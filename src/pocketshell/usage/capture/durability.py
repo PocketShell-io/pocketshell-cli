@@ -6,7 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 # --- sibling modules ---
-from pocketshell.usage_capture.paths import NEW_FILE_MODE, _ensure_dir
+from pocketshell.usage.capture.paths import NEW_FILE_MODE, _ensure_dir
 
 
 _LOGGER = logging.getLogger(__name__)

@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Optional
-from pocketshell.usage_capture import (
+from pocketshell.usage.capture import (
     UsagePaths,
 )
 

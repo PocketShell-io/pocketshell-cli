@@ -23,8 +23,8 @@ The fall-through is intentional and matches the spike's Q6 parity rule:
 
 ``--capture`` / ``--cached`` / ``--reset-events`` bypass the stdout-proxy
 path entirely: they persist or emit the cached latest reading and the
-recorded reset events (see :mod:`pocketshell.usage_capture` and
-:mod:`pocketshell.usage_reset`).
+recorded reset events (see :mod:`pocketshell.usage.capture` and
+:mod:`pocketshell.usage.reset`).
 """
 
 from __future__ import annotations
@@ -284,7 +284,7 @@ def _capture_usage(provider: Optional[str], *, no_daemon: bool) -> int:
     cron/systemd log shows what landed. A failed fetch is NOT cached so a
     transient provider hiccup never pins a bad reading.
     """
-    from pocketshell import usage_capture as _capture
+    from pocketshell.usage import capture as _capture
 
     stdout, stderr, returncode = _fetch_usage_ndjson(provider, no_daemon=no_daemon)
     if returncode != 0 or stdout is None:
@@ -304,7 +304,7 @@ def _emit_cached_usage() -> int:
     stdout), or 3 with a friendly stderr note when no capture has run yet so
     the app can fall back to a pure live fetch.
     """
-    from pocketshell import usage_capture as _capture
+    from pocketshell.usage import capture as _capture
 
     document = _capture.cached_document()
     if document is None:
@@ -325,7 +325,7 @@ def _emit_reset_events() -> int:
     when no resets have been detected/logged yet), so the app can read it
     unconditionally and surface "limits reset at <time>" when present.
     """
-    from pocketshell import usage_reset as _reset
+    from pocketshell.usage import reset as _reset
 
     sys.stdout.write(_reset.reset_events_document())
     return 0

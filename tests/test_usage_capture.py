@@ -25,10 +25,10 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from pocketshell import usage_capture
-from pocketshell.usage_capture import history as capture_history
+from pocketshell.usage import capture as usage_capture
+from pocketshell.usage.capture import history as capture_history
 from pocketshell.cli import cli
-from pocketshell.usage_capture import (
+from pocketshell.usage.capture import (
     UsagePaths,
     cached_document,
     read_cache,

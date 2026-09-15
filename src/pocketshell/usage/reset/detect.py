@@ -3,7 +3,7 @@
 No I/O — :func:`detect_resets` takes the previous and current cache objects
 (and the set of already-known ``reset_key`` values for cross-run de-dup)
 and returns the new event dicts. Persistence lives in
-:mod:`pocketshell.usage_reset.store`.
+:mod:`pocketshell.usage.reset.store`.
 """
 
 from __future__ import annotations

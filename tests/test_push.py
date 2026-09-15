@@ -22,7 +22,7 @@ from click.testing import CliRunner
 
 from pocketshell import push
 from pocketshell.cli import cli
-from pocketshell.usage_capture import UsagePaths, write_capture
+from pocketshell.usage.capture import UsagePaths, write_capture
 
 
 def _paths(tmp_path: Path) -> UsagePaths:

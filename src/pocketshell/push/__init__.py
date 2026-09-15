@@ -1,14 +1,14 @@
 """Server-side FCM push delivery for usage-reset events (issue #690).
 
 This module owns the *server* half of the reset-push pipeline. The detection
-half (``usage_reset.record_resets``) and the entire Android receive path
+half (``usage.reset.record_resets``) and the entire Android receive path
 (``PocketShellMessagingService`` / ``ResetPushPayload`` / ``PushDedupStore``)
 already ship. Here we:
 
 1. **Store the device token** the app delivers over a live foreground SSH
    session — ``pocketshell push register-token <token>`` (R1). The token is
    written atomically with mode ``0600`` alongside the usage state, mirroring
-   :mod:`pocketshell.usage_capture`'s private-write style.
+   :mod:`pocketshell.usage.capture`'s private-write style.
 2. **Send a data push** for each NEW reset event the hourly ``--capture``
    produces (R2). The push is an FCM **HTTP v1** *data* message whose keys match
    the app's ``ResetPushPayload`` contract exactly (``type=usage_reset``,
@@ -30,7 +30,7 @@ Design constraints
   registered, or :mod:`google.auth` is not installed, :func:`push_reset_events`
   no-ops and returns an empty list WITHOUT raising. The hourly ``--capture``
   must never break because push delivery is not set up (mirrors the best-effort
-  ``record_resets`` hook in :mod:`pocketshell.usage_capture`).
+  ``record_resets`` hook in :mod:`pocketshell.usage.capture`).
 
 Storage layout (under the usage state dir, ``$XDG_STATE_HOME/pocketshell/usage/``):
 
@@ -73,7 +73,7 @@ from pocketshell.push.store import (
     _mark_sent,
 )
 
-from pocketshell.usage_capture import resolve_paths  # noqa: F401  (legacy push.resolve_paths)
+from pocketshell.usage.capture import resolve_paths  # noqa: F401  (legacy push.resolve_paths)
 
 __all__ = [
     "TOKEN_FILENAME",

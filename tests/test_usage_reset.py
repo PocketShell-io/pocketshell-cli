@@ -18,8 +18,8 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from pocketshell.cli import cli
-from pocketshell.usage_capture import UsagePaths, resolve_paths, write_capture
-from pocketshell.usage_reset import (
+from pocketshell.usage.capture import UsagePaths, resolve_paths, write_capture
+from pocketshell.usage.reset import (
     detect_resets,
     read_reset_events,
     record_resets,

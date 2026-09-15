@@ -55,7 +55,7 @@ from typing import Any, Optional
 
 from pocketshell import push as push_mod
 from pocketshell.cards import CardPaths
-from pocketshell.usage_capture import _append_history, resolve_paths as resolve_usage_paths
+from pocketshell.usage.capture import _append_history, resolve_paths as resolve_usage_paths
 
 # The app contract: an agent-card push is a `type=agent_card` FCM data message.
 AGENT_CARD_PUSH_TYPE = "agent_card"

@@ -9,9 +9,9 @@ import threading
 from pathlib import Path
 from typing import Any, Iterator, Optional
 # --- sibling modules ---
-from pocketshell.usage_capture.durability import _write_private
-from pocketshell.usage_capture.paths import DEFAULT_HISTORY_MAX_LINES, DEFAULT_MALFORMED_MAX_LINES, HISTORY_LOCK_FILENAME, NEW_FILE_MODE, UsagePaths, _ensure_dir, _now_iso, resolve_paths
-from pocketshell.usage_capture.quarantine import _append_quarantine_locked, _default_malformed_file, _malformed_diagnostic
+from pocketshell.usage.capture.durability import _write_private
+from pocketshell.usage.capture.paths import DEFAULT_HISTORY_MAX_LINES, DEFAULT_MALFORMED_MAX_LINES, HISTORY_LOCK_FILENAME, NEW_FILE_MODE, UsagePaths, _ensure_dir, _now_iso, resolve_paths
+from pocketshell.usage.capture.quarantine import _append_quarantine_locked, _default_malformed_file, _malformed_diagnostic
 
 
 try:
@@ -160,8 +160,8 @@ def _detect_and_push_resets(
     and treated as "no reset events" (the history entry stays plain).
     """
     try:
-        # Lazy import avoids the usage_capture <-> usage_reset circular import.
-        from pocketshell import usage_reset as _reset
+        # Lazy import avoids the capture <-> reset circular import.
+        from pocketshell.usage import reset as _reset
 
         reset_events = _reset.record_resets(previous_cache, cache_obj, paths=paths)
         if reset_events:

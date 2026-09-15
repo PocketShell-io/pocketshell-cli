@@ -7,7 +7,7 @@ from typing import Mapping, Optional
 
 
 # File permissions for the registry file. ``0600`` keeps the per-host tree
-# state readable only by the owning user, matching usage_capture.
+# state readable only by the owning user, matching usage.capture.
 NEW_FILE_MODE = 0o600
 
 
@@ -55,7 +55,7 @@ def resolve_paths(
     1. ``$XDG_STATE_HOME/pocketshell/tree`` when ``$XDG_STATE_HOME`` is set.
     2. ``<home>/.local/state/pocketshell/tree``.
 
-    Mirrors :func:`pocketshell.usage_capture.resolve_paths` so all PocketShell
+    Mirrors :func:`pocketshell.usage.capture.resolve_paths` so all PocketShell
     durable state lives under one XDG-state root.
     """
     env_map = env if env is not None else os.environ

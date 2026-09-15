@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Optional
-from pocketshell.usage_capture import (
+from pocketshell.usage.capture import (
     UsagePaths,
     _append_history,
     _write_private,

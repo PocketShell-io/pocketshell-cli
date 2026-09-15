@@ -1,7 +1,7 @@
 """The `pocketshell push` click command group."""
 from __future__ import annotations
 import click
-from pocketshell.usage_capture import (
+from pocketshell.usage.capture import (
     resolve_paths,
 )
 # --- sibling modules ---

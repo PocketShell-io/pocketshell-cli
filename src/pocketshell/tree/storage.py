@@ -43,7 +43,7 @@ def _write_private(path: Path, text: str) -> None:
 
     Temp file + ``os.replace`` so a concurrent reader (the app's SSH ``tree.get``
     racing a ``tree.upsert``) never sees a half-written registry. Copied from
-    :func:`pocketshell.usage_capture._write_private`.
+    :func:`pocketshell.usage.capture._write_private`.
     """
     _ensure_dir(path.parent)
     fd, raw_tmp = tempfile.mkstemp(

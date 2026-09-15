@@ -43,16 +43,16 @@ no external logrotate dependency.
 """
 from __future__ import annotations
 
-from pocketshell.usage_capture.durability import (
+from pocketshell.usage.capture.durability import (
     _write_private,
 )
-from pocketshell.usage_capture.history import (
+from pocketshell.usage.capture.history import (
     write_capture,
     _append_history,
     read_cache,
     cached_document,
 )
-from pocketshell.usage_capture.paths import (
+from pocketshell.usage.capture.paths import (
     NEW_FILE_MODE,
     DEFAULT_HISTORY_MAX_LINES,
     CACHE_FILENAME,
@@ -64,7 +64,7 @@ from pocketshell.usage_capture.paths import (
     UsagePaths,
     resolve_paths,
 )
-import os  # noqa: F401  (tests patch usage_capture.os.fsync/replace)
+import os  # noqa: F401  (tests patch usage.capture.os.fsync/replace)
 
 __all__ = [
     "NEW_FILE_MODE",

@@ -1,7 +1,7 @@
 """Translate usage-reset events into push notifications."""
 from __future__ import annotations
 from typing import Any, Optional
-from pocketshell.usage_capture import (
+from pocketshell.usage.capture import (
     UsagePaths,
     resolve_paths,
 )

@@ -63,17 +63,17 @@ One reset event per *actual* reset. Two guards:
 Modules
 -------
 
-- :mod:`pocketshell.usage_reset.detect` — pure reading-vs-reading detection.
-- :mod:`pocketshell.usage_reset.store` — the reset-events log on disk and
+- :mod:`pocketshell.usage.reset.detect` — pure reading-vs-reading detection.
+- :mod:`pocketshell.usage.reset.store` — the reset-events log on disk and
   the app-facing JSON document.
 """
 from __future__ import annotations
 
-from pocketshell.usage_reset.detect import (
+from pocketshell.usage.reset.detect import (
     RESET_RECOVERY_THRESHOLD,
     detect_resets,
 )
-from pocketshell.usage_reset.store import (
+from pocketshell.usage.reset.store import (
     DEFAULT_RESET_EVENTS_MAX_LINES,
     RESET_EVENTS_FILENAME,
     read_reset_events,

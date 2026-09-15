@@ -11,12 +11,12 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from pocketshell.usage_capture import (
+from pocketshell.usage.capture import (
     UsagePaths,
     _append_history,
     resolve_paths,
 )
-from pocketshell.usage_reset.detect import detect_resets
+from pocketshell.usage.reset.detect import detect_resets
 
 # How many recent reset events to keep in the dedicated reset-events log.
 # Resets are rare (a handful a day at most), so a small cap is plenty and
