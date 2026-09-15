@@ -135,3 +135,28 @@ detects resets across captures, and sends best-effort notifications.
 When a transformation is provider/schema logic, it should be implemented and
 tested in `quse`; when it is PocketShell state or client transport logic, it
 stays in `pocketshell.usage`.
+
+## Aplexer boundary
+
+The checked-out aplexer implementation is the source of truth for the
+session runtime and for agent launch resolution. PocketShell must consume that
+authority rather than grow a parallel implementation.
+
+| Aplexer owns | PocketShell keeps |
+| --- | --- |
+| Engine/profile configuration and discovery (`a engines`, `a profiles`) | Picker-facing labels, usage-provider metadata, host availability probes, and the optional PocketShell presentation/config layer in `engines/` and `profiles/` |
+| Launch argv, profile environment, provider-key removal, cwd, and skip-permission arguments (`a launch-spec`) | Folder `.env`/`.envrc` exports, explicit profile-to-directory UX, Claude trust seeding, binary preflight, and the thin `launch-spec` adapter |
+| Session creation/claiming, worker and workload lifecycle, PTY/history/cgroup containment, `start`, `snapshot`, `status`, `attach`, `kill`, and `forget` | Schema-3 rows, display-name/target resolution, idempotent create policy, memory-cap policy, attach chrome suppression, JSON envelopes, and reaping/survivor diagnostics |
+| Query-time agent/profile detection for a recorded session | `agents.kind_for_panes`, which classifies arbitrary pane PIDs and therefore has a different input and client contract |
+
+The `runtime/aplexer.py` module is only the bundled-binary integrity and
+subprocess boundary. `runtime/sessions.py` is only a client-wire model and
+normalizer. Neither is a second session backend.
+
+The old host-side launch metadata hooks were removed because they were no-op
+compatibility shims after aplexer became the owner of session metadata. The
+remaining native engine/profile launch code is intentionally fallback and
+presentation code for custom PocketShell configuration and hosts where the
+`a` launcher probe is disabled; it is not authoritative on the normal Linux
+path. Any future removal of that fallback must first migrate those custom
+configuration fields into aplexer.
