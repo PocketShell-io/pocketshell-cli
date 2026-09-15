@@ -56,7 +56,7 @@ import time
 import tomllib
 import uuid
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 import pytest
 
@@ -260,6 +260,65 @@ def aplexer_fixture(tmp_path: Path):
         # The runtime root lives outside ``tmp_path`` (AF_UNIX length), so
         # pytest's own tmp retention does not clean it up.
         shutil.rmtree(fixture.runtime_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# issue #9 — `a rename` behind `pocketshell sessions rename`
+# ---------------------------------------------------------------------------
+
+
+def test_bundled_aplexer_rename_rekeys_the_live_row(aplexer_fixture) -> None:
+    """Real transport: create, rename, and confirm the row re-keys attachable.
+
+    The unit tests pin the argv; this pins the RUNTIME half of the verb —
+    the renamed session survives as a live, attachable row under its new
+    name, and the old name is gone.
+    """
+    tag = f"ps9-{uuid.uuid4().hex[:8]}"
+    new_tag = f"{tag}-r"
+    started = aplexer_fixture.run(
+        [
+            "--json", "start",
+            "--workspace", str(aplexer_fixture.workspace),
+            "--tag", tag,
+        ]
+    )
+    assert started.returncode == 0, started.stderr.strip()
+
+    def running_row() -> Optional[dict[str, Any]]:
+        matches = [
+            row for row in aplexer_fixture.json(["list"]) if row["tag"] == tag
+        ]
+        if len(matches) == 1 and matches[0].get("state") == "running":
+            return matches[0]
+        return None
+
+    try:
+        row = _poll(running_row, lambda value: value is not None)
+        assert row is not None, f"session {tag} never reached state=running"
+        # Rename by record id (the dir-stem id #2661 established): aplexer's
+        # bare-tag selector does not resolve a tag from the cwd alone here.
+        renamed = aplexer_fixture.run(
+            ["--json", "rename", str(row["id"]), "--tag", new_tag]
+        )
+        assert renamed.returncode == 0, renamed.stderr.strip()
+        record = json.loads(renamed.stdout)
+        assert record["tag"] == new_tag
+
+        rows, errors = _session_enum.enumerate_live_sessions(env=aplexer_fixture.env)
+        assert errors == [], errors
+        renamed_rows = [row for row in rows if row.tag == new_tag]
+        assert len(renamed_rows) == 1, f"renamed row missing from the live set: {rows}"
+        assert renamed_rows[0].alive is True, "the renamed session must stay attachable"
+        assert renamed_rows[0].aplexer_id == record.get("id"), (
+            "the rename must not re-issue a session id"
+        )
+        assert renamed_rows[0].name == f"{aplexer_fixture.workspace.name}:{new_tag}"
+        assert all(row.tag != tag for row in rows), "the old name must be gone"
+    finally:
+        aplexer_fixture.run(
+            ["kill", "--workspace", str(aplexer_fixture.workspace), "--tag", new_tag]
+        )
 
 
 # ---------------------------------------------------------------------------

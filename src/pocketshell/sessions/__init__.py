@@ -30,6 +30,10 @@ from pocketshell.sessions.kill import (
     KILL_SCHEMA_VERSION,
     sessions_kill,
 )
+from pocketshell.sessions.rename import (
+    RENAME_SCHEMA_VERSION,
+    sessions_rename,
+)
 from pocketshell.sessions.listing import (
     _emit_envelope,
     _try_daemon_sessions_list,
@@ -68,4 +72,6 @@ __all__ = [
     "_attach_live_rows",
     "sessions_attach",
     "sessions_kill",
+    "RENAME_SCHEMA_VERSION",
+    "sessions_rename",
 ]
