@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 # --- sibling modules ---
-from pocketshell.hooks.claude import _claude_is_fully_installed, _load_claude_settings
+from pocketshell.hooks.providers.claude import _claude_is_fully_installed, _load_claude_settings
 from pocketshell.hooks.handlers import _claude_command, _codex_notify_value, _legacy_claude_command, _legacy_codex_notify_value
 from pocketshell.hooks.installers import _codex_configured_value
 from pocketshell.hooks.paths import ENGINES, HooksPaths

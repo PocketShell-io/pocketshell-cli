@@ -72,14 +72,14 @@ the generated handlers embed the selected bus file.
 """
 from __future__ import annotations
 
-from pocketshell.hooks.claude import (
+from pocketshell.hooks.providers.claude import (
     claude_install,
     claude_uninstall,
 )
 from pocketshell.hooks.cli import (
     hooks_group,
 )
-from pocketshell.hooks.codex import (
+from pocketshell.hooks.providers.codex import (
     codex_install,
     codex_uninstall,
 )

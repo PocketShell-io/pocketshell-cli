@@ -22,6 +22,7 @@ src/pocketshell/
 ├── engines/                     # engine registry and harness probes
 ├── env/                         # .env/.envrc parsing and persistence
 ├── hooks/                       # agent hook installation and event handlers
+│   └── providers/               # provider-specific configuration formats
 ├── logs/                        # normalized host-side event log
 ├── profiles/                    # aplexer profile discovery/resolution
 ├── attachments/                 # uploaded attachment domain

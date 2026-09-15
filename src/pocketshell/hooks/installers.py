@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Optional, Sequence
 # --- sibling modules ---
-from pocketshell.hooks.claude import _claude_is_fully_installed, _claude_is_installed, _claude_uninstall_commands, _load_claude_settings, claude_install
-from pocketshell.hooks.codex import _extract_notify_command, _find_top_level_notify, codex_install, codex_uninstall
+from pocketshell.hooks.providers.claude import _claude_is_fully_installed, _claude_is_installed, _claude_uninstall_commands, _load_claude_settings, claude_install
+from pocketshell.hooks.providers.codex import _extract_notify_command, _find_top_level_notify, codex_install, codex_uninstall
 from pocketshell.hooks.handlers import _atomic_write_text, _claude_command, _codex_notify_value, _legacy_claude_command, _legacy_codex_notify_value, _opencode_plugin_source, _write_handlers
 from pocketshell.hooks.paths import HooksPaths
 
