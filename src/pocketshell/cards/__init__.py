@@ -70,7 +70,7 @@ from pocketshell.cards.paths import (
     resolve_paths,
     detect_session,
 )
-from pocketshell.cards.storage import (
+from pocketshell.cards.store import (
     NEW_FILE_MODE,
     _write_private,
     _session_lock,

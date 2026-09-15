@@ -1,11 +1,16 @@
 """Card directory resolution and session detection."""
 from __future__ import annotations
+import base64
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
-# --- sibling modules ---
-from pocketshell.cards.storage import _encode_session
+
+
+def _encode_session(session: str) -> str:
+    """Reversibly encode a session as one safe path segment."""
+    encoded = base64.urlsafe_b64encode(session.encode("utf-8")).decode("ascii")
+    return "s-" + encoded.rstrip("=")
 
 
 @dataclass(frozen=True)
