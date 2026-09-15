@@ -73,29 +73,29 @@ Prompt suppression (the part that fixes "the agent doesn't start")
 """
 from __future__ import annotations
 
-from pocketshell.agents.cli import (
+from pocketshell.agents.launch.cli import (
     agent_group,
 )
-from pocketshell.agents.command import (
+from pocketshell.agents.launch.command import (
     build_argv,
 )
-from pocketshell.agents.environment import (
+from pocketshell.agents.launch.environment import (
     AGENT_KINDS,
     PROVIDER_ENV_UNSET_VARS,
     build_env,
 )
-from pocketshell.agents.launch import (
+from pocketshell.agents.launch.run import (
     launch_agent,
     _resolve_config_dir,
 )
-from pocketshell.agents.record import (
+from pocketshell.agents.launch.record import (
     record_agent_kind,
     record_agent_source,
 )
-from pocketshell.agents.spec import (
+from pocketshell.agents.launch.spec import (
     _aplexer_profile_id,
 )
-from pocketshell.agents.trust import (
+from pocketshell.agents.launch.trust import (
     claude_config_path,
     seed_claude_trust,
 )

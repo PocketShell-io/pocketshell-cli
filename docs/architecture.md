@@ -13,9 +13,16 @@ src/pocketshell/
 ├── github.py                    # one-file `github status` integration
 ├── serve.py                     # one-file foreground HTTP integration
 ├── agent_log/                   # conversation-log discovery and handoff
-├── agents/                      # agent launch plus kind-command CLI
-│   ├── cli.py                   # `pocketshell agent`
-│   └── kind.py                  # `pocketshell agents kind`
+├── agents/                      # agent domain
+│   ├── kind.py                  # `pocketshell agents kind`
+│   └── launch/                  # launch application and execution support
+│       ├── cli.py               # `pocketshell agent`
+│       ├── command.py            # argv construction
+│       ├── environment.py        # launch environment policy
+│       ├── record.py             # launch instrumentation seam
+│       ├── run.py                # process execution
+│       ├── spec.py               # aplexer launch specs
+│       └── trust.py              # provider trust preparation
 ├── cards/                       # typed agent→app cards
 │   ├── types/                   # registry and concrete card behaviors
 │   │   ├── registry.py

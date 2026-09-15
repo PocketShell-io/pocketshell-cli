@@ -8,11 +8,11 @@ import click
 from pocketshell.engines import EngineManifest, engine_for
 from pocketshell.env import merged_exports
 # --- sibling modules ---
-from pocketshell.agents.command import _agent_missing_message, build_argv
-from pocketshell.agents.environment import _env_from_launch_spec, build_env
-from pocketshell.agents.record import record_agent_kind, record_agent_source
-from pocketshell.agents.spec import _aplexer_launch_spec
-from pocketshell.agents.trust import claude_config_path, seed_claude_trust
+from pocketshell.agents.launch.command import _agent_missing_message, build_argv
+from pocketshell.agents.launch.environment import _env_from_launch_spec, build_env
+from pocketshell.agents.launch.record import record_agent_kind, record_agent_source
+from pocketshell.agents.launch.spec import _aplexer_launch_spec
+from pocketshell.agents.launch.trust import claude_config_path, seed_claude_trust
 
 
 def _resolve_dir(ctx: click.Context, directory: str) -> Path:
@@ -218,73 +218,3 @@ def _resolve_config_dir(
     # is the plain kind (no spurious chip in the tree).
     label = None if resolved.default else resolved.name
     return resolved.config_dir, dict(resolved.env), label
-
-
-_DIR_OPTION = click.option(
-    "--dir",
-    "directory",
-    required=True,
-    type=str,
-    help="Folder to launch the agent in (its cwd).",
-)
-_SKIP_PERM_OPTION = click.option(
-    "--skip-permissions/--no-skip-permissions",
-    default=True,
-    show_default=True,
-    help=(
-        "Launch with per-action approval prompts disabled "
-        "(codex YOLO / claude bypass / grok --always-approve). "
-        "No-op for opencode."
-    ),
-)
-_CONFIG_DIR_OPTION = click.option(
-    "--config-dir",
-    "config_dir",
-    default=None,
-    type=str,
-    help=(
-        "Profile config dir: CODEX_HOME (codex) / CLAUDE_CONFIG_DIR "
-        "(claude). Ignored for opencode. Mutually exclusive with "
-        "--profile."
-    ),
-)
-_PROFILE_OPTION = click.option(
-    "--profile",
-    "profile",
-    default=None,
-    type=str,
-    help=(
-        "Named host profile (see `pocketshell profiles list`); resolves "
-        "to its config dir. Mutually exclusive with --config-dir."
-    ),
-)
-
-
-def _make_agent_command(kind: str):
-    """Build the Click command for one agent kind."""
-
-    @_DIR_OPTION
-    @_SKIP_PERM_OPTION
-    @_CONFIG_DIR_OPTION
-    @_PROFILE_OPTION
-    @click.command(
-        name=kind,
-        context_settings={"help_option_names": ["-h", "--help"]},
-        help=f"Launch `{kind}` in --dir with first-run prompts suppressed.",
-    )
-    @click.pass_context
-    def _cmd(
-        ctx: click.Context, directory: str, skip_permissions: bool,
-        config_dir: Optional[str], profile: Optional[str],
-    ) -> None:
-        config_dir, extra_env, profile_label = _resolve_config_dir(
-            ctx, kind, config_dir, profile
-        )
-        launch_agent(
-            ctx, kind, directory,
-            skip_permissions=skip_permissions,
-            config_dir=config_dir,
-            extra_env=extra_env, profile=profile_label,
-        )
-
-    return _cmd
