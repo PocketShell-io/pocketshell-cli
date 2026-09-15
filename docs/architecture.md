@@ -146,7 +146,7 @@ authority rather than grow a parallel implementation.
 | --- | --- |
 | Engine/profile configuration and discovery (`a engines`, `a profiles`) | Picker-facing labels, usage-provider metadata, host availability probes, and the optional PocketShell presentation/config layer in `engines/` and `profiles/` |
 | Launch argv, profile environment, provider-key removal, cwd, and skip-permission arguments (`a launch-spec`) | Folder `.env`/`.envrc` exports, explicit profile-to-directory UX, Claude trust seeding, binary preflight, and the thin `launch-spec` adapter |
-| Session creation/claiming, worker and workload lifecycle, PTY/history/cgroup containment, `start`, `snapshot`, `status`, `attach`, `kill`, and `forget` | Schema-3 rows, display-name/target resolution, idempotent create policy, memory-cap policy, attach chrome suppression, JSON envelopes, and reaping/survivor diagnostics |
+| Session creation/claiming, worker and workload lifecycle, PTY/history/cgroup containment, `start`, `snapshot`, `status`, `attach`, `kill`, and `forget` | Schema-3 rows, display-name/target resolution, idempotent create policy, memory-cap policy, attach chrome suppression, JSON envelopes, and client-facing recovery diagnostics |
 | Query-time agent/profile detection for a recorded session | `agents.kind_for_panes`, which classifies arbitrary pane PIDs and therefore has a different input and client contract |
 
 The `runtime/aplexer.py` module is only the bundled-binary integrity and
@@ -155,6 +155,10 @@ normalizer. Neither is a second session backend.
 
 The old host-side launch metadata hooks were removed because they were no-op
 compatibility shims after aplexer became the owner of session metadata. The
+old host-side dead-record reaper was removed for the same reason: `a start`
+owns workspace/tag reclamation, while `a kill` reports whether its own final
+record removal succeeded. PocketShell does not issue a second `forget --force`
+or inspect workload PIDs to reproduce those lifecycle decisions. The
 remaining native engine/profile launch code is intentionally fallback and
 presentation code for custom PocketShell configuration and hosts where the
 `a` launcher probe is disabled; it is not authoritative on the normal Linux
