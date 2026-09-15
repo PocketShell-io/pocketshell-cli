@@ -26,7 +26,7 @@ src/pocketshell/
 ├── profiles/                    # aplexer profile discovery/resolution
 ├── attachments/                 # uploaded attachment domain
 │   ├── cli.py                   # `pocketshell prune-attachments`
-│   └── retention.py             # TTL and size-cap policy
+│   └── prune.py                 # TTL and size-cap policy
 ├── push/                        # FCM transport and usage-reset pushes
 ├── repos/                       # local/remote repository discovery
 ├── runtime/                     # shared host-runtime primitives
