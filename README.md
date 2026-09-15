@@ -331,6 +331,15 @@ Android app (extraction: PocketShell-io/pocketshell#2643). The `version` in
    refuses to publish if `dist/` does not carry exactly the tagged version,
    and publishes to PyPI.
 3. Hosts pick it up with `uv tool upgrade pocketshell`.
+4. **Reinstall THIS box's own CLI and smoke-check it**
+   (`scripts/reinstall-box-cli.sh vX.Y.Z`). This machine is both the dev box
+   and the live server the phone connects to; a green publish does not touch
+   the `uv tool`-installed binary, so skipping this step ships a release the
+   phone cannot actually use (the 2026-09-10 `workspaces` outage — issue
+   #15). The script overrides the global 7-day `exclude-newer` cutoff (a
+   just-published version is invisible to it), forces the reinstall at the
+   tagged version, and fails unless `pocketshell --version` reports the tag
+   and `pocketshell workspaces list --host <h> --json` exits 0.
 
 CI (`.github/workflows/ci.yml`) runs the pytest suite plus the packaging and
 frozen-lock guards on every PR and every push to `main`. The first
