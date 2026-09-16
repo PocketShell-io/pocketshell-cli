@@ -113,22 +113,23 @@ class DelegationProbe:
 
 
 def probe_cgroup_delegation() -> DelegationProbe:
-    """Can a process here be moved into a delegated, memory-capped user scope?
+    """Can a delegated, memory-capped user scope be created here?
 
     This mirrors what aplexer actually does, step for step, because a cheaper
     probe was wrong once already: the first version of this file only checked
     that `systemd-run --user --scope -p MemoryMax=…` EXITS 0, which a GitHub
     hosted runner does — and then `a start --memory` still failed there with
     ``spawn workload: Permission denied (os error 13)``, red CI on PR #2590.
-    The step that fails on such a host is the LAST one: aplexer's workload
-    writes its own pgid into the delegated scope's ``cgroup.procs`` from a
-    pre_exec hook (``aplexer/src/worker.rs``), and cgroup-v2 requires write
-    permission on the common ancestor of the writer's cgroup and the target.
-    A runner whose agent lives outside ``user@<uid>.service`` does not have it.
 
-    So the probe creates a real anchored scope, checks the memory controller
-    really was delegated, and then MOVES A THROWAWAY CHILD into it — the exact
-    operation that failed. Everything it creates is torn down here.
+    Since aplexer 0.1.7 (issue #13) the workload argv rides the
+    `systemd-run --scope` transaction itself and SYSTEMD places the child
+    (PIDs=) as the scope's initial process — nothing ever migrates into the
+    delegated subtree, which is exactly what `nsdelegate` refuses. What the
+    spawn needs from the host is therefore: a running systemd --user manager,
+    a scope it will create, and the memory controller delegated into it. That
+    is precisely what this probe exercises: it creates a real scope, checks
+    `memory.max` really was delegated, and reads the placement back.
+    Everything it creates is torn down here.
     """
     runtime = _real_runtime_dir()
     if not os.path.isdir(runtime):
@@ -173,15 +174,6 @@ def probe_cgroup_delegation() -> DelegationProbe:
                 "systemd did not delegate the memory controller (no "
                 f"memory.max under {cgroup})",
             )
-        moved = _can_move_a_process_into(cgroup)
-        if moved is not None:
-            return DelegationProbe(
-                False,
-                "cannot move a process into the delegated scope's "
-                f"cgroup.procs ({moved}) — cgroup-v2 delegation does not "
-                "reach this process's own cgroup, which is exactly what "
-                "aplexer's workload spawn needs",
-            )
     finally:
         _stop_probe_scope(unit, anchor, env=env)
     return DelegationProbe(True)
@@ -214,20 +206,6 @@ def _wait_for_scope_cgroup(
         if anchor.poll() is not None:
             return None
         time.sleep(0.1)
-    return None
-
-
-def _can_move_a_process_into(cgroup: Path) -> Optional[str]:
-    """None when a throwaway child can join ``cgroup``, else the OS error."""
-    child = subprocess.Popen(["sleep", "10"], stdout=subprocess.DEVNULL)
-    try:
-        with open(cgroup / "cgroup.procs", "w", encoding="ascii") as handle:
-            handle.write(str(child.pid))
-    except OSError as exc:
-        return f"{exc.strerror}, errno {exc.errno}"
-    finally:
-        child.kill()
-        child.wait(timeout=10)
     return None
 
 
@@ -341,17 +319,6 @@ def test_the_probe_names_a_missing_user_runtime_directory(
     probe = probe_cgroup_delegation()
     assert not probe.available
     assert "no user runtime directory at /run/user/65534" in probe.missing
-
-
-def test_the_probe_reports_a_cgroup_it_cannot_move_a_process_into() -> None:
-    """The step PR #2590's runner failed on, exercised against an unwritable dir.
-
-    `/proc` accepts no new files for anyone, root included, so this branch is
-    deterministic wherever the suite runs — unlike a real cgroup, whose
-    writability is exactly the host property under test.
-    """
-    error = _can_move_a_process_into(Path("/proc"))
-    assert error is not None and "errno" in error
 
 
 def test_the_pr_2590_runner_failure_is_classified_as_a_host_refusal() -> None:

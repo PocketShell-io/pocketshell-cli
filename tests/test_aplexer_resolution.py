@@ -561,6 +561,11 @@ def test_aplexer_is_pinned_exactly() -> None:
       tombstone under retired-sessions/ and answers quiet success, first
       kill and repeat alike (aplexer#2665), which `pocketshell sessions
       kill` surfaces directly.
+    * 0.1.7, never 0.1.6 — 0.1.6 spawns a placeholder anchor scope and
+      expects the workload to migrate itself into it, which `nsdelegate`
+      boxes EACCES-refuse: every capped start fails closed there. 0.1.7
+      hands the workload argv to `systemd-run --scope` so systemd places
+      it as the scope's initial process (aplexer#13); nothing migrates.
 
     This assertion only guards the STRING. ``test_aplexer_contract.py`` pins
     the behaviours themselves against the bundled binary, which is the part
@@ -568,7 +573,7 @@ def test_aplexer_is_pinned_exactly() -> None:
     """
     requirement = _aplexer_requirement()
     pin = requirement.split(";")[0].strip()
-    assert pin == "aplexer==0.1.6", pin
+    assert pin == "aplexer==0.1.7", pin
 
 
 def test_aplexer_dependency_marker_is_linux_only() -> None:
