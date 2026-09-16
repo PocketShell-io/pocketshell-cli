@@ -3,27 +3,27 @@ revision = 3
 requires-python = ">=3.11"
 
 [options]
-exclude-newer = "2026-09-08T22:00:00Z"
+exclude-newer = "2026-09-16T07:00:00Z"
 
 [[package]]
 name = "aplexer"
-version = "0.1.5"
+version = "0.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aplexer-client" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/7d/389a7bf716c09aca91ce99b71544c8619db7380d66425ce459e883911ef8/aplexer-0.1.5-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:251432e441341a431a5ee5485a1a96935092103fdc5dd3cd4ee7ffbefb5aeb24", size = 3093121, upload-time = "2026-09-08T21:06:09.724Z" },
-    { url = "https://files.pythonhosted.org/packages/da/1e/9b9acd6f0a915e9a0cee6042c4005c4f34bb4c87d991a2e1a2a048149c8a/aplexer-0.1.5-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:b1dee06a0659f175b2eeb344478289b04428dc537948e2009f04ff9eef8540fd", size = 3210572, upload-time = "2026-09-08T21:06:11.421Z" },
+    { url = "https://files.pythonhosted.org/packages/22/c4/df9bdfe9314ba1b2226ec83883044f2a10d5e33f46beff741e781e63a08a/aplexer-0.1.6-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:5212ad3ab4122e18f4d66c2a1e25d0a93a9d23b2ad654700b601a7ecfb23817c", size = 3287509, upload-time = "2026-09-16T06:15:49.353Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/88/7701407cc9246d07b55827152d36dceb131f82a54dc0974a86055e6e4c33/aplexer-0.1.6-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:945057288fa546c5d69784e54232760d035f220d2336c8efddf4d27103a08cf6", size = 3433090, upload-time = "2026-09-16T06:15:50.792Z" },
 ]
 
 [[package]]
 name = "aplexer-client"
-version = "0.1.5"
+version = "0.1.6"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/59/5c4e64bcbb724cc1f066d7abedd5ea2fcb2702927f3694c6fa2a62d51836/aplexer_client-0.1.5-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:afd285083fc61e525363a7dc11bc6889401fc488366de3241dbb6b38cd01a920", size = 1242100, upload-time = "2026-09-08T21:06:04.774Z" },
-    { url = "https://files.pythonhosted.org/packages/bd/b9/3b15a37009ae09e973e5350182046e1fdcbe5e2608cbed78376bc199c7f1/aplexer_client-0.1.5-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8f8b26005bcd81a1955257751fcc1d727ccf75c7da3f0c802d6c9da67c6b1143", size = 1274674, upload-time = "2026-09-08T21:06:06.105Z" },
+    { url = "https://files.pythonhosted.org/packages/31/74/9a3b9649bb5bc25ea34fdcb587abba527e2d9d0fff55a7a2554a0331ac8e/aplexer_client-0.1.6-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:bcb19114e6fc97b2b1311e36a05f6e5b9a676c9892b6e72eb404806b12a9321f", size = 1244980, upload-time = "2026-09-16T06:15:44.113Z" },
+    { url = "https://files.pythonhosted.org/packages/82/5f/7f4ec3ed7a7d23f33808c63dfb2fbe8fdfef99a4726fa4b71fe034c97738/aplexer_client-0.1.6-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:bca3d745fb072d6ba79d8ccfbddacffc93f0d051e0df07c3fc25d890c3d8197c", size = 1285435, upload-time = "2026-09-16T06:15:45.629Z" },
 ]
 
 [[package]]
@@ -242,7 +242,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aplexer", marker = "sys_platform == 'linux'", specifier = "==0.1.5" },
+    { name = "aplexer", marker = "sys_platform == 'linux'", specifier = "==0.1.6" },
     { name = "click", specifier = ">=8.2.0" },
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.0" },

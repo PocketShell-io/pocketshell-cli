@@ -1077,6 +1077,87 @@ def test_bundled_aplexer_exposes_the_surface_pocketshell_drives(
     )
 
 
+# ---------------------------------------------------------------------------
+# aplexer#2665 — a kill for a FINISHED session answers success, not failure
+# ---------------------------------------------------------------------------
+#
+# Through 0.1.5 the worker's finalization removed the durable record the
+# moment a session exited cleanly, so a kill whose target had already
+# finished resolved to `no matching session` and exit 1 — a spurious
+# failure for an outcome that was already fully achieved. Every removal
+# now leaves a tombstone under `retired-sessions/<id>`, and the kill path
+# answers a tombstoned target with quiet success. Pinned here because
+# pocketshell's own kill verb surfaces aplexer's exit code directly.
+
+
+def test_bundled_aplexer_kill_of_finished_session_succeeds(aplexer_fixture) -> None:
+    """Start a session that exits immediately, then kill the corpse.
+
+    The row must leave the registry on its own (worker finalization), a
+    tombstone must remain behind as the durable answer, and BOTH the first
+    kill and a repeat kill must exit 0. On a wheel predating the tombstone
+    fix the first kill fails with `no matching session` (exit 1) — that red
+    is the contract this test exists to pin.
+    """
+    tag = f"ps2665-{uuid.uuid4().hex[:8]}"
+    started = aplexer_fixture.run(
+        [
+            "--json", "start",
+            "--workspace", str(aplexer_fixture.workspace),
+            "--tag", tag,
+            "--", "/bin/true",
+        ]
+    )
+    assert started.returncode == 0, (
+        started.stderr.strip() or started.stdout.strip()
+    )
+    session_id = json.loads(started.stdout)["id"]
+
+    def gone_from_registry() -> bool:
+        rows = [
+            row for row in aplexer_fixture.json(["list"]) if row["tag"] == tag
+        ]
+        return rows == []
+
+    _poll(gone_from_registry, lambda gone: gone, timeout=15.0)
+    assert gone_from_registry(), (
+        f"session {tag} never finished and left the registry; the fixture "
+        "no longer reproduces the finished-session kill"
+    )
+
+    tombstone = aplexer_fixture.state_dir / "retired-sessions" / session_id
+    assert tombstone.exists(), (
+        f"finished session {session_id} left no tombstone under "
+        f"retired-sessions/, so a kill has no durable answer for it"
+    )
+
+    killed = aplexer_fixture.run(
+        [
+            "kill",
+            "--workspace", str(aplexer_fixture.workspace),
+            "--tag", tag,
+        ]
+    )
+    assert killed.returncode == 0, (
+        "a kill for a finished session must answer success (aplexer#2665 "
+        f"tombstone), got exit {killed.returncode}: "
+        f"{killed.stderr.strip() or killed.stdout.strip()}"
+    )
+
+    repeat = aplexer_fixture.run(
+        [
+            "kill",
+            "--workspace", str(aplexer_fixture.workspace),
+            "--tag", tag,
+        ]
+    )
+    assert repeat.returncode == 0, (
+        "a repeat kill of a tombstoned session must stay a quiet success, "
+        f"got exit {repeat.returncode}: "
+        f"{repeat.stderr.strip() or repeat.stdout.strip()}"
+    )
+
+
 def test_bundled_aplexer_reports_the_pinned_version(aplexer_fixture) -> None:
     """Sanity only: the bundled binary IS the pinned wheel.
 

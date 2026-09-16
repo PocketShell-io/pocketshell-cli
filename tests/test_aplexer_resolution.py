@@ -556,6 +556,11 @@ def test_aplexer_is_pinned_exactly() -> None:
       cannot say WHICH agent a session is running. `engine` cannot stand in
       for it: every session PocketShell creates is `engine: "shell"` with the
       agent launched by hand inside it (issue #2581).
+    * 0.1.6, never 0.1.5 — 0.1.5 answers a kill for an already-finished
+      session with `no matching session` and exit 1; 0.1.6 leaves a
+      tombstone under retired-sessions/ and answers quiet success, first
+      kill and repeat alike (aplexer#2665), which `pocketshell sessions
+      kill` surfaces directly.
 
     This assertion only guards the STRING. ``test_aplexer_contract.py`` pins
     the behaviours themselves against the bundled binary, which is the part
@@ -563,7 +568,7 @@ def test_aplexer_is_pinned_exactly() -> None:
     """
     requirement = _aplexer_requirement()
     pin = requirement.split(";")[0].strip()
-    assert pin == "aplexer==0.1.5", pin
+    assert pin == "aplexer==0.1.6", pin
 
 
 def test_aplexer_dependency_marker_is_linux_only() -> None:
