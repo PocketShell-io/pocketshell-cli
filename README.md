@@ -57,6 +57,8 @@ pocketshell sessions list --json           # schema-3 aplexer session rows
 pocketshell sessions create NAME --json      # create or reuse a session
 pocketshell sessions attach NAME             # attach to a live session
 pocketshell sessions kill NAME --json        # stop and reap a session
+pocketshell sessions warnings [--json]     # unacknowledged crash/OOM warnings
+pocketshell sessions ack [NAME] [--json]     # acknowledge crash warnings
 pocketshell agent-log ...                   # agent conversation logs
 pocketshell repos list ...                  # local / GitHub repositories
 pocketshell github status [--json]          # gh install / auth state
@@ -84,6 +86,8 @@ pocketshell sessions list --json
 pocketshell sessions create my-session --cwd ~/git/project --mem none --json
 pocketshell sessions attach my-session
 pocketshell sessions kill my-session --json
+pocketshell sessions warnings --json
+pocketshell sessions ack my-session
 ```
 
 The list and lifecycle responses use schema 3. Rows carry the aplexer id,
@@ -91,6 +95,13 @@ workspace, tag, phase, attachment state, and agent metadata; there is no
 backend discriminator or legacy session socket. Create is idempotent for the
 same workspace and tag. Kill stops the workload and reaps the aplexer record
 before returning its JSON result.
+
+Crash/OOM warnings are ack-gated: when aplexer records a session as
+OOM-killed, dead without an exit, or finalized with a fatal error, a durable
+warning rides every human `sessions list` (and `sessions warnings` lists them
+all) and survives until an explicit `sessions ack NAME` — or a bare
+`sessions ack` for everything. The JSON listing is untouched; the banner
+stays hidden on bundled aplexer builds without the warnings subcommand.
 
 ### `pocketshell usage`
 

@@ -11,10 +11,10 @@ from pocketshell.runtime import sessions as session_enum
 from pocketshell.sessions import listing as listing_mod
 
 
-def test_help_exposes_only_the_four_session_lifecycle_commands() -> None:
+def test_help_exposes_the_session_lifecycle_commands() -> None:
     result = CliRunner().invoke(sessions.sessions_group, ["--help"])
     assert result.exit_code == 0, result.output
-    for command in ("list", "create", "attach", "kill"):
+    for command in ("list", "create", "attach", "kill", "warnings", "ack"):
         assert command in result.output
     assert "resumable" not in result.output
     assert "resume" not in result.output

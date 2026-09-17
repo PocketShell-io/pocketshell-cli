@@ -8,6 +8,16 @@ from pocketshell.runtime import sessions as _session_enum
 # --- sibling modules ---
 from pocketshell.sessions.cli import sessions_group
 from pocketshell.sessions.create import CREATE_SCHEMA_VERSION
+from pocketshell.sessions.warnings import fetch_warnings, format_warnings_banner
+
+
+def _warnings_banner() -> str:
+    """The crash-warning coda under the human listing; empty on any probe
+    failure — a listing must not fail over warnings it cannot fetch."""
+    warnings = fetch_warnings()
+    if not warnings:
+        return ""
+    return format_warnings_banner(warnings)
 
 
 def _emit_envelope(ctx: click.Context, envelope: Mapping[str, Any]) -> None:
@@ -57,6 +67,11 @@ def _list_envelope(*, as_json: bool) -> dict[str, Any]:
         stdout = json.dumps(_session_enum.json_payload(sessions, errors), indent=2) + "\n"
     else:
         stdout = _session_enum.format_aplexer_table(sessions)
+        # Issue #18: crash/OOM warnings ride every human listing (the daemon
+        # path lands here too); the schema-3 JSON contract stays untouched.
+        banner = _warnings_banner()
+        if banner:
+            stdout = f"{stdout}\n{banner}" if stdout else banner
 
     if errors:
         detail = "; ".join(str(error.get("message") or "session enumeration failed") for error in errors)

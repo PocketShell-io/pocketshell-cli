@@ -41,6 +41,14 @@ from pocketshell.sessions.listing import (
     daemon_handler_list,
     sessions_list,
 )
+from pocketshell.sessions.warnings import (
+    WARNINGS_SCHEMA_VERSION,
+    ack_warnings,
+    fetch_warnings,
+    format_warnings_banner,
+    sessions_ack,
+    sessions_warnings,
+)
 from pocketshell.runtime import memcap as _memcap  # noqa: F401  (tests patch sessions._memcap)
 from pocketshell import profiles as _profiles  # noqa: F401  (tests patch sessions._profiles)
 from pocketshell.runtime import sessions as _session_enum  # noqa: F401  (tests patch sessions._session_enum)
@@ -74,4 +82,10 @@ __all__ = [
     "sessions_kill",
     "RENAME_SCHEMA_VERSION",
     "sessions_rename",
+    "WARNINGS_SCHEMA_VERSION",
+    "ack_warnings",
+    "fetch_warnings",
+    "format_warnings_banner",
+    "sessions_ack",
+    "sessions_warnings",
 ]
