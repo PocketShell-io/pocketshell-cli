@@ -566,6 +566,11 @@ def test_aplexer_is_pinned_exactly() -> None:
       boxes EACCES-refuse: every capped start fails closed there. 0.1.7
       hands the workload argv to `systemd-run --scope` so systemd places
       it as the scope's initial process (aplexer#13); nothing migrates.
+    * 0.1.8, never 0.1.7 — the crash/OOM warnings UI (`pocketshell
+      sessions warnings` / `sessions ack`, issue #18) shells out to `a
+      warnings` / `a ack`, which only exist from 0.1.8; on 0.1.7 the
+      bundled binary has no warnings subcommand and the UI degrades to
+      its quiet no-warning path.
 
     This assertion only guards the STRING. ``test_aplexer_contract.py`` pins
     the behaviours themselves against the bundled binary, which is the part
@@ -573,7 +578,7 @@ def test_aplexer_is_pinned_exactly() -> None:
     """
     requirement = _aplexer_requirement()
     pin = requirement.split(";")[0].strip()
-    assert pin == "aplexer==0.1.7", pin
+    assert pin == "aplexer==0.1.8", pin
 
 
 def test_aplexer_dependency_marker_is_linux_only() -> None:

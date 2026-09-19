@@ -103,6 +103,16 @@ dependencies = [
     # #2562 kernel proof (scripts/check-cgroup-cap-proof.sh) finally runs
     # on them.
     #
+    # 0.1.8 ships the ack-gated crash/OOM warnings that `pocketshell
+    # sessions warnings` / `sessions ack` (issue #18) shell out to: `a
+    # warnings [--json]` lists the durable warnings (they survive `a
+    # prune`), `a ack [SELECTOR]` clears them, and `a snapshot --json` /
+    # `a status --json` rows carry a `warning` field. f02cb87 built that
+    # UI with a quiet degrade for builds without the subcommands — which
+    # meant the pinned 0.1.7, so the feature stayed dormant until this
+    # bump. 0.1.8 also adds `a doctor`'s engine_resolution probe and
+    # Ctrl-b Ctrl-b send-prefix, neither of which pocketshell consumes.
+    #
     # `session_enum._aplexer_rows` reads that key straight onto
     # `LiveSession.agent` and schema 3 emits it on every row. Against 0.1.3
     # the key is simply absent and every row reports `agent: null` — the
@@ -175,12 +185,12 @@ dependencies = [
     # no bundled aplexer at all, so `sessions create` there fails loud (there
     # is no PATH fallback — D22).
     #
-    # Install-surface note (unchanged in 0.1.7): as of 0.1.2 the wheels moved
+    # Install-surface note (unchanged through 0.1.8): as of 0.1.2 the wheels moved
     # from manylinux_2_17 to manylinux_2_28, raising the minimum glibc from
     # 2.17 to 2.28. Linux hosts older than that (CentOS 7, Ubuntu 18.04) can
     # no longer install pocketshell at all now that aplexer is a hard
     # dependency. Flagged, not solved here — see docs/aplexer-integration.md.
-    "aplexer==0.1.7; sys_platform == 'linux'",
+    "aplexer==0.1.8; sys_platform == 'linux'",
 ]
 
 [project.scripts]
@@ -240,7 +250,9 @@ required-version = "==0.10.11"
 # kill-tombstone fix (aplexer#2665).
 # 0.1.7 uploaded at 2026-09-16T22:31:11Z (client at 22:31:06Z) for the
 # systemd-run workload placement (aplexer#13).
-exclude-newer = "2026-09-16T23:00:00Z"
+# 0.1.8 uploaded at 2026-09-19T22:39:45Z (client at 22:39:39Z) for the
+# ack-gated crash/OOM warnings UI (issue #18).
+exclude-newer = "2026-09-19T23:00:00Z"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
