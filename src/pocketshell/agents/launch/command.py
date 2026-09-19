@@ -18,8 +18,8 @@ def build_argv(kind: str, *, skip_permissions: bool) -> list[str]:
       ``skip_permissions`` (the ``csp`` alias). The trust dialog is
       suppressed out-of-band by pre-seeding ``~/.claude.json`` (see
       :func:`seed_claude_trust`), not via argv.
-    - **opencode** — no skip flag (permissions are config-driven in
-      ``opencode.json``); the billing fix is the env strip, not a flag.
+    - **opencode** — ``--yolo`` when ``skip_permissions`` (hidden alias
+      for ``--auto``: auto-approve permissions not explicitly denied).
     """
     try:
         manifest = engine_for(kind)
