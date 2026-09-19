@@ -61,7 +61,10 @@ _OPENCODE = EngineManifest(
     label="OpenCode",
     provider_mark="OpenCode",
     usage_provider="go",
-    launch=LaunchSpec(argv=("opencode",)),
+    launch=LaunchSpec(
+        argv=("opencode",),
+        skip_permissions_argv=("--yolo",),
+    ),
 )
 
 _GROK = EngineManifest(
