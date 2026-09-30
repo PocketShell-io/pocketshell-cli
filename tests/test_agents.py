@@ -246,10 +246,10 @@ def test_claude_argv_skip_permissions_flag():
     assert off == ["claude"]
 
 
-def test_opencode_argv_yolo_flag():
+def test_opencode_argv_auto_flag():
     on = agents.build_argv("opencode", skip_permissions=True)
     off = agents.build_argv("opencode", skip_permissions=False)
-    assert on == ["opencode", "--yolo"]
+    assert on == ["opencode", "--auto"]
     assert off == ["opencode"]
 
 
@@ -392,7 +392,7 @@ def test_launch_agent_opencode_strips_env(tmp_path, monkeypatch):
         execvpe=fake_execvpe,
     )
     assert "OPENAI_API_KEY" not in captured["env"]
-    assert captured["argv"] == ["opencode", "--yolo"]
+    assert captured["argv"] == ["opencode", "--auto"]
 
 
 def test_launch_agent_claude_strips_env(tmp_path, monkeypatch):

@@ -18,8 +18,12 @@ def build_argv(kind: str, *, skip_permissions: bool) -> list[str]:
       ``skip_permissions`` (the ``csp`` alias). The trust dialog is
       suppressed out-of-band by pre-seeding ``~/.claude.json`` (see
       :func:`seed_claude_trust`), not via argv.
-    - **opencode** — ``--yolo`` when ``skip_permissions`` (hidden alias
-      for ``--auto``: auto-approve permissions not explicitly denied).
+    - **opencode** — ``--auto`` when ``skip_permissions`` (opencode's
+      documented "auto-approve permissions that are not explicitly denied"
+      flag; ``--yolo`` is a hidden alias for the same switch). Applies only
+      on the fallback path — when aplexer is reachable its
+      ``launch-spec`` owns the argv, and the matching flag is declared in
+      aplexer's ``builtin_engines()``.
     """
     try:
         manifest = engine_for(kind)

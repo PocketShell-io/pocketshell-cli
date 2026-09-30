@@ -63,7 +63,16 @@ _OPENCODE = EngineManifest(
     usage_provider="go",
     launch=LaunchSpec(
         argv=("opencode",),
-        skip_permissions_argv=("--yolo",),
+        # opencode's documented "auto-approve permissions that are not
+        # explicitly denied" flag. `--yolo` and
+        # `--dangerously-skip-permissions` are hidden aliases for the same
+        # switch; the documented one is used so an opencode release that
+        # drops the hidden aliases cannot silently break yolo launches.
+        # Keep in sync with aplexer's `builtin_engines()` -- aplexer is
+        # authoritative for the argv this CLI actually execs (see
+        # `agents/launch/run.py::_build_launch`), so a divergence here is
+        # silently dead in production.
+        skip_permissions_argv=("--auto",),
     ),
 )
 
