@@ -91,9 +91,23 @@ _GROK = EngineManifest(
 )
 
 
+_ANTIGRAVITY = EngineManifest(
+    id="antigravity",
+    family="antigravity",
+    harness="agy",
+    label="Antigravity",
+    provider_mark="Google",
+    # No supported quse quota backend or profile-directory override yet.
+    launch=LaunchSpec(
+        argv=("agy",),
+        skip_permissions_argv=("--dangerously-skip-permissions",),
+    ),
+)
+
+
 def builtin_manifests() -> tuple[EngineManifest, ...]:
     """Return the shipped registry entries in the established picker order."""
-    return (_CLAUDE, _CODEX, _OPENCODE, _GROK)
+    return (_CLAUDE, _CODEX, _OPENCODE, _GROK, _ANTIGRAVITY)
 
 
 def builtin_engine_ids() -> tuple[str, ...]:

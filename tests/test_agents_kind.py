@@ -350,3 +350,25 @@ def test_pane_option_form(tmp_path: Path) -> None:
     out = json.loads(result.output)
     assert out["results"][0]["pane_id"] == "%1"
     assert out["results"][0]["agent_kind"] == "claude"
+
+
+@pytest.mark.parametrize("comm,cmdline", [
+    ("agy", "agy --dangerously-skip-permissions"),
+    ("MainThread", "/home/u/.local/bin/agy --continue"),
+])
+def test_classifies_antigravity_in_own_scope(tmp_path, comm, cmdline):
+    host = _FakeHost(tmp_path)
+    _seed_claude(host)
+    scope = "aplexer-workload-google.scope"
+    host.add_proc(3601, scope=scope, comm="bash", cmdline="-bash")
+    host.add_proc(3602, scope=scope, comm=comm, cmdline=cmdline)
+    host.add_scope(scope, [3601, 3602])
+    output = _invoke([
+        {"pane_id": "%1", "pane_pid": 1001},
+        {"pane_id": "%2", "pane_pid": 3601},
+    ], host)
+    assert output["results"][0]["agent_kind"] == "claude"
+    assert output["results"][1] == {
+        "pane_id": "%2", "agent_kind": "antigravity",
+        "scope": scope, "evidence_pid": 3602,
+    }

@@ -22,7 +22,7 @@ _SKIP_PERM_OPTION = click.option(
     show_default=True,
     help=(
         "Launch with per-action approval prompts disabled "
-        "(codex YOLO / claude bypass / opencode --auto / grok --always-approve)."
+        "(codex YOLO / claude bypass / opencode --auto / grok --always-approve / agy bypass)."
     ),
 )
 _CONFIG_DIR_OPTION = click.option(

@@ -49,6 +49,7 @@ AGENT_CLAUDE = "claude"
 AGENT_CODEX = "codex"
 AGENT_OPENCODE = "opencode"
 AGENT_GROK = "grok"
+AGENT_ANTIGRAVITY = "antigravity"
 AGENT_NONE = "none"
 AGENT_UNKNOWN = "unknown"
 
@@ -64,6 +65,7 @@ _AGENT_TOKEN_PATTERNS: Sequence[tuple[str, str]] = (
     (AGENT_CODEX, r"codex"),
     (AGENT_OPENCODE, r"open[-_]?code(?:[-_][a-z0-9]+)?"),
     (AGENT_GROK, r"grok"),
+    (AGENT_ANTIGRAVITY, r"(?:agy|antigravity)"),
 )
 
 # Pre-compile the boundary-wrapped matchers once. The guard is identical to

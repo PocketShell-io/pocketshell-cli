@@ -24,6 +24,8 @@ def build_argv(kind: str, *, skip_permissions: bool) -> list[str]:
       on the fallback path — when aplexer is reachable its
       ``launch-spec`` owns the argv, and the matching flag is declared in
       aplexer's ``builtin_engines()``.
+    - **antigravity** — ``agy --dangerously-skip-permissions`` when
+      ``skip_permissions``. Uses Google sign-in with provider keys stripped.
     """
     try:
         manifest = engine_for(kind)

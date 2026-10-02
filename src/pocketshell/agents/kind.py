@@ -147,7 +147,7 @@ def _classify_in_process(
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
         "Host-side agent-awareness helpers for the PocketShell client.\n\n"
-        "`kind` classifies the coding-agent (claude / codex / opencode) "
+        "`kind` classifies the coding-agent (claude / codex / opencode / grok / antigravity) "
         "running in each aplexer workload's cgroup scope — the CLI seam over the "
         "`agents.kind_for_panes` daemon RPC. See epic #821."
     ),
@@ -166,7 +166,7 @@ def agents_group() -> None:
         "`--pane PANE_ID=PANE_PID`. Emits "
         "`{\"results\": [{\"pane_id\", \"agent_kind\", \"scope\", "
         "\"evidence_pid\"?}]}` as JSON on stdout. `agent_kind` is one of "
-        "claude / codex / opencode / none (scope, no agent) / unknown "
+        "claude / codex / opencode / grok / antigravity / none (scope, no agent) / unknown "
         "(pane pid/cgroup unreadable). Empty input -> `{\"results\": []}`."
     ),
 )

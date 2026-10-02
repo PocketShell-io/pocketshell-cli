@@ -443,7 +443,7 @@ def test_manifest_probe_skips_the_login_shell_when_every_harness_is_on_path(tmp_
     """The happy path stays subprocess-free (the issue's no-polling non-goal)."""
     engines.clear_resolution_cache()
     exec_bin = tmp_path / "exec-bin"
-    for name in ("claude", "codex", "opencode", "grok"):
+    for name in ("claude", "codex", "opencode", "grok", "agy"):
         _install_stub(exec_bin, name)
     calls_log = tmp_path / "login-shell-calls.txt"
     shell = _fake_login_shell(tmp_path, str(exec_bin), calls_log)
@@ -725,6 +725,7 @@ def test_aplexer_engine_probe_failure_keeps_builtins(install_fake_a):
         "codex",
         "opencode",
         "grok",
+        "antigravity",
     ]
 
 
