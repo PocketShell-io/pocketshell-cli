@@ -9,14 +9,14 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PROJECT_REL="."
-SOURCE_REL="$PROJECT_REL/src/pocketshell/usage.py"
+SOURCE_REL="$PROJECT_REL/src/pocketshell/usage/normalize.py"
 SOURCE="$ROOT_DIR/$SOURCE_REL"
 
 SANDBOX="$(mktemp -d "/tmp/pocketshell-issue-2274-mutation.XXXXXX")"
 EVIDENCE="$SANDBOX/evidence"
 CANDIDATE="$SANDBOX/pocketshell"
-CANDIDATE_SOURCE="$CANDIDATE/src/pocketshell/usage.py"
-PRISTINE_SOURCE="$SANDBOX/usage.py.pristine"
+CANDIDATE_SOURCE="$CANDIDATE/$SOURCE_REL"
+PRISTINE_SOURCE="$SANDBOX/normalize.py.pristine"
 mkdir -p "$EVIDENCE" "$CANDIDATE"
 
 PYTHON="${POCKETSHELL_PYTHON:-$ROOT_DIR/$PROJECT_REL/.venv/bin/python}"
