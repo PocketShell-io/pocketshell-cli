@@ -290,7 +290,7 @@ def _probe_aplexer(
 
     Issue #2: the probe used to re-derive off/absent/failed and then throw
     aplexer's self-diagnosing stderr away, so a bricked registry reached the
-    phone as a silent tmux-only tree. The failure taxonomy now comes from
+    phone as a silently empty session tree. The failure taxonomy now comes from
     :func:`aplexer.run_json_reported` and the message carries it verbatim.
     """
     if not aplexer.enabled("sessions", env):
