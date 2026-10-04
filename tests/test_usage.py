@@ -17,10 +17,10 @@ Go quota the Usage panel needs — which the 0.0.14 release could not report at 
 Most tests stub ``pocketshell.usage.quse._resolve_quse_binary`` and
 ``subprocess.run`` so they never invoke a real ``quse`` binary; the contract
 under test is "pocketshell resolves the bundled quse and flattens its schema
-correctly". The two ``test_installed_quse_*`` tests deliberately do NOT stub:
+correctly". The ``test_installed_quse_*`` tests deliberately do NOT stub:
 they exercise the REAL compatible wheel installed alongside the interpreter,
 which is what actually broke the maintainer's ``pocketshell usage go --json``
-(#2293).
+(#2293), and the same mechanism the ``gemini`` provider rode in on (0.0.17).
 """
 
 from __future__ import annotations
@@ -68,6 +68,13 @@ _FIXTURE_0015_PROVENANCE = _DATA / "quse-0.0.15-usage.provenance.txt"
 # byte-identical at the split, and any change to either side is a deliberate,
 # reviewed change that must update the sibling copy in the same breath.
 _FIXTURE_0015_NDJSON = _DATA / "quse-0.0.15-usage.ndjson"
+# Captured LIVE from the published quse 0.0.17 wheel (`quse gemini --json`) on
+# 2026-10-04. 0.0.17 added the `gemini` provider — the Antigravity CLI quota,
+# aliases `antigravity` / `agy` — the usage panel's seventh row; see the
+# adjacent .provenance.txt sidecar for the wheel digest and the capture
+# command.
+_FIXTURE_0017_GEMINI = _DATA / "quse-0.0.17-gemini.json"
+_FIXTURE_0017_GEMINI_PROVENANCE = _DATA / "quse-0.0.17-gemini.provenance.txt"
 _LOCK = Path(__file__).resolve().parent.parent / "uv.lock"
 
 # The published 0.0.15 shape for a span that does not apply to a provider: the
@@ -164,6 +171,26 @@ def test_installed_quse_wheel_advertises_the_go_provider() -> None:
     )
 
 
+def test_installed_quse_wheel_advertises_the_gemini_provider() -> None:
+    """RED on quse==0.0.16: that wheel had no `gemini` provider.
+
+    Same mechanism as the `go` test above: `pocketshell usage` has no provider
+    allowlist of its own, so the Antigravity quota (`gemini`, the `agy`
+    harness) reaches the usage panel only through the dependency floor. The
+    0.0.17 wheel added it; the lock ships it.
+    """
+    from quse.usage import SUPPORTED_USAGE_PROVIDERS, USAGE_PROVIDER_CHOICES
+
+    assert "gemini" in USAGE_PROVIDER_CHOICES, (
+        "the installed quse must advertise the `gemini` provider; got "
+        f"{USAGE_PROVIDER_CHOICES}"
+    )
+    assert "gemini" in SUPPORTED_USAGE_PROVIDERS, (
+        "`gemini` must be a SUPPORTED provider, not an unsupported placeholder; got "
+        f"{SUPPORTED_USAGE_PROVIDERS}"
+    )
+
+
 def test_pocketshell_usage_go_json_reaches_the_installed_quse() -> None:
     """End-to-end reproduction of the maintainer's #2293 symptom.
 
@@ -195,6 +222,41 @@ def test_pocketshell_usage_go_json_reaches_the_installed_quse() -> None:
     record = json.loads(lines[0])
     assert record["provider"] == "go"
     assert isinstance(record["windows"], dict)
+
+
+def test_pocketshell_usage_gemini_json_reaches_the_installed_quse() -> None:
+    """The Antigravity quota reaches `pocketshell usage gemini --json` end to end.
+
+    The `go` test's mechanism, re-checked for the provider that motivated the
+    0.0.17 floor bump: runs the REAL CLI against the REAL installed quse
+    console-script (no subprocess stub, no daemon) and asserts the provider is
+    REACHABLE, never a live quota number. Credential-independent AND
+    latency-independent: quse's own `agy` harness has a 15 s quota timeout, so
+    a slow provider RPC legitimately produces an error record (plus quse's
+    human note line) — what must never happen is the #2293 rejection shape,
+    `Unknown provider 'gemini'`, which is the dependency floor's job.
+    """
+    assert _resolve_quse_binary() is not None, (
+        "the bundled quse console-script must be installed next to the "
+        "interpreter for this end-to-end check"
+    )
+    runner = CliRunner()
+    result = runner.invoke(usage_command, ["gemini", "--json", "--no-daemon"])
+
+    assert "Unknown provider" not in result.output, (
+        "the installed quse rejected the `gemini` provider — "
+        f"{result.output.strip()}"
+    )
+    records = []
+    for ln in result.output.splitlines():
+        try:
+            parsed = json.loads(ln)
+        except json.JSONDecodeError:
+            continue  # quse's human note lines ride beside the NDJSON
+        if isinstance(parsed, dict) and parsed.get("provider") == "gemini":
+            records.append(parsed)
+    assert records, f"no `gemini` NDJSON record in the answer: {result.output.strip()}"
+    assert isinstance(records[0]["windows"], dict)
 
 
 def test_resolve_quse_binary_uses_bundled_env_next_to_interpreter(tmp_path: Path) -> None:
@@ -348,6 +410,49 @@ def test_committed_producer_ndjson_matches_normalize_output() -> None:
     against stale bytes.
     """
     assert _FIXTURE_0015_NDJSON.read_text() == normalize_usage_stdout(_quse_keyed_json())
+
+
+def test_flatten_forwards_the_0017_gemini_record_unchanged() -> None:
+    """AC: the Antigravity quota rides the same passthrough as every provider.
+
+    The 0.0.17 gemini capture (provenance beside the fixture) is the seventh
+    provider's wire shape: the boundary injects the `provider` key and
+    forwards the record — including the provider-owned `details.groups` bucket
+    breakdown — verbatim. A boundary that started re-deriving gemini windows
+    or trimming details would break this equality.
+    """
+    assert (
+        "Wheel SHA-256: "
+        "4baff11a89650db44d89908fd43cdac3357f369a062a9f6eb0f7d581f62884ea"
+        in _FIXTURE_0017_GEMINI_PROVENANCE.read_text()
+    )
+    raw = json.loads(_FIXTURE_0017_GEMINI.read_text())
+    assert set(raw) == {"gemini"}
+    record = raw["gemini"]
+    assert set(record) == {"details", "error", "status", "windows"}
+    assert set(record["windows"]) == {"5h", "7d", "monthly"}
+
+    out = normalize_usage_stdout(_FIXTURE_0017_GEMINI.read_text())
+    lines = [json.loads(ln) for ln in out.splitlines()]
+    assert len(lines) == 1
+    assert lines[0] == {"provider": "gemini", **record}
+
+    # Spot-check the load-bearing values so a passthrough that silently
+    # emptied the map could not satisfy the equality above vacuously.
+    gemini = lines[0]
+    assert gemini["status"] == "ok"
+    assert gemini["windows"]["5h"] == {
+        "percent_remaining": 88.83,
+        "reset_at": "2026-10-04T15:24:26Z",
+        "rolling": False,
+    }
+    assert gemini["windows"]["7d"]["percent_remaining"] == 79.39
+    assert gemini["windows"]["monthly"]["percent_remaining"] is None
+    assert gemini["details"]["limit_reached"] is False
+    assert [g["name"] for g in gemini["details"]["groups"]] == [
+        "Gemini Models",
+        "Claude and GPT models",
+    ]
 
 
 def test_flatten_handles_single_provider_shape() -> None:

@@ -252,7 +252,10 @@ required-version = "==0.10.11"
 # systemd-run workload placement (aplexer#13).
 # 0.1.8 uploaded at 2026-09-19T22:39:45Z (client at 22:39:39Z) for the
 # ack-gated crash/OOM warnings UI (issue #18).
-exclude-newer = "2026-09-19T23:00:00Z"
+# quse 0.0.17 uploaded at 2026-10-02T08:56:21Z for the `gemini` provider (the
+# Antigravity CLI quota; aliases `antigravity` / `agy`) — the usage panel's
+# seventh row.
+exclude-newer = "2026-10-02T12:00:00Z"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

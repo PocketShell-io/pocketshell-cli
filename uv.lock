@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.11"
 
 [options]
-exclude-newer = "2026-09-19T23:00:00Z"
+exclude-newer = "2026-10-02T12:00:00Z"
 
 [[package]]
 name = "aplexer"
@@ -370,14 +370,14 @@ wheels = [
 
 [[package]]
 name = "quse"
-version = "0.0.16"
+version = "0.0.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c4/95/a4fa4beb36c7c5a6c1a2970cfb5c272670c3878c5df9da31f0e630097485/quse-0.0.16.tar.gz", hash = "sha256:80f6ad4c711d9db52a371663e60f8048ee2c652ff43378b1b6d80737863d162a", size = 75264, upload-time = "2026-09-04T17:20:45.591Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/ac/e41518ab2c5da6218f80a2e6651562b17c06d4b09e18a6ee0478218e24ae/quse-0.0.17.tar.gz", hash = "sha256:11f6f9c0f0c63c0cfe32d254de1f9b0255791d4d71f65272620dfa5ab6b2a4aa", size = 83092, upload-time = "2026-10-02T08:56:22.143Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/91/81/bfdcd51edee00438636c7ee17fb899f4eb858b0af94365f884d4a923555d/quse-0.0.16-py3-none-any.whl", hash = "sha256:69b64c5768898c8868f5a2d0cf43a9991604e2fe405d692af08cd34e47916c96", size = 37508, upload-time = "2026-09-04T17:20:44.678Z" },
+    { url = "https://files.pythonhosted.org/packages/64/6c/57797a165d2a27d3f9cd1e6d2a7e07dfe582b6cfc8ed6209376c22e14ff5/quse-0.0.17-py3-none-any.whl", hash = "sha256:4baff11a89650db44d89908fd43cdac3357f369a062a9f6eb0f7d581f62884ea", size = 42559, upload-time = "2026-10-02T08:56:21.238Z" },
 ]
 
 [[package]]
