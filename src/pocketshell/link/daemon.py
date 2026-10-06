@@ -41,6 +41,21 @@ _READ_CHUNK = 65536
 _ERR_CHANNEL_BASE = 0x40000000
 
 
+def _coerce_winsize(value: Any, default: int) -> int:
+    """Clamp a client-supplied winsize into the ioctl's unsigned-short range.
+
+    Hostile or malformed values degrade to `default`; they must never raise
+    (a stray struct.error here would take the whole daemon down).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return default
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return default
+    return min(max(size, 0), 0xFFFF)
+
+
 def build_host_url(relay_url: str, token: str, host_id: str) -> str:
     split = urllib.parse.urlsplit(relay_url)
     query = urllib.parse.urlencode({"token": token, "host_id": host_id})
@@ -188,13 +203,16 @@ class _PtyChannel:
         self.term = term
         self.master: int | None = None
         self.proc: subprocess.Popen[bytes] | None = None
+        self._write_lock = asyncio.Lock()
 
     async def start(self) -> None:
         master, slave = os.openpty()
         os.set_blocking(master, False)
         self._set_winsize(master)
         env = dict(os.environ)
-        env["TERM"] = self.term or "xterm-256color"
+        # A hostile peer can put any JSON type in `term`; Popen(env=) demands
+        # str, and an uncaught TypeError would kill the daemon.
+        env["TERM"] = self.term if isinstance(self.term, str) and self.term else "xterm-256color"
         try:
             self.proc = subprocess.Popen(
                 self.cmd,
@@ -246,12 +264,30 @@ class _PtyChannel:
         self.master = None
 
     def write(self, payload: bytes) -> None:
-        if self.master is None:
-            return
-        try:
-            os.write(self.master, payload)
-        except OSError:
-            pass
+        """Queue one client data frame for the pty master.
+
+        The master is non-blocking for the reader loop, so a write can
+        hit EAGAIN or complete partially whenever the child drains
+        slower than the client sends.  Dropping either silently loses
+        terminal input, so the write rides a task that retries until
+        the buffer accepts it.
+        """
+        asyncio.get_running_loop().create_task(self._write_all(payload))
+
+    async def _write_all(self, payload: bytes) -> None:
+        async with self._write_lock:  # retries serialize: frames stay ordered
+            view = memoryview(payload)
+            while view.nbytes and self.master is not None:
+                try:
+                    written = os.write(self.master, view)
+                    if written > 0:
+                        view = view[written:]
+                        continue
+                    await asyncio.sleep(0.005)
+                except (BlockingIOError, InterruptedError):
+                    await asyncio.sleep(0.005)
+                except OSError:
+                    return  # master closed; the wait task settles the channel
 
     def resize(self, cols: int, rows: int) -> None:
         if self.master is None:
@@ -384,6 +420,22 @@ class LinkDaemon:
                     channel.kill()
 
     async def _on_control(self, frame: dict[str, Any]) -> None:
+        try:
+            await self._dispatch_control(frame)
+        except Exception:
+            # A hostile or malformed frame costs at most its own channel,
+            # never the daemon (the adversarial suite pins this).
+            log.exception("link: dropping malformed control frame")
+            channel = frame.get("ch")
+            chan = self._channels.pop(channel, None) if isinstance(channel, int) else None
+            if chan is not None:
+                chan.kill()
+                await self.send_control(
+                    "ch_error", ch=channel,
+                    code=protocol.PROTOCOL_ERROR, message="malformed frame",
+                )
+
+    async def _dispatch_control(self, frame: dict[str, Any]) -> None:
         kind = frame.get("t")
         channel = frame.get("ch")
         if kind == "open":
@@ -393,7 +445,10 @@ class LinkDaemon:
         elif kind == "resize":
             chan = self._channels.get(channel) if isinstance(channel, int) else None
             if isinstance(chan, _PtyChannel):
-                chan.resize(int(frame.get("cols") or 80), int(frame.get("rows") or 24))
+                chan.resize(
+                    _coerce_winsize(frame.get("cols") or 80, 80),
+                    _coerce_winsize(frame.get("rows") or 24, 24),
+                )
         elif kind == "eof":
             # Client→host `eof` on an exec channel is stdin EOF (host→client
             # `eof` keeps its meaning: the PTY child ended).
@@ -423,7 +478,8 @@ class LinkDaemon:
         else:
             chan = _PtyChannel(
                 self, channel, cmd,
-                int(frame.get("cols") or 80), int(frame.get("rows") or 24),
+                _coerce_winsize(frame.get("cols") or 80, 80),
+                _coerce_winsize(frame.get("rows") or 24, 24),
                 frame.get("term"),
             )
         self._channels[channel] = chan

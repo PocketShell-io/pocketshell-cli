@@ -123,7 +123,8 @@ def relay_serve(listen: str, token: str) -> None:
 
     async def _serve() -> None:
         server = await Relay(token).serve(host, port)
-        click.echo(f"relay listening on {host}:{port}", flush=True)
+        click.echo(f"relay listening on {host}:{port}")
+        sys.stdout.flush()  # click 8.2+ echo() takes no flush=; readers wait on this line
         await server.serve_forever()
 
     try:

@@ -8,6 +8,7 @@ so concurrent clients cannot collide.  It never inspects payload bytes.
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import logging
 import urllib.parse
@@ -27,15 +28,24 @@ log = logging.getLogger(__name__)
 # are small per-connection counters, so the upper half can never collide.
 _ERR_CHANNEL_BASE = 0x40000000
 
+# Adversarial bounds: the relay is shared infrastructure, so one misbehaving
+# leg must not cost unbounded memory, sockets or forwarding work.
+_MAX_NAME = 200  # host display name forwarded to clients, in characters
+_HELLO_TIMEOUT = 3.0  # a leg that never sends hello is reaped (slowloris)
+_MAX_HOST_ROUTES = 64  # per host; exec opens reserve a stderr sibling slot
+
 
 class _Route:
     """Where a host-side channel id leads back to."""
 
-    __slots__ = ("client", "client_channel")
+    __slots__ = ("client", "client_channel", "slots")
 
-    def __init__(self, client: "ClientSession", client_channel: int) -> None:
+    def __init__(self, client: "ClientSession", client_channel: int, slots: int = 0) -> None:
         self.client = client
         self.client_channel = client_channel
+        # Route slots this channel drew from the host's reservation budget
+        # (2 for exec: main + future stderr sibling, 1 for pty, 0 for siblings).
+        self.slots = slots
 
 
 class HostRegistration:
@@ -49,6 +59,8 @@ class HostRegistration:
         self.routes: dict[int, _Route] = {}
         # main host channel -> the stderr sibling channel (exec only)
         self.err_channels: dict[int, int] = {}
+        # Route slots promised to live channels (see _Route.slots).
+        self.reserved = 0
 
     def alloc_channel(self) -> int:
         return next(self._counter)
@@ -94,7 +106,10 @@ class Relay:
     async def serve(self, host: str, port: int) -> Any:
         """Start the WebSocket server; returns the server (caller closes it)."""
         return await websockets.asyncio.server.serve(
-            self._handle, host, port, process_request=self._auth
+            self._handle, host, port, process_request=self._auth,
+            # stdin arrives as one frame (core sends a single data frame);
+            # the 1 MiB websockets default would drop it mid-transfer.
+            max_size=None,
         )
 
     # ------------------------------------------------------------------
@@ -124,7 +139,10 @@ class Relay:
 
     async def _recv_hello(self, ws: ServerConnection, expected_role: str) -> dict[str, Any] | None:
         try:
-            raw = await ws.recv()
+            raw = await asyncio.wait_for(ws.recv(), _HELLO_TIMEOUT)
+        except asyncio.TimeoutError:
+            await _fail(ws, protocol.PROTOCOL_ERROR, "hello timeout")
+            return None
         except ConnectionClosed:
             return None
         if not isinstance(raw, str):
@@ -162,7 +180,7 @@ class Relay:
                 await stale.ws.close(code=1000, reason="superseded")
             except Exception:  # noqa: BLE001
                 pass
-        reg = HostRegistration(ws, host_id, str(hello.get("name") or host_id))
+        reg = HostRegistration(ws, host_id, str(hello.get("name") or host_id)[:_MAX_NAME])
         self.hosts[host_id] = reg
         log.info("relay: host %r connected (%s)", host_id, reg.name)
         try:
@@ -196,11 +214,14 @@ class Relay:
             if frame.get("ok") and isinstance(frame.get("err_ch"), int):
                 # stderr rides a second channel; give it an id in the client's
                 # upper-id space so it cannot collide with client-owned mains.
+                # One sibling per main, and only under the route bound: a
+                # hostile host must not mint routes it was never granted.
                 err_client_ch = _ERR_CHANNEL_BASE + route.client_channel
-                route.client.routes[err_client_ch] = frame["err_ch"]
-                reg.routes[frame["err_ch"]] = _Route(route.client, err_client_ch)
-                reg.err_channels[channel] = frame["err_ch"]
-                out["err_ch"] = err_client_ch
+                if reg.err_channels.get(channel) is None and len(reg.routes) < _MAX_HOST_ROUTES:
+                    route.client.routes[err_client_ch] = frame["err_ch"]
+                    reg.routes[frame["err_ch"]] = _Route(route.client, err_client_ch)
+                    reg.err_channels[channel] = frame["err_ch"]
+                    out["err_ch"] = err_client_ch
             await _safe_send(route.client.ws, protocol.encode_frame(out))
         elif kind in ("exit", "ch_error"):
             out = dict(frame)
@@ -228,14 +249,14 @@ class Relay:
     def _drop_route(self, reg: HostRegistration, host_channel: int) -> None:
         route = reg.routes.pop(host_channel, None)
         if route is not None:
+            reg.reserved -= route.slots
             route.client.routes.pop(route.client_channel, None)
 
     async def _detach_clients(self, reg: HostRegistration) -> None:
         for session in [s for s in self.clients if s.host_id == reg.host_id]:
             self.clients.discard(session)
-            for client_channel, host_channel in list(session.routes.items()):
-                session.routes.pop(client_channel, None)
-                reg.routes.pop(host_channel, None)
+            for host_channel in list(session.routes.values()):
+                self._drop_route(reg, host_channel)
             await _fail(session.ws, protocol.HOST_OFFLINE, "host disconnected")
 
     # ------------------------------------------------------------------
@@ -267,9 +288,8 @@ class Relay:
             pass
         finally:
             self.clients.discard(session)
-            for client_channel, host_channel in list(session.routes.items()):
-                session.routes.pop(client_channel, None)
-                host.routes.pop(host_channel, None)
+            for host_channel in list(session.routes.values()):
+                self._drop_route(host, host_channel)
                 await _safe_send(host.ws, protocol.encode_control("close", ch=host_channel))
 
     async def _client_control(self, session: ClientSession, host: HostRegistration, raw: str) -> None:
@@ -282,9 +302,19 @@ class Relay:
         if kind == "open":
             if not isinstance(channel, int) or channel in session.routes:
                 return
+            # Reserve the exec stderr sibling up front so the per-host route
+            # table stays inside its bound however an open flood is shaped.
+            slots = 2 if frame.get("mode") == "exec" else 1
+            if host.reserved + slots > _MAX_HOST_ROUTES:
+                await _safe_send(session.ws, protocol.encode_control(
+                    "ch_error", ch=channel,
+                    code=protocol.CHANNEL_LIMIT, message="relay channel limit reached",
+                ))
+                return
+            host.reserved += slots
             host_channel = host.alloc_channel()
             session.routes[channel] = host_channel
-            host.routes[host_channel] = _Route(session, channel)
+            host.routes[host_channel] = _Route(session, channel, slots=slots)
             out = dict(frame)
             out["ch"] = host_channel
             await _safe_send(host.ws, protocol.encode_frame(out))

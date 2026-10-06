@@ -167,7 +167,7 @@ class LinkClient:
         stdout = bytearray()
         stderr = bytearray()
         err_channel: int | None = None
-        if stdin:
+        if stdin is not None:  # empty stdin still sends the EOF, or readers hang
             # After `opened` the daemon's stdin pipe is live: data frames are
             # the command's stdin, the client→host `eof` is its EOF.
             while True:
