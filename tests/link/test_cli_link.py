@@ -54,20 +54,52 @@ def test_empty_stdin_token_is_rejected():
     assert "empty line" in result.output
 
 
-def _wait_for_line(proc, needle: str, timeout: float) -> str:
-    """Read subprocess stdout until `needle` appears; returns the buffer."""
-    buf = ""
+def _wait_for_line(proc, needle: str, timeout: float) -> bytes:
+    """Drain raw stdout until `needle` appears; returns everything read.
+
+    Reads the descriptor directly, never a buffered reader: one readline()
+    can slurp the needle line out of the pipe together with the line before
+    it, and select() then never fires again — the match sits in user space
+    until the deadline.
+    """
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+    needle_b = needle.encode()
+    raw = b""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        ready, _, _ = select.select([proc.stdout], [], [], 0.2)
+        ready, _, _ = select.select([fd], [], [], 0.2)
         if ready:
-            line = proc.stdout.readline()
-            buf += line
-            if needle in buf:
-                return buf
+            chunk = os.read(fd, 65536)
+            if chunk:
+                raw += chunk
+                if needle_b in raw:
+                    return raw
+                continue
         if proc.poll() is not None:
+            # One last sweep: bytes can land between the read and the exit.
+            if select.select([fd], [], [], 0.3)[0]:
+                chunk = os.read(fd, 65536)
+                if chunk:
+                    raw += chunk
+                    if needle_b in raw:
+                        return raw
             break
-    raise AssertionError(f"never saw {needle!r} from subprocess; got:\n{buf}")
+    raise AssertionError(
+        f"never saw {needle!r} from subprocess; got:\n{raw.decode(errors='replace')}"
+    )
+
+
+def _drain_all(proc) -> bytes:
+    """Everything still in the pipe after exit (nonblocking raw reads)."""
+    fd = proc.stdout.fileno()
+    raw = b""
+    while select.select([fd], [], [], 0.5)[0]:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        raw += chunk
+    return raw
 
 
 async def _exec_via_link(url: str, cmd: str) -> object:
@@ -103,9 +135,9 @@ def test_cli_relay_serve_and_link_run_end_to_end():
     relay = subprocess.Popen(
         [sys.executable, "-m", "pocketshell", "relay", "serve",
          "--listen", f"127.0.0.1:{port}"],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
-    relay_out = ""
+    relay_out = b""
     try:
         relay_out += _wait_for_line(relay, "relay listening", 30.0)
         # The needle once matched inside a crash traceback; require a live relay.
@@ -116,11 +148,11 @@ def test_cli_relay_serve_and_link_run_end_to_end():
              "--relay", url, "--token", "-", "--host-id", HOST_ID,
              "--name", "CLI Host"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True,
+            stderr=subprocess.STDOUT,
         )
         try:
             assert daemon.stdin is not None
-            daemon.stdin.write(TOKEN + "\n")
+            daemon.stdin.write((TOKEN + "\n").encode())
             daemon.stdin.flush()
 
             result = asyncio.run(_exec_via_link(url, "echo cli-e2e"))
@@ -139,9 +171,9 @@ def test_cli_relay_serve_and_link_run_end_to_end():
         except subprocess.TimeoutExpired:
             relay.kill()
             relay.wait(timeout=15)
-        relay_out += relay.stdout.read() if relay.stdout is not None else ""
+        relay_out += _drain_all(relay)
         assert relay.returncode == 0, f"relay exited {relay.returncode}"
-        assert "relay: stopped" in relay_out
+        assert "relay: stopped" in relay_out.decode(errors="replace")
     finally:
         if relay.poll() is None:
             relay.kill()
