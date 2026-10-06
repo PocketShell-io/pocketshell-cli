@@ -215,6 +215,14 @@ dev = [
     "pytest>=8.4.0",
     "ruff>=0.15.0",
 ]
+# Outbound-WSS transport for hosts without inbound SSH
+# (docs/link-transport.md). `websockets` is imported lazily inside
+# `link run` / `relay serve`, so the base install never pays for it.
+# Every published websockets release predates the `exclude-newer`
+# cutoff below, so adding it needs no cutoff move.
+link = [
+    "websockets>=13,<17",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pocketshell"]

@@ -30,6 +30,7 @@ from pocketshell.env import env_group
 from pocketshell.engines import engines_group
 from pocketshell.github import github_group
 from pocketshell.hooks import hooks_group
+from pocketshell.link.cli import link_group, relay_group
 from pocketshell.logs import logs_group
 from pocketshell.profiles import profiles_group
 from pocketshell.attachments import prune_attachments_command
@@ -77,6 +78,8 @@ cli.add_command(push_group, name="push")
 # single owner of the group object (see pocketshell.cards).
 register_push_card_commands(push_group)
 cli.add_command(serve_command, name="serve")
+cli.add_command(link_group, name="link")
+cli.add_command(relay_group, name="relay")
 cli.add_command(workspaces_group, name="workspaces")
 
 
