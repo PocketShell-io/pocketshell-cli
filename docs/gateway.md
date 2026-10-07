@@ -248,8 +248,15 @@ pocketshell gateway run --server ws://gateway:8080 --insecure-dev
   ephemeral lab token when the flag is omitted, and any Google ID token
   always. The refusal happens **before any HTTP request**; that is designed
   behavior, not a bug. The wrapper additionally refuses the flag without
-  `--insecure-dev`, without an explicit `--server`, and never lets it target
-  the production gateway.
+  `--insecure-dev`, without an explicit non-blank `--server` (a blank one
+  would let the helper fall back to its built-in production default), for a
+  `--server` URL it cannot parse at all (e.g. a malformed IPv6 literal), and
+  whenever `--server` names the production gateway — either
+  `gateway.pocketshell.io` or its legacy `relay.pocketshell.io` alias,
+  compared case-insensitively and ignoring the trailing FQDN dot, so
+  `GATEWAY.POCKETSHELL.IO:8080` or `relay.pocketshell.io.` cannot slip
+  through. Lab targets (loopback IPv4/IPv6, docker hostnames, paths) are
+  forwarded verbatim.
 - **The lab token itself** must be a JWT with the broker shape: `aud` exactly
   `pocketshell-gateway`, `scope` exactly `pocketshell.gateway`, lifetime ≤ 5
   minutes, unexpired, RS256-signed. These are shape checks on unverified

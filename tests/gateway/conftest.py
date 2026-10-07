@@ -51,3 +51,22 @@ def exec_calls(monkeypatch):
 
     monkeypatch.setattr(gateway_helper, "exec_helper", _capture)
     return calls
+
+
+@pytest.fixture
+def forbid_helper_launch(monkeypatch):
+    """Poison helper resolution for negative preflight tests.
+
+    ``exec_calls == []`` proves nothing was exec'd; this additionally
+    proves the wrapper never even *resolved* the helper on a rejected
+    invocation — the strongest local form of "refused before any helper
+    launch, hence zero helper network". If a regression lets the preflight
+    pass, resolution blows up the test loudly instead of the test silently
+    passing on an empty recorder.
+    """
+    def _refuse(*args, **kwargs):
+        raise AssertionError(
+            "helper resolution started despite a preflight refusal"
+        )
+
+    monkeypatch.setattr(gateway_helper, "resolve_helper", _refuse)

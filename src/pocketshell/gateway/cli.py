@@ -18,9 +18,35 @@ import click
 from pocketshell.gateway import helper as gateway_helper
 
 # The wrapper refuses to aim the DEV-ONLY `--dev-broker-issuer` override at
-# the production gateway, whatever the URL spelling. This is a target check
-# for one known-bad host, not URL validation: the helper owns that.
-_PRODUCTION_GATEWAY_HOSTS = frozenset({"gateway.pocketshell.io"})
+# the production gateway, whatever the URL spelling: both names the
+# production deployment serves (`gateway.pocketshell.io` and its legacy
+# `relay.pocketshell.io` alias — see DefaultServerURL/LegacyServerURL in the
+# Go hostagent), compared DNS-style (case-insensitive, trailing FQDN dot
+# ignored) so `gateway.pocketshell.io.` or `RELAY.POCKETSHELL.IO:8080` cannot
+# slip past an exact-string check. This is a target check for known-bad
+# hosts, not URL validation: the helper owns that.
+_PRODUCTION_GATEWAY_HOSTS = frozenset(
+    {"gateway.pocketshell.io", "relay.pocketshell.io"}
+)
+
+
+def _canonical_gateway_host(server: str) -> str:
+    """Canonicalize the ``--server`` host for the production-target check.
+
+    Comparison-only canonicalization: the server URL itself is still
+    forwarded verbatim. A URL urllib cannot parse at all (unbalanced
+    brackets, malformed IPv6 literal) raises :class:`click.UsageError`
+    here rather than a traceback later — the wrapper refuses to forward a
+    ``--server`` it could not check.
+    """
+    try:
+        host = urlsplit(server).hostname
+    except ValueError as exc:
+        raise click.UsageError(
+            f"--server {server!r} is not a valid URL ({exc}); point it at "
+            "your lab gateway instead."
+        ) from exc
+    return (host or "").strip().lower().rstrip(".")
 
 
 def _preflight_dev_broker_issuer(
@@ -42,15 +68,20 @@ def _preflight_dev_broker_issuer(
             "--dev-broker-issuer is a DEV-ONLY override and requires "
             "--insecure-dev (the helper refuses it in normal mode)."
         )
-    if server is None:
+    # A blank --server is not an explicit one: the Go helper's ResolveServer
+    # treats "" as unset and defaults to the production gateway, so
+    # forwarding `--server ''` would silently aim a lab issuer at
+    # production. Only None (flag absent) and non-blank values are distinct
+    # here; blank and whitespace-only both refuse.
+    if server is None or not server.strip():
         problems.append(
-            "--dev-broker-issuer requires an explicit --server naming your "
-            "lab gateway; without it the helper would target its built-in "
-            "production default."
+            "--dev-broker-issuer requires an explicit non-blank --server "
+            "naming your lab gateway; without it (or with a blank one) the "
+            "helper would target its built-in production default."
         )
     else:
-        host = urlsplit(server).hostname or ""
-        if host.lower() in _PRODUCTION_GATEWAY_HOSTS:
+        host = _canonical_gateway_host(server)
+        if host in _PRODUCTION_GATEWAY_HOSTS:
             problems.append(
                 f"--dev-broker-issuer must not target the production gateway "
                 f"({host}); point --server at your lab gateway instead."
@@ -157,7 +188,8 @@ def gateway_group() -> None:
         "mints (e.g. a docker-compose broker). Requires --insecure-dev and "
         "an explicit --server naming the lab gateway; the helper refuses "
         "every other issuer, and production enrollment never passes this. "
-        "Never points at the production gateway."
+        "Never points at the production gateway (gateway.pocketshell.io or "
+        "its relay.pocketshell.io alias, whatever the URL spelling)."
     ),
 )
 @click.option("--verbose", is_flag=True, help="Log debug output.")

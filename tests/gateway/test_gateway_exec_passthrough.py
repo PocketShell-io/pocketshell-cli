@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 # Arbitrary opaque bytes with awkward whitespace: the wrapper must pass
 # stdin through untouched whatever the token contains (and the name must not
 # imply any account credential — it is a gateway-scoped enrollment token).
@@ -263,3 +265,117 @@ def test_dev_broker_issuer_preflight_rejection_happens_in_subprocess(tmp_path):
     assert "--insecure-dev" in stderr
     assert not argv_file.exists(), "helper must not be exec'd on preflight refusal"
     assert not stdin_file.exists()
+
+
+def test_blank_server_preflight_rejection_happens_in_subprocess(tmp_path):
+    # The audit's escape hatch at the real process boundary: `--server ''`
+    # used to pass the "explicit server" check (only a None check) and the
+    # helper's ResolveServer("") then defaulted to PRODUCTION with a lab
+    # issuer attached. It must refuse with usage exit code 2 before the
+    # helper is ever exec'd.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    proc = _run_gateway(
+        [
+            "enroll",
+            "--token-stdin",
+            "--server", "",
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+        helper,
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 2
+    stderr = proc.stderr.decode()
+    assert "--server" in stderr
+    assert "production" in stderr
+    assert "Traceback" not in stderr
+    assert not argv_file.exists(), "helper must not be exec'd on preflight refusal"
+    assert not stdin_file.exists()
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        "wss://gateway.pocketshell.io.",  # trailing FQDN dot, same host
+        "ws://relay.pocketshell.io:8080",  # legacy production alias + port
+        "ws://RELAY.POCKETSHELL.IO.",  # alias, uppercased, trailing dot
+    ],
+)
+def test_production_server_spellings_refused_in_subprocess(tmp_path, server):
+    # Canonicalization regressions at the real process boundary: trailing
+    # dots and case must not rename the production gateway, and neither
+    # its canonical name nor its relay alias may carry a lab issuer.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    proc = _run_gateway(
+        [
+            "enroll",
+            "--token-stdin",
+            "--server", server,
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+        helper,
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 2, (server, proc.stderr)
+    stderr = proc.stderr.decode()
+    assert "production" in stderr
+    assert "Traceback" not in stderr
+    assert not argv_file.exists(), "helper must not be exec'd on preflight refusal"
+
+
+def test_malformed_server_url_is_a_clean_usage_error_in_subprocess(tmp_path):
+    # A malformed IPv6 literal makes urlsplit raise ValueError; the
+    # operator must see a one-line usage error naming --server, never a
+    # Python traceback, and nothing may be exec'd.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    proc = _run_gateway(
+        [
+            "enroll",
+            "--token-stdin",
+            "--server", "ws://[::1",
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+        helper,
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 2
+    stderr = proc.stderr.decode()
+    assert "--server" in stderr
+    assert "not a valid URL" in stderr
+    assert "Traceback" not in stderr
+    assert not argv_file.exists(), "helper must not be exec'd on preflight refusal"
+    assert not stdin_file.exists()
+
+
+def test_docker_lab_server_reaches_the_helper_in_subprocess(tmp_path):
+    # The guard's flip side at the real process boundary: an ordinary
+    # docker-compose lab hostname passes the preflight and is forwarded
+    # byte-identically together with the guarded dev flags.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    proc = _run_gateway(
+        [
+            "enroll",
+            "--token-stdin",
+            "--server", "ws://gateway:8080",
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+        helper,
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 0, proc.stderr
+    argv = argv_file.read_bytes().split(b"\0")[:-1]
+    assert argv == [
+        b"enroll",
+        b"--token-stdin",
+        b"--server", b"ws://gateway:8080",
+        b"--dev-broker-issuer", b"https://lab-broker.example",
+        b"--insecure-dev",
+    ]

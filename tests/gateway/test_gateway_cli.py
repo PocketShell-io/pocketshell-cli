@@ -233,6 +233,40 @@ def test_dev_broker_issuer_forwarded_when_guarded(pin_helper, exec_calls):
     ]
 
 
+@pytest.mark.parametrize(
+    "server",
+    [
+        "ws://127.0.0.1:8080",  # explicit loopback IPv4
+        "ws://gateway:8080",  # docker-compose service hostname
+        "ws://gateway:8080/tunnel",  # docker hostname with a path
+    ],
+)
+def test_dev_broker_issuer_forwards_lab_servers_verbatim(
+    pin_helper, exec_calls, server
+):
+    # The guard's flip side: legitimate lab targets — loopback IPv4,
+    # docker hostnames, paths — are none of the wrapper's business beyond
+    # the production-host check; they reach the helper byte-identical.
+    pin_helper("#!/bin/sh\nexit 0\n")
+    result = CliRunner().invoke(
+        cli,
+        [
+            "gateway", "enroll",
+            "--token-stdin",
+            "--server", server,
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+    )
+    assert _argv(exec_calls, result) == [
+        "enroll",
+        "--token-stdin",
+        "--server", server,
+        "--dev-broker-issuer", "https://lab-broker.example",
+        "--insecure-dev",
+    ]
+
+
 def test_dev_broker_issuer_without_insecure_dev_is_refused_before_exec(
     exec_calls,
 ):
@@ -271,6 +305,62 @@ def test_dev_broker_issuer_without_explicit_server_is_refused(exec_calls):
     assert exec_calls == []
 
 
+@pytest.mark.parametrize("server", ["", "   ", "\t"])
+def test_dev_broker_issuer_with_blank_server_is_refused(
+    exec_calls, forbid_helper_launch, server
+):
+    # A blank explicit --server is NOT an explicit one: the Go helper's
+    # ResolveServer("") falls back to its built-in production default, so
+    # forwarding `--server ''` would aim a lab issuer at production while
+    # the guard believed the target was lab. Refuse before any launch.
+    result = CliRunner().invoke(
+        cli,
+        [
+            "gateway", "enroll",
+            "--token-stdin",
+            "--server", server,
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+    )
+    assert result.exit_code != 0, repr(server)
+    assert "--server" in result.output
+    assert "production" in result.output
+    assert exec_calls == []
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        "ws://[::1",  # unbalanced bracket (malformed IPv6 literal)
+        "ws://[gateway.pocketshell.io]",  # bracketed non-IP
+    ],
+)
+def test_dev_broker_issuer_with_unparseable_server_is_a_clear_usage_error(
+    exec_calls, forbid_helper_launch, server
+):
+    # urlsplit raises ValueError on these; that must surface as a clean
+    # usage error naming the flag — never a raw traceback, and never a
+    # forward of a --server the wrapper could not check.
+    result = CliRunner().invoke(
+        cli,
+        [
+            "gateway", "enroll",
+            "--token-stdin",
+            "--server", server,
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+    )
+    assert result.exit_code == 2, (server, result.output, result.exception)
+    assert "--server" in result.output
+    assert "not a valid URL" in result.output
+    # No stack trace leaked to the operator.
+    assert "Traceback" not in result.output
+    assert not isinstance(result.exception, ValueError)
+    assert exec_calls == []
+
+
 @pytest.mark.parametrize(
     "server",
     [
@@ -278,10 +368,25 @@ def test_dev_broker_issuer_without_explicit_server_is_refused(exec_calls):
         "https://gateway.pocketshell.io",
         "ws://GATEWAY.POCKETSHELL.IO:8080",
         "wss://gateway.pocketshell.io/some/path",
+        # DNS-canonicalization regressions: the same host spelled with a
+        # trailing FQDN dot or in other cases still resolves to production.
+        "wss://gateway.pocketshell.io.",
+        "WSS://GATEWAY.POCKETSHELL.IO",
+        "wss://Gateway.Pocketshell.Io",
+        # relay.pocketshell.io is the production gateway's legacy alias
+        # (LegacyServerURL in the Go hostagent; still served there), so
+        # every spelling of it must refuse too.
+        "ws://relay.pocketshell.io",
+        "wss://relay.pocketshell.io.",
+        "ws://RELAY.POCKETSHELL.IO:8080",
+        "wss://relay.pocketshell.io:8443/lab",
+        # Ports and userinfo change nothing about the target host.
+        "wss://gateway.pocketshell.io:8443",
+        "wss://user@gateway.pocketshell.io",
     ],
 )
 def test_dev_broker_issuer_never_targets_the_production_gateway(
-    pin_helper, exec_calls, server
+    pin_helper, exec_calls, forbid_helper_launch, server
 ):
     pin_helper("#!/bin/sh\nexit 0\n")
     result = CliRunner().invoke(
@@ -295,7 +400,10 @@ def test_dev_broker_issuer_never_targets_the_production_gateway(
         ],
     )
     assert result.exit_code != 0, server
-    assert "production" in result.output
+    assert "production" in result.output, server
+    # Refused before any helper launch: nothing exec'd — and resolution
+    # (the step before exec, where any network could begin) never ran,
+    # because forbid_helper_launch would blow up if it did.
     assert exec_calls == []
 
 
