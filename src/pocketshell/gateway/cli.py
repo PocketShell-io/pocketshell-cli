@@ -120,7 +120,7 @@ def enroll(
     web client's "Generate enrollment token" action): it is an RS256 JWT
     scoped to pocketshell-gateway and lives at most 5 minutes. Your account
     sign-in credential itself never reaches the gateway — only this scoped
-    token does, and only inside the enroll request body (never in a URL,
+    token does, and only in the Authorization header (never in a URL,
     argv, or log line). This wrapper passes stdin through opaquely; it never
     exchanges or inspects the token.
 
