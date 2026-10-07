@@ -11,6 +11,8 @@ progress ledger).
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 
 import pytest
@@ -194,6 +196,77 @@ def test_unreadable_wheel_metadata_fails_without_path_fallback(
     _install_dist(monkeypatch, FakeWheelDist(wheel_binary, None))
     with pytest.raises(HelperNotFoundError, match="no readable"):
         resolve_helper()
+
+
+def _write_real_dist_info(site_dir, wheel_bytes: bytes):
+    """A real (importlib-discoverable) dist-info with raw WHEEL bytes."""
+    dist_info = site_dir / "pocketshell_gateway_link-0.0.1.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\n"
+        "Name: pocketshell-gateway-link\n"
+        "Version: 0.0.1\n"
+    )
+    (dist_info / "WHEEL").write_bytes(wheel_bytes)
+    (dist_info / "RECORD").write_text("")
+    return dist_info
+
+
+def test_invalid_utf8_wheel_metadata_fails_closed_without_path_fallback(
+    tmp_path, monkeypatch
+):
+    # Corrupt WHEEL CONTENTS (invalid UTF-8) are a selected-but-broken
+    # install like every other: a concise 127 HelperNotFoundError with no
+    # PATH fallback — not a UnicodeDecodeError traceback escaping the
+    # documented error surface. Uses a REAL dist-info discovered by
+    # importlib.metadata, not a fake distribution object.
+    decoy = _path_decoy(tmp_path, monkeypatch)
+    site = tmp_path / "site"
+    _write_real_dist_info(site, b"Wheel-Version: 1.0\nTag: broken-\xff\xfe\n")
+    monkeypatch.syspath_prepend(str(site))
+    monkeypatch.setattr(
+        gateway_helper, "_installed_wheel_distribution", _REAL_WHEEL_LOOKUP
+    )
+    with pytest.raises(HelperNotFoundError) as excinfo:
+        resolve_helper()
+    message = str(excinfo.value)
+    assert "could not be read" in message
+    assert str(decoy) not in message
+
+
+def test_invalid_utf8_wheel_metadata_is_a_clean_127_in_subprocess(
+    tmp_path, monkeypatch
+):
+    # The same broken install at the real process boundary: exit 127, one
+    # concise error line, no traceback — and the working PATH decoy is
+    # never executed (no fallback, not even a probe).
+    decoy_dir = tmp_path / "bin"
+    marker = tmp_path / "decoy-marker"
+    _write_exec(
+        decoy_dir / HELPER_NAME,
+        f'printf ran >> "{marker}"\nexit 0\n',
+    )
+    site = tmp_path / "site"
+    _write_real_dist_info(site, b"Wheel-Version: 1.0\nTag: broken-\xff\xfe\n")
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(site),
+        "PATH": str(decoy_dir),
+    }
+    env.pop("POCKETSHELL_GATEWAY_HELPER", None)
+    proc = subprocess.run(
+        [sys.executable, "-m", "pocketshell", "gateway", "show"],
+        capture_output=True,
+        env=env,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 127, proc.stderr
+    stderr = proc.stderr.decode()
+    assert "could not be read" in stderr
+    assert "Traceback" not in stderr
+    assert stderr.count("\n") <= 2, "error must stay a concise line"
+    assert not marker.exists(), "the PATH decoy must never be executed"
 
 
 def test_corrupt_distribution_fails_without_path_fallback(

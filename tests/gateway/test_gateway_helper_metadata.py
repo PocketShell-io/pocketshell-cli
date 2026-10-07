@@ -12,7 +12,9 @@ stdin detachment, reaping) are exercised, not mocked.
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -97,6 +99,51 @@ def test_additive_extra_json_fields_are_accepted(tmp_path):
         }
     )
     verify_helper(_sh_helper(tmp_path, _emit(payload)))
+
+
+def test_nested_additive_json_structures_are_accepted(tmp_path):
+    # Additive means ordinary JSON structures too: nested objects and
+    # arrays that the parser must simply accept and ignore.
+    payload = json.dumps(
+        {
+            "version": "1.2.3",
+            "protocol": EXPECTED_PROTOCOL,
+            "commit": "abc",
+            "buildInfo": {"go": "1.27", "flags": ["a", "b"], "meta": {"x": 1}},
+        }
+    )
+    verify_helper(_sh_helper(tmp_path, _emit(payload)))  # must not raise
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_non_json_constants_are_refused(tmp_path, constant):
+    # Python's json accepts NaN/Infinity by default, but they are not
+    # JSON: the frozen contract speaks JSON, so an additive field carrying
+    # one fails the gate instead of sliding through the lenient parser.
+    payload = (
+        '{"version":"1.0.0","protocol":"pocketshell-tunnel-v1",'
+        f'"commit":"abc","ratio":{constant}}}'
+    )
+    with pytest.raises(HelperIncompatibleError):
+        verify_helper(_sh_helper(tmp_path, _emit(payload)))
+
+
+def test_deeply_nested_additive_json_is_contained_as_a_refusal():
+    # A deep additive array can exhaust the JSON parser's recursion before
+    # (or instead of) parsing; the gate must contain that as the documented
+    # concise refusal, never leak a RecursionError traceback through the
+    # CLI's 126 contract. Driven at the real parse seam — no mocks. The
+    # depth is sized beyond any supported interpreter's parse recursion:
+    # on CPython ≤3.12 such a trigger fit below the 4096-byte capture
+    # budget; 3.14's parser only recurses out around 10⁵ levels.
+    depth = 300_000
+    payload = (
+        '{"version":"1.0.0","protocol":"pocketshell-tunnel-v1",'
+        '"commit":"abc","deep":' + "[" * depth + "]" * depth + "}"
+    )
+    with pytest.raises(HelperIncompatibleError, match="deep") as excinfo:
+        gateway_helper._parse_version_metadata(payload.encode())
+    assert "\n" not in str(excinfo.value)
 
 
 def test_json_without_trailing_newline_is_accepted(tmp_path):
@@ -252,23 +299,91 @@ def test_unexecutable_helper_is_reported_clearly(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _recording_popen(monkeypatch) -> list[subprocess.Popen]:
+    """Record every child the helper module spawns, without mocking it.
+
+    The real Popen runs; only a bookkeeping subclass is installed so a test
+    can assert the lifetime of the EXACT probe child it caused — never by
+    scanning machine-wide process tables, which observe other suites' or
+    workers' processes too.
+    """
+    created: list[subprocess.Popen] = []
+    real_popen = subprocess.Popen
+
+    class RecordingPopen(real_popen):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            created.append(self)
+
+    monkeypatch.setattr(gateway_helper.subprocess, "Popen", RecordingPopen)
+    return created
+
+
 def test_hanging_helper_times_out_quickly_and_is_reaped(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_helper, "METADATA_TIMEOUT_SECONDS", 0.5)
     # `exec` so the kill hits the sleeper itself, not a shell wrapping it —
     # an orphaned grandchild would be exactly the leak this test guards.
     helper = _sh_helper(tmp_path, "exec sleep 30")
+    created = _recording_popen(monkeypatch)
     start = time.monotonic()
     with pytest.raises(HelperIncompatibleError) as excinfo:
         verify_helper(helper)
     elapsed = time.monotonic() - start
-    assert elapsed < 10, "the gate must honor its deadline, not the child's"
+    assert elapsed < 5, "the gate must honor its deadline, not the child's"
     assert "version --json" in str(excinfo.value)
     assert "0.5" in str(excinfo.value)
-    # The probe child was reaped, not left behind.
-    leftovers = subprocess.run(
-        ["pgrep", "-f", "sleep 30"], capture_output=True, text=True
+    # Killed AND reaped, proven on the exact probe child this test caused:
+    # a negative returncode is the SIGKILL exit status and is only set by
+    # wait(), so it cannot hold for an unreaped zombie.
+    assert len(created) == 1
+    probe = created[0]
+    assert probe.returncode == -signal.SIGKILL
+    with pytest.raises(ProcessLookupError):
+        os.kill(probe.pid, 0)  # gone from the process table, not a zombie
+
+
+def test_timeout_cleanup_spares_unrelated_owned_sleepers(tmp_path, monkeypatch):
+    # Negative calibration for the reaping proof: with an unrelated,
+    # test-owned `sleep 30` alive, the old machine-wide
+    # `pgrep -f "sleep 30"` predicate reported a leak that did not exist
+    # (it saw THIS process). The exact-PID proof must pass, and cleanup
+    # must leave the unrelated process strictly alone.
+    monkeypatch.setattr(gateway_helper, "METADATA_TIMEOUT_SECONDS", 0.5)
+    unrelated = subprocess.Popen(["sleep", "30"])
+    try:
+        helper = _sh_helper(tmp_path, "exec sleep 30")
+        created = _recording_popen(monkeypatch)
+        with pytest.raises(HelperIncompatibleError):
+            verify_helper(helper)
+        assert created[0].returncode == -signal.SIGKILL
+        assert unrelated.poll() is None, (
+            "probe cleanup must not kill unrelated processes"
+        )
+    finally:
+        if unrelated.poll() is None:
+            unrelated.kill()
+        unrelated.wait()
+
+
+def test_post_eof_lingering_helper_is_refused_at_the_deadline(
+    tmp_path, monkeypatch
+):
+    # Prints a fully valid answer, CLOSES stdout (the reader sees EOF),
+    # then stays alive past the configured budget — inside the removed
+    # +0.5s acceptance grace. The monotonic deadline governs acceptance;
+    # only kill/reap cleanup may outlive it.
+    monkeypatch.setattr(gateway_helper, "METADATA_TIMEOUT_SECONDS", 0.5)
+    helper = _sh_helper(
+        tmp_path,
+        f"printf '%s\\n' {shlex.quote(VALID_DEVEL)} ; exec 1>&- ; sleep 0.7",
     )
-    assert leftovers.stdout.strip() == "", "probe child leaked"
+    start = time.monotonic()
+    with pytest.raises(HelperIncompatibleError) as excinfo:
+        verify_helper(helper)
+    elapsed = time.monotonic() - start
+    assert "version --json" in str(excinfo.value)
+    assert "0.5" in str(excinfo.value)
+    assert elapsed < 5
 
 
 def test_oversize_output_is_refused_without_unbounded_capture(tmp_path):

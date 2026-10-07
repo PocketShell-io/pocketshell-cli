@@ -41,24 +41,30 @@ your own risk or don't.
 
 ## 2. Private beta: getting and installing the wheel (no public channel yet)
 
-During the private beta there is **no public package**: the wheels are
-built by the private repo's own CI and distributed as CI artifacts to
-people with repo access. The install is three explicit steps — retrieve,
-verify, install offline:
+During the private beta there is **no public package**. What exists today is
+the implemented *packaging route*: the private repo's delivery pipeline
+builds the platform wheels as CI artifacts, and people with repo access
+retrieve them from a CI run by hand. A standing authenticated distribution
+channel and the release-versioned artifact set are still pending (§4), so
+"get the wheel" currently means exactly this manual retrieval. The install
+is three explicit steps — retrieve, verify, install offline:
 
 ```bash
-# 1. Retrieve from the PRIVATE CI (authenticated; you need repo access):
+# 1. Retrieve from the PRIVATE CI (manual, per run; you need repo access):
 #    pocketshell-gateway repo → CI "packaging" run for commit <sha> →
 #    download the wheel matching your platform, e.g.
 #    pocketshell_gateway_link-<version>-py3-none-manylinux_2_28_x86_64.whl
 #    (linux amd64; the aarch64/darwin tags map the same way)
 
-# 2. Verify against the EXPECTED digest obtained independently of the
-#    download channel (the run's published sha256 sidecar / SHA256SUMS,
-#    or the maintainer out-of-band) — fail closed: no matching digest,
-#    no install.
+# 2. Verify the digest. A sha256 sidecar or SHA256SUMS from the SAME CI
+#    run is an integrity check WITHIN that channel — it catches a
+#    truncated/corrupted download, not a compromised run — it is not an
+#    independent trust source merely because it is a separate file. Only a
+#    digest obtained genuinely out-of-band (a maintainer, a different
+#    channel) anchors trust independently. Fail closed: no matching
+#    digest, no install.
 sha256sum pocketshell_gateway_link-*.whl
-#    …compare with the published digest, and check the run's PROVENANCE
+#    …compare with the expected digest, and check the run's PROVENANCE
 #    (source commit, toolchain) matches what you expect…
 
 # 3. Install offline, into the same environment as the pocketshell CLI:
@@ -89,10 +95,14 @@ wheel, or PATH alike — under hard bounds:
 - strict parse: exactly one JSON object, nonempty string
   `version`/`commit`, `protocol` exactly `pocketshell-tunnel-v1`;
 - any deviation — stale or unknown protocol tag, missing/mistyped/empty
-  fields, malformed or duplicated keys, nonzero exit, timeout, excess
-  output — refuses the helper with exit **126** and a concise
+  fields, malformed or duplicated keys, non-JSON constants
+  (`NaN`/`Infinity`), unparseable nesting, nonzero exit, timeout, excess
+  output — refuses the helper with exit **126** and a concise one-line
   compatibility error. The helper's own output is never echoed and never
-  logged.
+  logged, with one bounded diagnostic exception: a wrong `protocol` tag
+  is quoted ASCII-escaped and truncated, so a stale generation is still
+  recognizable without letting a hostile helper forge error lines. The
+  helper path in refusals is escaped the same way.
 
 **Honesty rules.** The protocol tag is the compatibility contract; the
 version and commit are provenance, never a compatibility proof and never
@@ -100,8 +110,11 @@ trust or authentication evidence. An un-injected source build honestly
 reports `devel`/`unknown` and passes the gate — it speaks the right
 protocol — but it is an *unverified, unreleased* build: useful for local
 testing, and nowhere presented as a release. Release artifacts carry
-injected `-X main.version/-X main.commit` values and can prove which
-commit built them.
+injected `-X main.version/-X main.commit` values: those strings identify
+the *claimed* build (and must match what the delivery channel says you
+should have), but they are self-reported labels — they cannot by
+themselves prove provenance, which is what the out-of-band digest and
+the run's recorded provenance are for.
 
 ## 4. What remains (sequencing)
 

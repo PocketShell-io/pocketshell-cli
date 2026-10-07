@@ -48,7 +48,10 @@ reports ``devel``/``unknown`` and passes the gate because it speaks the
 right protocol — that is useful for local testing, and it is never
 mistaken for a verified release anywhere. The metadata output itself is
 never echoed, never logged, and never reused as trust or authentication
-proof: it decides pass/fail locally, nothing more.
+proof: it decides pass/fail locally, nothing more. (One bounded
+diagnostic exception: a wrong ``protocol`` tag is quoted into the refusal
+ASCII-escaped and truncated to 100 characters — see
+:func:`_validate_metadata_fields`.)
 
 """
 
@@ -87,6 +90,8 @@ EXPECTED_PROTOCOL = "pocketshell-tunnel-v1"
 # misbehaving helper and fails closed.
 METADATA_TIMEOUT_SECONDS = 10.0
 METADATA_MAX_OUTPUT_BYTES = 4096
+# Upper I/O chunk only: each os.read is clamped to the remaining output
+# budget (+1), so no transient read ever allocates beyond the contract.
 _METADATA_READ_CHUNK = 65536
 
 # The wheel platform tag each host can accept, mirroring the delivery
@@ -123,18 +128,26 @@ class HelperIncompatibleError(Exception):
 
     Raised by :func:`verify_helper` when the bounded ``version --json``
     probe fails: wrong protocol tag, malformed or mistyped metadata,
-    nonzero exit, timeout, or excess output. The message is concise by
-    contract — the helper's own output is never echoed — and the CLI
+    non-JSON constants, unparseable nesting, nonzero exit, timeout, or
+    excess output. The message is concise by contract — the helper's own
+    output is never echoed (single bounded exception: the ASCII-escaped,
+    truncated protocol tag of a stale-protocol refusal) — and the CLI
     prints it verbatim and exits 126.
     """
 
 
 def _incompatible(helper: str, reason: str) -> HelperIncompatibleError:
-    """Compose the one-line compatibility error (no helper output echoed)."""
+    """Compose the one-line compatibility error.
+
+    The helper path is ``ascii()``-escaped so an exotic local filename
+    (newlines, quotes, control bytes) cannot break the one-line promise;
+    for ordinary paths the escaped form contains the path verbatim.
+    """
     return HelperIncompatibleError(
-        f"the gateway helper at {helper} is not compatible with this CLI: "
-        f"{reason}. Install the {WHEEL_DIST_NAME} wheel built for this "
-        f"platform or point {HELPER_ENV_VAR} at a compatible binary."
+        f"the gateway helper at {ascii(helper)} is not compatible with "
+        f"this CLI: {reason}. Install the {WHEEL_DIST_NAME} wheel built "
+        f"for this platform or point {HELPER_ENV_VAR} at a compatible "
+        "binary."
     )
 
 
@@ -181,15 +194,23 @@ def _resolve_wheel_helper() -> Optional[str]:
 
     An installed wheel is a selection: if it is broken — the binary is
     missing or not executable, the wheel was built for a different
-    platform, or its metadata is unreadable — this raises instead of
-    returning None, so the wrapper never quietly continues on PATH as if
-    the package were not there.
+    platform, or its metadata is unreadable (missing, mangled, or not
+    valid UTF-8) — this raises instead of returning None, so the wrapper
+    never quietly continues on PATH as if the package were not there.
     """
     dist = _installed_wheel_distribution()
     if dist is None:
         return None
     expected_tag = _host_wheel_tag()
-    wheel_text = dist.read_text("WHEEL")
+    try:
+        wheel_text = dist.read_text("WHEEL")
+        binary = dist.locate_file(WHEEL_BIN_RELATIVE)
+    except Exception as exc:
+        raise HelperNotFoundError(
+            f"the installed {WHEEL_DIST_NAME} package metadata could not "
+            f"be read ({exc!r}); reinstall it. The wrapper does not fall "
+            "back to a different helper while a broken install is selected."
+        ) from exc
     if not wheel_text:
         raise HelperNotFoundError(
             f"the installed {WHEEL_DIST_NAME} package has no readable "
@@ -210,7 +231,6 @@ def _resolve_wheel_helper() -> Optional[str]:
             "The wrapper does not fall back to a different helper while a "
             "mismatched install is selected."
         )
-    binary = dist.locate_file(WHEEL_BIN_RELATIVE)
     if not os.path.isfile(binary):
         raise HelperNotFoundError(
             f"the installed {WHEEL_DIST_NAME} wheel does not contain an "
@@ -245,8 +265,13 @@ def resolve_helper() -> str:
     3. `pocketshell-link` on PATH.
 
     Raises :class:`HelperNotFoundError` with an actionable message
-    otherwise. Whatever path comes back still has to pass
-    :func:`verify_helper` before anything is exec'd.
+    otherwise. The selection is normalized ONCE to a single absolute
+    path: both the protocol probe (:func:`verify_helper`, a ``Popen``
+    that would otherwise PATH-search a bare name) and the final
+    :func:`exec_helper` (``os.execv``, which would resolve that same bare
+    name against the working directory) use that identical file.
+    Whatever it is still has to pass :func:`verify_helper` before
+    anything is exec'd.
     """
     if sys.platform == "win32":
         raise HelperNotFoundError(
@@ -258,7 +283,7 @@ def resolve_helper() -> str:
     pinned = os.environ.get(HELPER_ENV_VAR)
     if pinned:
         if os.path.isfile(pinned) and os.access(pinned, os.X_OK):
-            return pinned
+            return os.path.abspath(pinned)
         raise HelperNotFoundError(
             f"{HELPER_ENV_VAR} is set to {pinned!r} but that is not an "
             "executable file. Fix the variable or unset it to look for "
@@ -266,10 +291,10 @@ def resolve_helper() -> str:
         )
     wheel_binary = _resolve_wheel_helper()
     if wheel_binary:
-        return wheel_binary
+        return os.path.abspath(wheel_binary)
     found = shutil.which(HELPER_NAME)
     if found:
-        return found
+        return os.path.abspath(found)
     raise HelperNotFoundError(
         f"the PocketShell gateway helper `{HELPER_NAME}` was not found.\n"
         "\n"
@@ -297,11 +322,16 @@ def _probe_version_json(helper: str) -> tuple[int, bytes]:
 
     stdin is detached (``DEVNULL``) so the probe can never consume the
     piped enrollment token that must remain untouched on this process's
-    stdin for the later :func:`exec_helper`. Output is read through a
-    selector against a wall-clock deadline and refused the moment it
-    exceeds :data:`METADATA_MAX_OUTPUT_BYTES`, so nothing the helper
-    writes is ever captured unboundedly. The probe child is always
-    reaped; a misbehaving one is killed.
+    stdin for the later :func:`exec_helper`. One monotonic deadline
+    (:data:`METADATA_TIMEOUT_SECONDS`) governs ACCEPTANCE: output is read
+    through a selector against it, each read is clamped to the remaining
+    output budget (so no transient over-sized buffer), and after stdout
+    EOF the child must still be done within what remains of that same
+    deadline — closing stdout early buys no extra answer time. Only the
+    kill/reap CLEANUP may outlive the deadline. Output exceeding
+    :data:`METADATA_MAX_OUTPUT_BYTES` is refused the moment it happens, so
+    nothing the helper writes is ever captured unboundedly. The probe
+    child is always reaped; a misbehaving one is killed.
     """
     deadline = time.monotonic() + METADATA_TIMEOUT_SECONDS
     try:
@@ -327,7 +357,13 @@ def _probe_version_json(helper: str) -> tuple[int, bytes]:
                 if remaining <= 0 or not selector.select(remaining):
                     timed_out = True
                     break
-                chunk = os.read(proc.stdout.fileno(), _METADATA_READ_CHUNK)
+                # Never read more than the remaining budget (+1 to detect
+                # the overflow): the allocation stays bounded by the
+                # contract, not by a chunk constant.
+                chunk = os.read(
+                    proc.stdout.fileno(),
+                    min(_METADATA_READ_CHUNK, METADATA_MAX_OUTPUT_BYTES - total + 1),
+                )
                 if not chunk:
                     break
                 total += len(chunk)
@@ -340,9 +376,13 @@ def _probe_version_json(helper: str) -> tuple[int, bytes]:
                     )
                 chunks.append(chunk)
         if not timed_out:
+            # Acceptance, not cleanup: the child must be FINISHED within
+            # the original monotonic budget even though it already closed
+            # stdout; cleanup below may take longer but never extends the
+            # answer window.
             try:
                 returncode = proc.wait(
-                    timeout=max(deadline - time.monotonic(), 0.0) + 0.5
+                    timeout=max(deadline - time.monotonic(), 0.0)
                 )
             except subprocess.TimeoutExpired:
                 timed_out = True
@@ -359,6 +399,15 @@ def _probe_version_json(helper: str) -> tuple[int, bytes]:
         )
     assert returncode is not None  # only reachable when wait() succeeded
     return returncode, b"".join(chunks)
+
+
+class _NonJsonConstantError(ValueError):
+    """NaN/Infinity/-Infinity: a Python json extension, never valid JSON."""
+
+
+def _reject_non_json_constant(token: str) -> None:
+    """``parse_constant`` hook keeping the metadata gate strict-JSON."""
+    raise _NonJsonConstantError(token)
 
 
 def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
@@ -378,7 +427,11 @@ def _parse_version_metadata(output: bytes) -> None:
     Exactly one JSON object on a single line; ``version``/``commit`` must
     be nonempty strings; ``protocol`` must equal
     :data:`EXPECTED_PROTOCOL`. Extra top-level fields are accepted (the
-    contract is additive), everything else fails closed. Raises
+    contract is additive), everything else fails closed: non-JSON
+    constants (``NaN``/``Infinity``/``-Infinity``) are rejected even in
+    additive fields, and nesting deep enough to exhaust the parser's
+    recursion is contained as the concise refusal instead of leaking a
+    ``RecursionError`` traceback. Raises
     :class:`HelperIncompatibleError` with a reason-only message; the
     caller composes the full error. Field values are never quoted into
     error text (except the ASCII-escaped protocol tag) so a hostile
@@ -399,7 +452,18 @@ def _parse_version_metadata(output: bytes) -> None:
                 reason = "expected exactly one JSON line, got several"
             else:
                 try:
-                    fields = json.loads(text, object_pairs_hook=_no_duplicate_keys)
+                    fields = json.loads(
+                        text,
+                        object_pairs_hook=_no_duplicate_keys,
+                        parse_constant=_reject_non_json_constant,
+                    )
+                except _NonJsonConstantError:
+                    reason = (
+                        "metadata contains NaN/Infinity, which are not "
+                        "valid JSON"
+                    )
+                except RecursionError:
+                    reason = "metadata nests too deeply to parse"
                 except ValueError:
                     reason = "metadata is not a single JSON object"
                 else:

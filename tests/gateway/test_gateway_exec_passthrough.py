@@ -65,6 +65,14 @@ SIGNAL_HELPER = """\
 #!/usr/bin/env python3
 import json, signal, sys, time
 
+# SIGTERM is blocked until the handler is installed and the ready line is
+# out: a signal arriving mid-print used to run the handler re-entrantly
+# inside BufferedWriter (RuntimeError, exit 1) — a defect of this test
+# double's stdio, not of the exec boundary under test. After the ready
+# line, the test may signal at any moment; delivery happens either here
+# (handler runs) or as a pending signal at unblock (handler then runs).
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+
 if len(sys.argv) > 1 and sys.argv[1] == "version":
     # The wrapper's protocol probe must get an answer instead of a timeout.
     print(json.dumps(
@@ -78,6 +86,7 @@ def on_term(_sig, _frame):
 
 signal.signal(signal.SIGTERM, on_term)
 print("helper-ready", flush=True)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
 time.sleep(30)
 """
 
@@ -218,17 +227,12 @@ def _wheel_installed() -> bool:
         return False
 
 
-@pytest.mark.skipif(
-    _wheel_installed(),
-    reason=(
-        "a pocketshell-gateway-link wheel installed in THIS venv satisfies "
-        "discovery even with an empty PATH, so nothing here would be missing"
-    ),
-)
 def test_metadata_probe_runs_before_the_real_command(tmp_path):
     # The protocol gate is a BEFORE-exec step: the helper sees the
     # `version --json` probe first and only then the real subcommand, in
-    # one exec chain (same process after os.execv).
+    # one exec chain (same process after os.execv). This always runs, even
+    # with a helper wheel installed: the explicit pin below wins
+    # resolution, so discovery cannot change what this test observes.
     helper, argv_file, stdin_file = _recording_helper(tmp_path)
     order_file = tmp_path / "order.txt"
     proc = _run_gateway(
@@ -240,6 +244,117 @@ def test_metadata_probe_runs_before_the_real_command(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert order_file.read_text().splitlines() == ["probe", "exec"]
+
+
+CWD_SELECTED_HELPER = """\
+#!/bin/sh
+# Identity-tagged double: order entries name WHICH file ran, so a probe
+# answered by one binary and a command executed by another is visible.
+if [ "$1" = version ]; then
+  printf 'cwd-probe\\n' >> "$FAKE_ORDER_FILE"
+  printf '%s\\n' '{"version":"devel","protocol":"pocketshell-tunnel-v1","commit":"unknown"}'
+  exit "${FAKE_CWD_PROBE_EXIT:-0}"
+fi
+printf 'cwd-exec\\n' >> "$FAKE_ORDER_FILE"
+exit 0
+"""
+
+PATH_DECOY_HELPER = """\
+#!/bin/sh
+# The PATH look-alike: fully compatible, so only the resolution identity
+# (not compatibility) can decide which binary is probed and exec'd.
+if [ "$1" = version ]; then
+  printf 'decoy-probe\\n' >> "$FAKE_ORDER_FILE"
+  printf '%s\\n' '{"version":"devel","protocol":"pocketshell-tunnel-v1","commit":"unknown"}'
+  exit 0
+fi
+printf 'decoy-exec\\n' >> "$FAKE_ORDER_FILE"
+exit 0
+"""
+
+
+def _write_exec_at(path: Path, script: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(script)
+    path.chmod(0o755)
+    return path
+
+
+def _run_gateway_from_cwd(
+    args: list[str], *, cwd: Path, pin: str | None, **env_extra
+) -> subprocess.CompletedProcess:
+    """Like _run_gateway, but with a controlled cwd and an optional BARE pin."""
+    env = {**os.environ}
+    env.pop("POCKETSHELL_GATEWAY_HELPER", None)
+    if pin is not None:
+        env["POCKETSHELL_GATEWAY_HELPER"] = pin
+    env.update(env_extra)
+    return subprocess.run(
+        [sys.executable, "-m", "pocketshell", "gateway", *args],
+        input=TOKEN,
+        capture_output=True,
+        env=env,
+        cwd=str(cwd),
+        timeout=30,
+        check=False,
+    )
+
+
+def test_bare_relative_pin_probes_and_execs_the_same_file(tmp_path):
+    # A bare `POCKETSHELL_GATEWAY_HELPER=pocketshell-link` pin with the
+    # named file present in cwd: the selected binary must be ONE absolute
+    # file used for BOTH the metadata probe and the final exec. Before the
+    # normalization fix, Popen searched PATH (decoy answered the probe)
+    # while os.execv took the cwd file (executing an unverified binary).
+    order_file = tmp_path / "order.txt"
+    _write_exec_at(tmp_path / "pocketshell-link", CWD_SELECTED_HELPER)
+    _write_exec_at(tmp_path / "decoy-bin" / "pocketshell-link", PATH_DECOY_HELPER)
+    proc = _run_gateway_from_cwd(
+        ["show"],
+        cwd=tmp_path,
+        pin="pocketshell-link",
+        PATH=str(tmp_path / "decoy-bin"),
+        FAKE_ORDER_FILE=str(order_file),
+    )
+    assert proc.returncode == 0, proc.stderr
+    # Only the SELECTED (cwd) binary supplies metadata and executes; the
+    # compatible PATH decoy never runs at all.
+    assert order_file.read_text().splitlines() == ["cwd-probe", "cwd-exec"]
+
+
+def test_incompatible_selected_pin_refuses_despite_good_decoy(tmp_path):
+    # The inverse identity failure: the cwd-selected binary speaks the
+    # WRONG protocol while a perfect helper sits on PATH. The gate must
+    # probe the selected file and refuse — never pass on the decoy's
+    # answer and then exec the unverified selected binary.
+    exec_marker = tmp_path / "cwd-exec-marker"
+    bad_cwd_helper = (
+        "#!/bin/sh\n"
+        'if [ "$1" = version ]; then\n'
+        "  printf '%s\\n' "
+        "'{\"version\":\"9.9.9\",\"protocol\":\"pocketshell-tunnel-v2\",\"commit\":\"x\"}'\n"
+        "  exit 0\n"
+        "fi\n"
+        f"touch '{exec_marker}'\n"
+        "exit 0\n"
+    )
+    _write_exec_at(tmp_path / "pocketshell-link", bad_cwd_helper)
+    _write_exec_at(tmp_path / "decoy-bin" / "pocketshell-link", PATH_DECOY_HELPER)
+    proc = _run_gateway_from_cwd(
+        ["show"],
+        cwd=tmp_path,
+        pin="pocketshell-link",
+        PATH=str(tmp_path / "decoy-bin"),
+        FAKE_ORDER_FILE=str(tmp_path / "decoy-order.txt"),
+    )
+    assert proc.returncode == 126, proc.stderr
+    stderr = proc.stderr.decode()
+    assert "not compatible" in stderr
+    assert "Traceback" not in stderr
+    # Neither binary executed a real subcommand: the selected one was
+    # refused at the gate, the decoy was never even probed.
+    assert not exec_marker.exists()
+    assert not (tmp_path / "decoy-order.txt").exists()
 
 
 def test_metadata_probe_cannot_consume_the_piped_enrollment_token(tmp_path):
@@ -302,6 +417,61 @@ def test_helper_with_failing_version_subcommand_is_refused_in_subprocess(
     assert "status 3" in stderr
     assert "Traceback" not in stderr
     assert not argv_file.exists()
+
+
+@pytest.mark.skipif(
+    _wheel_installed(),
+    reason=(
+        "a pocketshell-gateway-link wheel installed in THIS venv (or on "
+        "PYTHONPATH) is selected BEFORE the empty PATH, so helper absence "
+        "cannot be simulated in this process tree; the fresh-venv "
+        "integration run covers the installed-wheel environment, and this "
+        "test runs wherever no wheel is installed"
+    ),
+)
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_non_json_additive_values_are_refused_in_subprocess(tmp_path, constant):
+    # NaN/Infinity/-Infinity parse via Python's legacy float extension but
+    # are NOT JSON: an additive field carrying one must fail the gate at
+    # the real process boundary (exit 126, concise line, no traceback) and
+    # the real subcommand must never run.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    payload = (
+        '{"version":"1.0.0","protocol":"pocketshell-tunnel-v1",'
+        f'"commit":"abc","ratio":{constant}}}'
+    )
+    proc = _run_gateway(
+        ["show"],
+        helper,
+        FAKE_METADATA=payload,
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 126, proc.stderr
+    stderr = proc.stderr.decode()
+    assert "not compatible" in stderr
+    assert "Traceback" not in stderr
+    assert not argv_file.exists()
+    assert not stdin_file.exists()
+
+
+def test_nested_additive_json_is_accepted_in_subprocess(tmp_path):
+    # Ordinary additive JSON — nested objects/arrays — must keep passing
+    # the gate (the contract is additive), and the real subcommand runs.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    payload = (
+        '{"version":"1.0.0","protocol":"pocketshell-tunnel-v1",'
+        '"commit":"abc","buildInfo":{"go":"1.27","flags":["a","b"]}}'
+    )
+    proc = _run_gateway(
+        ["show"],
+        helper,
+        FAKE_METADATA=payload,
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert argv_file.read_bytes().split(b"\0")[:-1] == [b"show"]
 
 
 def test_missing_helper_command_fails_with_127(tmp_path):
