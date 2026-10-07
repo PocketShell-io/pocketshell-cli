@@ -67,6 +67,7 @@ pocketshell hooks ...                       # Claude/Codex/OpenCode hooks
 pocketshell logs ...                        # server-side trace sink
 pocketshell daemon ...                      # IPC daemon lifecycle
 pocketshell serve --dir PATH [--port N]     # foreground static HTTP server
+pocketshell gateway enroll|run|show         # gateway host agent (docs/gateway.md)
 ```
 
 Run `pocketshell --help` or `pocketshell <command> --help` for the live
