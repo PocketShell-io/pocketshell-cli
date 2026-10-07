@@ -28,6 +28,7 @@ from pocketshell.agents import agents_group
 from pocketshell.agents.launch.cli import agent_group
 from pocketshell.env import env_group
 from pocketshell.engines import engines_group
+from pocketshell.gateway import gateway_group
 from pocketshell.github import github_group
 from pocketshell.hooks import hooks_group
 from pocketshell.link.cli import link_group, relay_group
@@ -80,6 +81,11 @@ register_push_card_commands(push_group)
 cli.add_command(serve_command, name="serve")
 cli.add_command(link_group, name="link")
 cli.add_command(relay_group, name="relay")
+# `gateway` wraps the Go `pocketshell-link` host agent (reverse-tunnel
+# transport, per-device enrolled keys). Deliberately separate from the
+# legacy shared-token `link`/`relay` commands above — the two protocols
+# are not interoperable and must not be cross-routed.
+cli.add_command(gateway_group, name="gateway")
 cli.add_command(workspaces_group, name="workspaces")
 
 
