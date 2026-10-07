@@ -33,6 +33,9 @@ apply — this CLI does not carry a second copy of them:
 | `--config-dir` | yes | `${XDG_CONFIG_HOME:-$HOME/.config}/pocketshell-link` |
 | `--ssh-host` | yes (`enroll`) | `127.0.0.1:22`, loopback only |
 | `--device-id` | yes (`enroll`) | auto-generated from the hostname |
+| `--expect-host-key` | yes (`enroll`) | none (the probed key is pinned unverified) |
+| `--re-enroll` | yes (`enroll`) | off — re-enrollment is refused without it |
+| `--dev-broker-issuer` | yes (`enroll`, dev-guarded) | production broker issuer |
 | `--insecure-dev` | yes, never defaulted | off |
 
 ## 1. Install the helper
@@ -58,6 +61,11 @@ With neither, every `gateway` subcommand exits **127** and prints the build
 instructions above. (The helper's other subcommands, e.g.
 `pocketshell-link version`, are reachable by calling the helper directly;
 this CLI wraps exactly `enroll`, `run`, and `show`.)
+
+How the helper is *distributed* — today (build it yourself), the planned
+checksum-verified platform wheels, which platforms are unsupported, and why
+the wrapper performs no version check yet — is specified in
+[docs/gateway-distribution.md](gateway-distribution.md).
 
 ## 2. Prerequisites on the host
 
@@ -107,15 +115,20 @@ is the point of the design:
 
 ## 3. Enroll the host
 
-One-time per host (repeat to re-enroll). You need a fresh **gateway
-enrollment token** — a short-lived (≤ 5 minutes) token scoped to
-`pocketshell-gateway`, minted by the trusted PocketShell token service in
-exchange for your web-client sign-in. Generate it in the PocketShell web
-client's gateway settings (**Generate enrollment token**), then pipe it in:
+One-time per host. You need a fresh **gateway enrollment token** — a
+short-lived (≤ 5 minutes) token scoped to `pocketshell-gateway`, minted by
+the trusted PocketShell token service in exchange for your web-client
+sign-in. Generate it in the PocketShell web client's gateway settings
+(**Generate enrollment token**), then pipe it in:
 
 ```bash
 pocketshell gateway enroll --token-stdin < enrollment-token.txt
 ```
+
+**Already enrolled?** Re-enrollment is explicit: the helper refuses to
+overwrite an existing registration unless you pass `--re-enroll` (the
+gateway may also have re-enrollment disabled entirely — that refusal comes
+from the server, not the CLI).
 
 Useful flags:
 
@@ -123,15 +136,16 @@ Useful flags:
 pocketshell gateway enroll --token-stdin \
     --device-id "office workstation" \
     --ssh-host 127.0.0.1:22 \
-    --expect-host-key "SHA256:AbCd…/Fp="
+    --expect-host-key "SHA256:AbCd…/Fp=" \
+    --re-enroll
 ```
 
 - `--token-stdin` is required; `enroll` refuses to run without it. The token
-  is short-lived — run enroll right after generating it. It travels only
-  inside the enroll request body, never in a URL, argv, or log line, and
-  this wrapper passes stdin through opaquely (it never reads, exchanges, or
-  logs the token; there is no token CLI flag — argv leaks via shell history
-  and process listings).
+  is short-lived — run enroll right after generating it. It travels only as
+  the `Authorization` header of the enroll request, never in a URL, argv, or
+  log line, and this wrapper passes stdin through opaquely (it never reads,
+  exchanges, or logs the token; there is no token CLI flag — argv leaks via
+  shell history and process listings).
 - **Never pipe your raw account sign-in credential here.** Only the
   gateway-scoped enrollment token belongs on stdin; the account token itself
   must never reach the gateway.
@@ -150,8 +164,46 @@ pocketshell gateway run
 
 Foreground process; stop with Ctrl+C or SIGTERM (clean exit 0). It reads the
 state written by `enroll` from the config dir. `--server` overrides the
-enrolled URL; `--verbose` turns on debug logging (to stderr). Run it under
-your supervisor of choice (systemd user unit, tmux, …).
+enrolled URL; `--verbose` turns on debug logging (to stderr).
+
+Run it under any supervisor. A reproducible **systemd user unit** (no root,
+runs as the same user who enrolled — so it sees the same config dir, the
+pinned host key, and the device key; the helper is pinned by absolute path
+so the unit cannot be satisfied by an arbitrary binary that happens to be on
+PATH; no `--ssh-host` override: the unit serves exactly the enrolled
+loopback sshd):
+
+```ini
+# ~/.config/systemd/user/pocketshell-gateway.service
+[Unit]
+Description=PocketShell gateway host agent (reverse tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/pocketshell gateway run --verbose
+Environment=POCKETSHELL_GATEWAY_HELPER=%h/.local/bin/pocketshell-link
+# XDG_CONFIG_HOME must match the enroll-time value; the default below is
+# what `gateway enroll` used when the variable was unset for that user.
+Environment=XDG_CONFIG_HOME=%h/.config
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now pocketshell-gateway.service
+journalctl --user -u pocketshell-gateway.service -f
+```
+
+Adjust the two absolute paths (`ExecStart`, `POCKETSHELL_GATEWAY_HELPER`) to
+where `pocketshell` and the built `pocketshell-link` actually live for this
+user — `pocketshell gateway show` must run as this same user and print the
+enrolled state before you enable the unit; if it prints nothing, the unit
+would enroll nothing either.
 
 ## 5. Show the enrolled state
 
@@ -169,22 +221,55 @@ the config dir).
 
 ## 6. Docker / local development gateways
 
-Against a gateway running locally or in Docker (plain `ws://`, no TLS):
+Against a gateway running locally or in Docker (plain `ws://`, no TLS), the
+complete flow has **four** explicit pieces — server, dev mode, dev issuer,
+token — and the helper checks the token's shape **locally, before any
+network request**:
 
 ```bash
 pocketshell gateway enroll --token-stdin \
-    --server ws://gateway:8080 --insecure-dev
+    --server ws://gateway:8080 \
+    --insecure-dev \
+    --dev-broker-issuer "https://lab-broker.example" \
+    < lab-token.txt
+
 pocketshell gateway run --server ws://gateway:8080 --insecure-dev
 ```
 
-In a lab like this, the local broker mints **ephemeral fixture tokens** for
-enrollment — pipe one of those to `--token-stdin` (the production
-web-client flow from §3 is not required for the lab).
+- **`--server`** names your lab gateway explicitly. Plain `ws://`/`http://`
+  URLs are accepted only together with `--insecure-dev`, on **every**
+  command that dials — it is never sticky and never defaulted. TLS
+  verification is never skipped either way, and there is no cert-skip flag.
+  The URL is forwarded verbatim: IPv6 literals (`ws://[::1]:8080`), paths
+  and ports are supported shapes the helper itself validates.
+- **`--dev-broker-issuer`** names the issuer your **local lab broker** mints
+  its ephemeral enrollment tokens with. The helper's local guard refuses
+  every JWT whose `iss` is not exactly this value — including every
+  ephemeral lab token when the flag is omitted, and any Google ID token
+  always. The refusal happens **before any HTTP request**; that is designed
+  behavior, not a bug. The wrapper additionally refuses the flag without
+  `--insecure-dev`, without an explicit `--server`, and never lets it target
+  the production gateway.
+- **The lab token itself** must be a JWT with the broker shape: `aud` exactly
+  `pocketshell-gateway`, `scope` exactly `pocketshell.gateway`, lifetime ≤ 5
+  minutes, unexpired, RS256-signed. These are shape checks on unverified
+  claims (a disclosure gate); the gateway still verifies the signature. Your
+  lab's token mint must produce exactly this shape and its gateway side must
+  verify the same issuer — the new-API gateway has no accept-any-token mode
+  (that flag exists only on the legacy relay binary); point the lab's
+  routing-auth verifier at the lab broker's keys, as the Go repo's lab
+  fixtures do.
+- **Loopback OpenSSH and independent pins hold in the lab too**: the agent
+  bridges only to the configured loopback sshd endpoint (default
+  `127.0.0.1:22`), and `--insecure-dev` never lifts that. Enrollment probes
+  and pins the lab host's real sshd host key independently of the enrollment
+  token; the device key, the pinned host key, and the enrollment token
+  remain the three separate credentials described in §2. Nothing in this
+  section names real secrets — every issuer and URL above is a placeholder.
 
-`--insecure-dev` must be passed explicitly on **every** command that talks to
-a plain `ws://` / `http://` URL; it is never sticky and never defaulted. It
-exists for development only: TLS certificate verification is never skipped
-either way, and the local SSH bridge stays loopback-only even in dev mode.
+The production web-client flow from §3 does not apply to a lab: production
+tokens carry the production broker issuer and are refused against a lab
+`--dev-broker-issuer`, and vice versa.
 
 ## 7. Relationship to the legacy `link` transport
 

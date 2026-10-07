@@ -210,3 +210,56 @@ def test_run_preserves_stdin_descriptor_for_the_helper(tmp_path):
     assert stdin_file.read_bytes() == TOKEN
     argv = argv_file.read_bytes().split(b"\0")[:-1]
     assert argv == [b"run"]
+
+
+def test_guarded_dev_flags_reach_the_helper_as_exact_argv(tmp_path):
+    # Subprocess proof of the guarded forwarding: --dev-broker-issuer and
+    # --re-enroll pass the wrapper preflight (insecure-dev + explicit
+    # non-production server) and arrive as exact single argv elements, with
+    # the IPv6 literal server URL intact.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    proc = _run_gateway(
+        [
+            "enroll",
+            "--token-stdin",
+            "--server", "ws://[::1]:8080",
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+            "--re-enroll",
+        ],
+        helper,
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 0, proc.stderr
+    argv = argv_file.read_bytes().split(b"\0")[:-1]
+    assert argv == [
+        b"enroll",
+        b"--token-stdin",
+        b"--server", b"ws://[::1]:8080",
+        b"--re-enroll",
+        b"--dev-broker-issuer", b"https://lab-broker.example",
+        b"--insecure-dev",
+    ]
+
+
+def test_dev_broker_issuer_preflight_rejection_happens_in_subprocess(tmp_path):
+    # The negative half at the real process boundary: an unguarded
+    # --dev-broker-issuer is refused with usage exit code 2 and the helper
+    # is never exec'd (its argv file is never created).
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    proc = _run_gateway(
+        [
+            "enroll",
+            "--token-stdin",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+        helper,
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 2
+    stderr = proc.stderr.decode()
+    assert "--insecure-dev" in stderr
+    assert not argv_file.exists(), "helper must not be exec'd on preflight refusal"
+    assert not stdin_file.exists()

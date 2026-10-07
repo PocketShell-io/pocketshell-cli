@@ -202,3 +202,171 @@ def test_broken_helper_pin_errors_instead_of_falling_back(monkeypatch, tmp_path)
     result = CliRunner().invoke(cli, ["gateway", "run"])
     assert result.exit_code == 127
     assert "POCKETSHELL_GATEWAY_HELPER" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# guarded --dev-broker-issuer forwarding (mirrors the Go brokerPolicy guard)
+# ---------------------------------------------------------------------------
+
+
+def test_dev_broker_issuer_forwarded_when_guarded(pin_helper, exec_calls):
+    pin_helper("#!/bin/sh\nexit 0\n")
+    result = CliRunner().invoke(
+        cli,
+        [
+            "gateway", "enroll",
+            "--token-stdin",
+            "--server", "ws://[::1]:8080",
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+    )
+    # Guarded forwarding: DEV issuer override only ever travels with
+    # --insecure-dev AND an explicit non-production --server; both the
+    # IPv6 literal server URL and the issuer stay single argv elements.
+    assert _argv(exec_calls, result) == [
+        "enroll",
+        "--token-stdin",
+        "--server", "ws://[::1]:8080",
+        "--dev-broker-issuer", "https://lab-broker.example",
+        "--insecure-dev",
+    ]
+
+
+def test_dev_broker_issuer_without_insecure_dev_is_refused_before_exec(
+    exec_calls,
+):
+    result = CliRunner().invoke(
+        cli,
+        [
+            "gateway", "enroll",
+            "--token-stdin",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--insecure-dev" in result.output
+    # Nothing reached the helper: the refusal is local to the wrapper, and
+    # without --insecure-dev the helper itself would refuse too (its
+    # brokerPolicy guard) — the wrapper just fails earlier and clearer.
+    assert exec_calls == []
+
+
+def test_dev_broker_issuer_without_explicit_server_is_refused(exec_calls):
+    # Insecure-dev alone is not enough: with no --server the helper would
+    # target its built-in production gateway while trusting a lab issuer —
+    # exactly the disclosure the wrapper must prevent.
+    result = CliRunner().invoke(
+        cli,
+        [
+            "gateway", "enroll",
+            "--token-stdin",
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--server" in result.output
+    assert "production" in result.output
+    assert exec_calls == []
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        "wss://gateway.pocketshell.io",
+        "https://gateway.pocketshell.io",
+        "ws://GATEWAY.POCKETSHELL.IO:8080",
+        "wss://gateway.pocketshell.io/some/path",
+    ],
+)
+def test_dev_broker_issuer_never_targets_the_production_gateway(
+    pin_helper, exec_calls, server
+):
+    pin_helper("#!/bin/sh\nexit 0\n")
+    result = CliRunner().invoke(
+        cli,
+        [
+            "gateway", "enroll",
+            "--token-stdin",
+            "--server", server,
+            "--insecure-dev",
+            "--dev-broker-issuer", "https://lab-broker.example",
+        ],
+    )
+    assert result.exit_code != 0, server
+    assert "production" in result.output
+    assert exec_calls == []
+
+
+def test_enroll_without_dev_broker_issuer_is_unaffected(pin_helper, exec_calls):
+    # The production contract is untouched: no dev flags, no dev guard.
+    pin_helper("#!/bin/sh\nexit 0\n")
+    result = CliRunner().invoke(cli, ["gateway", "enroll", "--token-stdin"])
+    assert _argv(exec_calls, result) == ["enroll", "--token-stdin"]
+
+
+# ---------------------------------------------------------------------------
+# --re-enroll forwarding
+# ---------------------------------------------------------------------------
+
+
+def test_re_enroll_forwarded_only_when_passed(pin_helper, exec_calls):
+    pin_helper("#!/bin/sh\nexit 0\n")
+    plain = CliRunner().invoke(cli, ["gateway", "enroll", "--token-stdin"])
+    assert _argv(exec_calls, plain) == ["enroll", "--token-stdin"]
+
+    again = CliRunner().invoke(
+        cli, ["gateway", "enroll", "--token-stdin", "--re-enroll"]
+    )
+    assert _argv(exec_calls, again) == ["enroll", "--token-stdin", "--re-enroll"]
+
+
+def test_re_enroll_and_dev_broker_issuer_are_enroll_only(pin_helper, exec_calls):
+    # run/show must not grow enroll-only flags: Click rejects the option and
+    # the builder rejects the kwarg, so nothing is ever exec'd with them.
+    pin_helper("#!/bin/sh\nexit 0\n")
+    runner = CliRunner()
+    for command in ("run", "show"):
+        result = runner.invoke(cli, ["gateway", command, "--re-enroll"])
+        assert result.exit_code != 0, command
+        assert exec_calls == []
+
+
+def test_enroll_help_documents_the_dev_issuer_guard():
+    result = CliRunner().invoke(cli, ["gateway", "enroll", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--re-enroll" in result.output
+    assert "--dev-broker-issuer" in result.output
+    # The guard contract is visible in help, not buried in a man page.
+    assert "--insecure-dev" in result.output
+
+
+# ---------------------------------------------------------------------------
+# server URL shapes the helper actually supports (forwarded verbatim)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        "wss://gateway.example/api/v1",  # base URL with a path
+        "ws://[2001:db8::1]:8080",  # IPv6 literal (docker/lab networks)
+        "wss://[::1]:8443/tunnel",  # IPv6 loopback with path
+    ],
+)
+def test_server_urls_with_ipv6_and_paths_forward_verbatim(
+    pin_helper, exec_calls, server
+):
+    # The wrapper does not parse or rewrite --server: whatever the operator
+    # typed — IPv6 literals, paths, ports — arrives at the helper as ONE
+    # argv element for the helper's own NormalizeServerURL to judge.
+    pin_helper("#!/bin/sh\nexit 0\n")
+    result = CliRunner().invoke(
+        cli, ["gateway", "run", "--server", server, "--insecure-dev"]
+    )
+    assert _argv(exec_calls, result) == [
+        "run",
+        "--server", server,
+        "--insecure-dev",
+    ]

@@ -20,7 +20,22 @@ value errors instead of silently falling back to PATH) or a
 `pocketshell-link` found on PATH. It is never downloaded and never bundled:
 build it from the private ``pocketshell-gateway`` repository
 (https://github.com/PocketShell-io/pocketshell-gateway) with Go (the
-missing-helper error says exactly that).
+missing-helper error says exactly that). The planned distribution route —
+platform wheels carrying the prebuilt helper, built and published by the
+private repo's own CI, checksum-verified, no silent downloads — is specified
+in ``docs/gateway-distribution.md``; until that lands, this resolution
+contract is the whole story.
+
+**Version/protocol honesty:** the wrapper performs NO version or protocol
+negotiation today. The current helper's `version` subcommand reports the
+literal string ``pocketshell-link dev (protocol pocketshell-tunnel-v1)`` —
+a hardcoded ``dev``, not a release version — so any "check" against it
+would be theater, not compatibility proof. A runtime version/protocol
+metadata request is filed with the Go runtime owner; once the helper
+reports real metadata, a check can be added and must compare the protocol
+tag (``pocketshell-tunnel-v1``), not parse the version as a compatibility
+guarantee.
+
 """
 
 from __future__ import annotations
@@ -99,6 +114,8 @@ def build_helper_argv(
     device_id: Optional[str] = None,
     ssh_host: Optional[str] = None,
     expect_host_key: Optional[str] = None,
+    dev_broker_issuer: Optional[str] = None,
+    re_enroll: bool = False,
 ) -> list[str]:
     """Build the helper argv for one subcommand.
 
@@ -109,6 +126,13 @@ def build_helper_argv(
     be a second source of truth that drifts. Boolean flags are forwarded
     only when set — `--insecure-dev` in particular is never defaulted on.
 
+    `--dev-broker-issuer` and `--re-enroll` exist on `enroll` only; passing
+    them for `run`/`show` is a programming error and raises here rather
+    than building an argv the helper would reject at flag-parse time. (The
+    CLI layer additionally refuses `--dev-broker-issuer` without
+    `--insecure-dev` and an explicit lab `--server`; see
+    `pocketshell.gateway.cli._preflight_dev_broker_issuer`.)
+
     Values are returned as individual argv elements verbatim; values with
     spaces (a host-key line, a config dir under a spaced path) stay single
     elements. Nothing here is ever interpolated through a shell: the argv
@@ -116,6 +140,24 @@ def build_helper_argv(
     """
     if subcommand not in SUBCOMMANDS:
         raise ValueError(f"unsupported helper subcommand: {subcommand!r}")
+    if subcommand != "enroll":
+        enroll_only = [
+            name
+            for name, passed in (
+                ("token_stdin", token_stdin),
+                ("device_id", device_id is not None),
+                ("ssh_host", ssh_host is not None),
+                ("expect_host_key", expect_host_key is not None),
+                ("dev_broker_issuer", dev_broker_issuer is not None),
+                ("re_enroll", re_enroll),
+            )
+            if passed
+        ]
+        if enroll_only:
+            raise ValueError(
+                f"enroll-only option(s) {enroll_only} passed for helper "
+                f"subcommand {subcommand!r}"
+            )
     argv = [subcommand]
     if token_stdin:
         argv.append("--token-stdin")
@@ -129,6 +171,10 @@ def build_helper_argv(
         argv.extend(["--ssh-host", ssh_host])
     if expect_host_key is not None:
         argv.extend(["--expect-host-key", expect_host_key])
+    if re_enroll:
+        argv.append("--re-enroll")
+    if dev_broker_issuer is not None:
+        argv.extend(["--dev-broker-issuer", dev_broker_issuer])
     if insecure_dev:
         argv.append("--insecure-dev")
     if verbose:

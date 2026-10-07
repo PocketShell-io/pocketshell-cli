@@ -119,6 +119,50 @@ def test_builder_forwards_falsy_but_set_values():
     assert build_helper_argv("show", config_dir="") == ["show", "--config-dir", ""]
 
 
+def test_builder_forwards_dev_broker_issuer_and_re_enroll():
+    # New enroll-only flags follow the same verbatim single-element rule.
+    assert build_helper_argv(
+        "enroll",
+        token_stdin=True,
+        re_enroll=True,
+        dev_broker_issuer="https://lab-broker.example",
+        server="ws://[::1]:8080",
+    ) == [
+        "enroll",
+        "--token-stdin",
+        "--server", "ws://[::1]:8080",
+        "--re-enroll",
+        "--dev-broker-issuer", "https://lab-broker.example",
+    ]
+    # Absent means absent, exactly as for every other option.
+    assert build_helper_argv("enroll", token_stdin=True) == [
+        "enroll",
+        "--token-stdin",
+    ]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"token_stdin": True},
+        {"device_id": "d"},
+        {"ssh_host": "127.0.0.1:22"},
+        {"expect_host_key": "SHA256:x"},
+        {"dev_broker_issuer": "https://lab-broker.example"},
+        {"re_enroll": True},
+    ],
+)
+def test_builder_rejects_enroll_only_kwargs_for_run_and_show(kwargs):
+    # The helper's flag parser would reject these on run/show; the builder
+    # refuses them at the seam so a wrapper bug can never exec an argv the
+    # helper must fail on.
+    for subcommand in ("run", "show"):
+        with pytest.raises(ValueError, match="enroll-only"):
+            build_helper_argv(subcommand, **kwargs)
+    # …and enroll itself still accepts every one of them.
+    assert build_helper_argv("enroll", **kwargs)[0] == "enroll"
+
+
 def test_env_pin_helper_is_never_resolved_from_cwd_relative_fallback(
     tmp_path, monkeypatch
 ):

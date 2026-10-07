@@ -11,10 +11,52 @@ keep their own protocol and CLI untouched.
 from __future__ import annotations
 
 from typing import Optional, Sequence
+from urllib.parse import urlsplit
 
 import click
 
 from pocketshell.gateway import helper as gateway_helper
+
+# The wrapper refuses to aim the DEV-ONLY `--dev-broker-issuer` override at
+# the production gateway, whatever the URL spelling. This is a target check
+# for one known-bad host, not URL validation: the helper owns that.
+_PRODUCTION_GATEWAY_HOSTS = frozenset({"gateway.pocketshell.io"})
+
+
+def _preflight_dev_broker_issuer(
+    dev_broker_issuer: Optional[str], insecure_dev: bool, server: Optional[str]
+) -> None:
+    """Guard the DEV-ONLY `--dev-broker-issuer` override before any exec.
+
+    Mirrors the helper's own guard (``brokerPolicy`` in the Go hostagent
+    refuses the issuer override without ``--insecure-dev``) and tightens the
+    lab posture: an explicit ``--server`` naming a non-production gateway is
+    also required, so lab-issuer credentials can never flow to the built-in
+    production default.
+    """
+    if dev_broker_issuer is None:
+        return
+    problems = []
+    if not insecure_dev:
+        problems.append(
+            "--dev-broker-issuer is a DEV-ONLY override and requires "
+            "--insecure-dev (the helper refuses it in normal mode)."
+        )
+    if server is None:
+        problems.append(
+            "--dev-broker-issuer requires an explicit --server naming your "
+            "lab gateway; without it the helper would target its built-in "
+            "production default."
+        )
+    else:
+        host = urlsplit(server).hostname or ""
+        if host.lower() in _PRODUCTION_GATEWAY_HOSTS:
+            problems.append(
+                f"--dev-broker-issuer must not target the production gateway "
+                f"({host}); point --server at your lab gateway instead."
+            )
+    if problems:
+        raise click.UsageError(" ".join(problems))
 
 
 def _run_helper(argv: Sequence[str], ctx: click.Context) -> None:
@@ -97,6 +139,27 @@ def gateway_group() -> None:
     is_flag=True,
     help="DEV ONLY: allow plain ws:// / http:// gateway URLs (e.g. docker). Never for production.",
 )
+@click.option(
+    "--re-enroll",
+    is_flag=True,
+    help=(
+        "Request explicit replacement of an existing registration (the "
+        "gateway may have re-enrollment disabled). Without this flag the "
+        "helper refuses to re-enroll an already-registered device."
+    ),
+)
+@click.option(
+    "--dev-broker-issuer",
+    default=None,
+    metavar="ISSUER",
+    help=(
+        "DEV ONLY: issuer of the ephemeral broker tokens your LOCAL lab "
+        "mints (e.g. a docker-compose broker). Requires --insecure-dev and "
+        "an explicit --server naming the lab gateway; the helper refuses "
+        "every other issuer, and production enrollment never passes this. "
+        "Never points at the production gateway."
+    ),
+)
 @click.option("--verbose", is_flag=True, help="Log debug output.")
 @click.pass_context
 def enroll(
@@ -108,6 +171,8 @@ def enroll(
     ssh_host: Optional[str],
     expect_host_key: Optional[str],
     insecure_dev: bool,
+    re_enroll: bool,
+    dev_broker_issuer: Optional[str],
     verbose: bool,
 ) -> None:
     """Generate the device key, pin the local sshd host key, enroll.
@@ -125,7 +190,13 @@ def enroll(
     exchanges or inspects the token.
 
     On success the host key of the local sshd is pinned in the config dir;
-    `gateway show` prints the enrolled state.
+    `gateway show` prints the enrolled state. Re-enrolling an
+    already-enrolled host needs `--re-enroll`.
+
+    Against a local/Docker lab gateway, see docs/gateway.md §6: the lab's
+    ephemeral broker tokens are only accepted when their issuer is passed
+    explicitly via `--dev-broker-issuer` together with `--insecure-dev` and
+    an explicit lab `--server`.
     """
     if not token_stdin:
         raise click.UsageError(
@@ -135,6 +206,7 @@ def enroll(
             "short-lived; run enroll right after generating it. There is "
             "deliberately no token CLI flag (history/process-listing leak)."
         )
+    _preflight_dev_broker_issuer(dev_broker_issuer, insecure_dev, server)
     argv = gateway_helper.build_helper_argv(
         "enroll",
         server=server,
@@ -145,6 +217,8 @@ def enroll(
         device_id=device_id,
         ssh_host=ssh_host,
         expect_host_key=expect_host_key,
+        dev_broker_issuer=dev_broker_issuer,
+        re_enroll=re_enroll,
     )
     _run_helper(argv, ctx)
 
