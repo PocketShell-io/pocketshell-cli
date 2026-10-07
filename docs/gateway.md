@@ -39,11 +39,11 @@ apply — this CLI does not carry a second copy of them:
 
 `pocketshell` does **not** bundle or download `pocketshell-link` (and accepts
 no credentials for fetching it). Build it from a checkout of the private
-`pocketshell-gateway-tunnel` repository — you need access to that repo and a
-Go toolchain:
+[pocketshell-gateway](https://github.com/PocketShell-io/pocketshell-gateway)
+repository — you need access to that repo and a Go toolchain:
 
 ```bash
-cd /path/to/pocketshell-gateway-tunnel
+cd /path/to/pocketshell-gateway
 go build -o "$HOME/.local/bin/pocketshell-link" ./cmd/pocketshell-link
 ```
 
@@ -81,8 +81,8 @@ the ordinary ones for SSH-ing into this machine:
   # 256 SHA256:AbCd…/Fp= (ED25519)
   ```
 
-There are two distinct key relationships, and keeping them separate is the
-point of the design:
+There are four distinct credential relationships, and keeping them separate
+is the point of the design:
 
 - **Host key (sshd → client):** your sshd's real public host key. `enroll`
   probes it over loopback and pins it in the local state; the tunnel-side
@@ -96,15 +96,25 @@ point of the design:
   at enroll time, used to prove device identity to the gateway via a signed
   challenge. It authorizes a *tunnel to sshd*, never a *shell*: a paired
   device still needs a valid SSH user key to get past sshd.
+- **Enrollment token (operator → gateway):** a short-lived (≤ 5 minutes)
+  RS256 JWT scoped to `pocketshell-gateway`, minted by the trusted PocketShell
+  token service (`https://a7sota2qic.execute-api.eu-west-1.amazonaws.com`,
+  `POST /gateway/token`) in exchange for your web-client sign-in. The
+  gateway verifies this broker token only — your raw account sign-in
+  credential never reaches the gateway. The token authorizes identity
+  management and routing during enrollment, nothing more, and expires within
+  five minutes (or with your upstream sign-in, whichever is sooner).
 
 ## 3. Enroll the host
 
-One-time per host (repeat to re-enroll). You need a fresh Google ID token for
-the account your PocketShell client is signed in with — obtain it from the
-client / gateway tooling and pipe it in:
+One-time per host (repeat to re-enroll). You need a fresh **gateway
+enrollment token** — a short-lived (≤ 5 minutes) token scoped to
+`pocketshell-gateway`, minted by the trusted PocketShell token service in
+exchange for your web-client sign-in. Generate it in the PocketShell web
+client's gateway settings (**Generate enrollment token**), then pipe it in:
 
 ```bash
-google-token print | pocketshell gateway enroll --token-stdin
+pocketshell gateway enroll --token-stdin < enrollment-token.txt
 ```
 
 Useful flags:
@@ -117,14 +127,20 @@ pocketshell gateway enroll --token-stdin \
 ```
 
 - `--token-stdin` is required; `enroll` refuses to run without it. The token
-  only ever travels inside the enroll request body — never in a URL, argv, or
-  log line.
+  is short-lived — run enroll right after generating it. It travels only
+  inside the enroll request body, never in a URL, argv, or log line, and
+  this wrapper passes stdin through opaquely (it never reads, exchanges, or
+  logs the token; there is no token CLI flag — argv leaks via shell history
+  and process listings).
+- **Never pipe your raw account sign-in credential here.** Only the
+  gateway-scoped enrollment token belongs on stdin; the account token itself
+  must never reach the gateway.
 - `--expect-host-key` pins the sshd host key you expect; a mismatch aborts
-  enrollment. Without it, the helper still probes and pins whatever the local
-  sshd presents — pass the flag when you can verify the fingerprint.
-- The Google account identity (issuer + subject) is what the gateway checks;
-  device registration additionally requires proof of possession of the
-  generated device key.
+  enrollment. Without it, the helper still probes and pins whatever the
+  local sshd presents — pass the flag when you can verify the fingerprint.
+- Enrollment proves possession of the generated device key via a signed
+  challenge; the gateway verifies the enrollment token's broker issuer,
+  fixed `pocketshell-gateway` audience, and short expiry.
 
 ## 4. Run the agent
 
@@ -161,6 +177,10 @@ pocketshell gateway enroll --token-stdin \
 pocketshell gateway run --server ws://gateway:8080 --insecure-dev
 ```
 
+In a lab like this, the local broker mints **ephemeral fixture tokens** for
+enrollment — pipe one of those to `--token-stdin` (the production
+web-client flow from §3 is not required for the lab).
+
 `--insecure-dev` must be passed explicitly on **every** command that talks to
 a plain `ws://` / `http://` URL; it is never sticky and never defaulted. It
 exists for development only: TLS certificate verification is never skipped
@@ -174,7 +194,7 @@ two are **not interoperable**:
 | | `pocketshell gateway …` (this doc) | `pocketshell link run` / `pocketshell relay serve` |
 | --- | --- | --- |
 | Transport | Go `pocketshell-link` helper → SSH gateway | Python daemon → generic relay (`docs/link-transport.md`) |
-| Auth | Per-device Ed25519 key enrolled via Google-account challenge | One shared relay token (`--token`) |
+| Auth | Per-device Ed25519 key enrolled via signed challenge with a gateway-scoped, ≤ 5 min enrollment token | One shared relay token (`--token`) |
 | Payload | Real SSH streams to the local sshd | Relay-side exec/PTY protocol |
 | State | `${XDG_CONFIG_HOME:-$HOME/.config}/pocketshell-link` | none (flags only) |
 
@@ -188,4 +208,9 @@ enrolled with either one gateway or one legacy relay — never both mixed.
 `pocketshell gateway` documents and wraps the host-side agent only. How the
 PocketShell phone/desktop app pairs and connects through this tunnel is
 separate, in-progress work elsewhere; nothing here implies that any client
-already uses it.
+already uses it. The same goes for the enrollment-token flow: the web
+client's **Generate enrollment token** action and its broker exchange are
+being built (web client and token-service integration in progress, not
+deployed/production yet) — until they land, obtain tokens from lab tooling
+as in §6. This wrapper treats the token on stdin as opaque bytes either way;
+it will not change when the issuer UI ships.

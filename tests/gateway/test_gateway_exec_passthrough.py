@@ -21,7 +21,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-TOKEN = b"google-id-token super-secret 0123456789 \t trailing-newline\n"
+# Arbitrary opaque bytes with awkward whitespace: the wrapper must pass
+# stdin through untouched whatever the token contains (and the name must not
+# imply any account credential — it is a gateway-scoped enrollment token).
+TOKEN = b"enrollment-token scoped-0123456789 \t trailing-newline\n"
 
 RECORDING_HELPER = """\
 #!/bin/sh
@@ -89,7 +92,7 @@ def test_token_flows_to_helper_stdin_and_is_never_logged(tmp_path):
     # …and it stayed out of everything the wrapper itself emitted.
     assert TOKEN not in proc.stdout
     assert TOKEN not in proc.stderr
-    assert b"google-id-token" not in proc.stdout + proc.stderr
+    assert b"enrollment-token" not in proc.stdout + proc.stderr
 
 
 def test_enroll_flags_reach_the_helper_as_exact_argv_elements(tmp_path):

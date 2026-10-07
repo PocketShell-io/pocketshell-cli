@@ -59,7 +59,11 @@ def test_missing_helper_error_names_the_build_path(tmp_path, monkeypatch):
     message = str(excinfo.value)
     assert HELPER_NAME in message
     assert "go build" in message
-    assert "pocketshell-gateway-tunnel" in message
+    # The real private repository and its authoritative URL — never the
+    # -tunnel spelling (that is a local worker worktree, not a repo).
+    assert "PocketShell-io/pocketshell-gateway" in message
+    assert "cd /path/to/pocketshell-gateway" in message
+    assert "pocketshell-gateway-tunnel" not in message
     assert HELPER_ENV_VAR in message
 
 

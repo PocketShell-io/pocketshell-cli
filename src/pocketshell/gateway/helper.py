@@ -18,8 +18,9 @@ The helper is resolved from trusted locations only:
 ``POCKETSHELL_GATEWAY_HELPER`` (explicit operator pin, validated — a bad
 value errors instead of silently falling back to PATH) or a
 `pocketshell-link` found on PATH. It is never downloaded and never bundled:
-build it from the private pocketshell-gateway-tunnel repository with Go
-(the missing-helper error says exactly that).
+build it from the private ``pocketshell-gateway`` repository
+(https://github.com/PocketShell-io/pocketshell-gateway) with Go (the
+missing-helper error says exactly that).
 """
 
 from __future__ import annotations
@@ -31,8 +32,8 @@ from typing import NoReturn, Optional
 HELPER_NAME = "pocketshell-link"
 HELPER_ENV_VAR = "POCKETSHELL_GATEWAY_HELPER"
 
-# Kept in sync with the helper contract
-# (pocketshell-gateway-tunnel/cmd/pocketshell-link/main.go). These are the
+# Kept in sync with the helper contract (cmd/pocketshell-link/main.go in the
+# pocketshell-gateway repo). These are the
 # subcommands the wrapper forwards; anything else the helper grows stays
 # opt-in on the helper's own CLI until a wrapper lands for it.
 SUBCOMMANDS = ("enroll", "run", "show")
@@ -77,9 +78,10 @@ def resolve_helper() -> str:
         "\n"
         "`pocketshell gateway` execs the Go helper; it does not bundle or "
         "download it. Build\nit from a checkout of the private "
-        "pocketshell-gateway-tunnel repository:\n"
+        "pocketshell-gateway repository\n"
+        "(https://github.com/PocketShell-io/pocketshell-gateway):\n"
         "\n"
-        "  cd /path/to/pocketshell-gateway-tunnel\n"
+        "  cd /path/to/pocketshell-gateway\n"
         "  go build -o \"$HOME/.local/bin/pocketshell-link\" ./cmd/pocketshell-link\n"
         "\n"
         f"Or point {HELPER_ENV_VAR} at an existing `{HELPER_NAME}` binary."

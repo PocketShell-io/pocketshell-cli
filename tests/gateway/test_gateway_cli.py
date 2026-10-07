@@ -65,6 +65,11 @@ def test_enroll_help_documents_stdin_only_token():
     result = CliRunner().invoke(cli, ["gateway", "enroll", "--help"])
     assert result.exit_code == 0, result.output
     assert "--token-stdin" in result.output
+    # The C2 scoped-credential correction: stdin carries a short-lived
+    # gateway-scoped ENROLLMENT token, not an account credential.
+    assert "enrollment token" in result.output
+    assert "5 minutes" in result.output
+    assert "Google" not in result.output
     # There is deliberately no value-taking token flag.
     assert re.search(r"--token(?!-stdin)\b", result.output) is None
 
@@ -167,7 +172,8 @@ def test_enroll_without_token_stdin_is_rejected_before_exec(exec_calls):
     result = CliRunner().invoke(cli, ["gateway", "enroll"])
     assert result.exit_code != 0
     assert "--token-stdin" in result.output
-    assert "stdin" in result.output.lower()
+    assert "enrollment token" in result.output
+    assert "Google" not in result.output
     # The failure happens at the wrapper: nothing was exec'd.
     assert exec_calls == []
 
@@ -183,7 +189,10 @@ def test_missing_helper_exits_127_with_build_instructions(monkeypatch, tmp_path)
     assert result.exit_code == 127
     assert "pocketshell-link" in result.stderr
     assert "go build" in result.stderr
-    assert "pocketshell-gateway-tunnel" in result.stderr
+    # The build source is the REAL private repository (authoritative URL);
+    # the -tunnel spelling is only a local worker worktree, never a repo.
+    assert "PocketShell-io/pocketshell-gateway" in result.stderr
+    assert "pocketshell-gateway-tunnel" not in result.stderr
 
 
 def test_broken_helper_pin_errors_instead_of_falling_back(monkeypatch, tmp_path):
