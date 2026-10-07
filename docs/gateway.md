@@ -111,7 +111,9 @@ the ordinary ones for SSH-ing into this machine:
 - **Key-based access configured.** Put the client device's SSH public key in
   your `~/.ssh/authorized_keys` for the user who will connect. This pairing
   is entirely between you and your host: the gateway never issues, stores, or
-  brokers your SSH user keys.
+  brokers your SSH user keys. Installing a key *enables* key login; by
+  itself it does not disable password, keyboard-interactive, empty-password
+  or root login — see §2.1 for the required endpoint policy.
 - **Your sshd host key fingerprint**, if you want to pin it explicitly at
   enroll time (recommended):
 
@@ -133,8 +135,11 @@ is the point of the design:
   your user account. Unchanged by the gateway; you provision it yourself.
 - **Device key (host agent → gateway):** an Ed25519 keypair generated locally
   at enroll time, used to prove device identity to the gateway via a signed
-  challenge. It authorizes a *tunnel to sshd*, never a *shell*: a paired
-  device still needs a valid SSH user key to get past sshd.
+  challenge. It authorizes a *tunnel to sshd*, never a *shell*: **with the
+  endpoint's key-only policy (§2.1) actually in effect**, a paired device
+  still needs a valid SSH user key to get past sshd — if the daemon also
+  accepts another authentication method, that method's own credentials work
+  over the tunnel too.
 - **Enrollment token (operator → gateway):** a short-lived (≤ 5 minutes)
   RS256 JWT scoped to `pocketshell-gateway`, minted by the trusted PocketShell
   token service (`https://a7sota2qic.execute-api.eu-west-1.amazonaws.com`,
@@ -143,6 +148,91 @@ is the point of the design:
   credential never reaches the gateway. The token authorizes identity
   management and routing during enrollment, nothing more, and expires within
   five minutes (or with your upstream sign-in, whichever is sooner).
+
+### 2.1 Endpoint SSH policy — required, operator-reviewed
+
+Installing a key (above) enables key login; it does not disable anything
+else. This matters because of what the transport is: **opaque SSH bytes
+routed to your local listener.** The gateway never parses them, so it
+cannot enforce how — or as whom — your sshd authenticates anyone. A
+compromised gateway can open SSH conversations with that listener under
+**arbitrary usernames**: the route does not bind an SSH username to your
+enrolled device, so key-only must hold for **every** username the listener
+admits, not merely a `Match User` block for the intended PocketShell
+account. Two enrollment properties are often over-read here: the pinned
+host key identifies the *server*, not which authentication methods the
+daemon allows, and the enroll-time host-key probe deliberately stops
+before user authentication — a successful `gateway enroll` is not an
+audit of your sshd policy.
+
+Required baseline (replace the placeholder account; review the existing
+configuration rather than appending blindly — `Include`d files such as
+`/etc/ssh/sshd_config.d/*` and every `Match` block can override global
+directives):
+
+```text
+AllowUsers YOUR_NONROOT_ACCOUNT
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+```
+
+- [`AuthenticationMethods publickey`](https://man.openbsd.org/sshd_config#AuthenticationMethods)
+  is the line that makes the endpoint key-only; the default is `any`.
+  Password and keyboard-interactive login are
+  [separate switches](https://man.openbsd.org/sshd_config#PasswordAuthentication)
+  ([keyboard-interactive](https://man.openbsd.org/sshd_config#KbdInteractiveAuthentication)),
+  and OpenSSH documents a `none` method that authenticates password-less
+  accounts when
+  [`PermitEmptyPasswords`](https://man.openbsd.org/sshd_config#PermitEmptyPasswords)
+  allows it — hence both switches and both refusals.
+- [`AllowUsers`](https://man.openbsd.org/sshd_config#AllowUsers) and
+  [`PermitRootLogin no`](https://man.openbsd.org/sshd_config#PermitRootLogin)
+  (`prohibit-password` still permits some root authentication) are the
+  recommended account/root restrictions — recommended hardening **on top
+  of** the required key-only policy, and worth stating explicitly because
+  the opaque route admits any username. Neither this CLI, the helper, nor
+  the gateway enforces them, and neither enforces root denial of any kind:
+  these exist only in your sshd configuration. They also apply to every
+  way the daemon is reached, ordinary direct SSH included — review the
+  change as you would any sshd change.
+
+Verify the **effective** policy, not the file you edited — `Match` and
+`Include` can change it per username and per source address:
+
+```bash
+sshd -t                                                    # validity first
+sshd -T -C user=YOUR_NONROOT_ACCOUNT,host=localhost,addr=127.0.0.1
+```
+
+([test mode](https://man.openbsd.org/sshd#T),
+[connection parameters](https://man.openbsd.org/sshd#C)) Run the `-T -C`
+variant for every username you intend to admit **and** for `root` and
+unintended accounts, with `addr` set to the loopback source the agent
+actually dials — the default here is `127.0.0.1`, and the helper equally
+accepts literal loopback IPv6 (`::1`) or `localhost`; a `-T` printout
+without `-C` does not show what your `Match` blocks do.
+
+Applying the change is an ordinary, OS-specific operator procedure, and
+nothing here executes it for you: review the running daemon's real
+arguments and configuration file (e.g. `systemctl cat sshd` or your init
+system's equivalent), edit, pass `sshd -t`, **keep your current SSH
+session open**, reload through your OS service manager (`systemctl reload
+sshd` under systemd, `service ssh reload` on sysv-style Debian/Ubuntu —
+unit and service names differ per OS), then re-run the `-T -C` checks.
+
+Honest limits of this baseline: with the endpoint's verified key-only
+policy, the independently pinned host key, trusted client/host software
+and protected authorized private keys, gateway credentials alone do not
+authenticate an SSH session — the gateway can still initiate connections
+and deny service. Validation and reload commands never remove private
+keys that were already exposed; treat key rotation or removal as its own
+trusted procedure, and note it prevents *new* logins only — it does not
+terminate an established session. That is separate from gateway-side
+routing/device revocation, which is what closes the tunnel.
 
 ## 3. Enroll the host
 
