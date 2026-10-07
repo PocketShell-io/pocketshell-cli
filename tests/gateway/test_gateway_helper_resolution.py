@@ -2,8 +2,11 @@
 
 The `pocketshell gateway` commands have no transport logic of their own;
 their entire usefulness depends on finding the right `pocketshell-link`
-binary: an explicit trusted pin first, then PATH, and a loud actionable
-error otherwise — never a download, never a bundled copy.
+binary: an explicit trusted pin first, then an installed
+`pocketshell-gateway-link` wheel, then PATH, and a loud actionable error
+otherwise — never a download, never a bundled copy. Whatever is picked
+still has to pass the `version --json` protocol gate (covered in
+test_gateway_helper_metadata.py) before anything is exec'd.
 """
 
 from __future__ import annotations

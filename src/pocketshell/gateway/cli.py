@@ -91,12 +91,23 @@ def _preflight_dev_broker_issuer(
 
 
 def _run_helper(argv: Sequence[str], ctx: click.Context) -> None:
-    """Resolve the Go helper and exec it (see :mod:`...gateway.helper`)."""
+    """Resolve + protocol-verify the Go helper, then exec it.
+
+    Two refusal surfaces before anything real runs: an unresolvable helper
+    exits **127** (existing contract), and a resolved helper that fails
+    the bounded ``version --json`` protocol gate exits **126** with a
+    concise compatibility error — never the helper's own output, never a
+    traceback (see :mod:`pocketshell.gateway.helper`).
+    """
     try:
         binary = gateway_helper.resolve_helper()
+        gateway_helper.verify_helper(binary)
     except gateway_helper.HelperNotFoundError as exc:
         click.echo(f"error: {exc}", err=True)
         ctx.exit(127)
+    except gateway_helper.HelperIncompatibleError as exc:
+        click.echo(f"error: {exc}", err=True)
+        ctx.exit(126)
     gateway_helper.exec_helper(binary, list(argv))
 
 

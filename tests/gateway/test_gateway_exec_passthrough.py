@@ -30,7 +30,29 @@ TOKEN = b"enrollment-token scoped-0123456789 \t trailing-newline\n"
 
 RECORDING_HELPER = """\
 #!/bin/sh
-# Test double for the Go pocketshell-link helper.
+# Test double for the Go pocketshell-link helper. The wrapper probes
+# `version --json` before the real subcommand; that branch stays
+# side-effect-free with respect to the argv/stdin recordings — its only
+# optional side effects are the dedicated probe proofs below.
+if [ "$1" = version ]; then
+  if [ -n "${FAKE_ORDER_FILE:-}" ]; then
+    printf 'probe\\n' >> "$FAKE_ORDER_FILE"
+  fi
+  if [ -n "${FAKE_METADATA_STDIN_FILE:-}" ]; then
+    # If the probe ever inherited the piped stdin, this would swallow the
+    # enrollment token before the real command could read it.
+    cat > "$FAKE_METADATA_STDIN_FILE"
+  fi
+  if [ -n "${FAKE_METADATA:-}" ]; then
+    printf '%s\\n' "$FAKE_METADATA"
+  else
+    printf '{"version":"devel","protocol":"pocketshell-tunnel-v1","commit":"unknown"}\\n'
+  fi
+  exit "${FAKE_METADATA_EXIT:-0}"
+fi
+if [ -n "${FAKE_ORDER_FILE:-}" ]; then
+  printf 'exec\\n' >> "$FAKE_ORDER_FILE"
+fi
 printf '%s\\0' "$@" > "$FAKE_ARGV_FILE"
 cat > "$FAKE_STDIN_FILE"
 if [ -n "${FAKE_STDERR:-}" ]; then
@@ -41,7 +63,14 @@ exit "${FAKE_EXIT:-0}"
 
 SIGNAL_HELPER = """\
 #!/usr/bin/env python3
-import signal, sys, time
+import json, signal, sys, time
+
+if len(sys.argv) > 1 and sys.argv[1] == "version":
+    # The wrapper's protocol probe must get an answer instead of a timeout.
+    print(json.dumps(
+        {"version": "devel", "protocol": "pocketshell-tunnel-v1",
+         "commit": "unknown"}))
+    sys.exit(0)
 
 def on_term(_sig, _frame):
     print("helper-got-sigterm", flush=True)
@@ -177,6 +206,102 @@ def test_sigterm_reaches_the_replaced_process(tmp_path):
     assert returncode == 70
     assert "helper-got-sigterm" in proc.stdout.read()
     assert proc.stderr is not None and proc.stderr.read() == ""
+
+
+def _wheel_installed() -> bool:
+    from importlib import metadata as importlib_metadata
+
+    try:
+        importlib_metadata.distribution("pocketshell-gateway-link")
+        return True
+    except importlib_metadata.PackageNotFoundError:  # pragma: no cover
+        return False
+
+
+@pytest.mark.skipif(
+    _wheel_installed(),
+    reason=(
+        "a pocketshell-gateway-link wheel installed in THIS venv satisfies "
+        "discovery even with an empty PATH, so nothing here would be missing"
+    ),
+)
+def test_metadata_probe_runs_before_the_real_command(tmp_path):
+    # The protocol gate is a BEFORE-exec step: the helper sees the
+    # `version --json` probe first and only then the real subcommand, in
+    # one exec chain (same process after os.execv).
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    order_file = tmp_path / "order.txt"
+    proc = _run_gateway(
+        ["enroll", "--token-stdin"],
+        helper,
+        FAKE_ORDER_FILE=str(order_file),
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert order_file.read_text().splitlines() == ["probe", "exec"]
+
+
+def test_metadata_probe_cannot_consume_the_piped_enrollment_token(tmp_path):
+    # The probe would love to `cat` the piped token away if it inherited
+    # stdin; it must read zero bytes (stdin detached) so the token is
+    # still there for the real command after the exec.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    probe_stdin_file = tmp_path / "probe-stdin.bin"
+    proc = _run_gateway(
+        ["enroll", "--token-stdin"],
+        helper,
+        FAKE_METADATA_STDIN_FILE=str(probe_stdin_file),
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert probe_stdin_file.read_bytes() == b""
+    assert stdin_file.read_bytes() == TOKEN
+
+
+def test_stale_protocol_helper_is_refused_in_subprocess(tmp_path):
+    # At the real process boundary: a helper answering the wrong protocol
+    # tag is refused with exit 126, a concise stderr line, no traceback —
+    # and the real subcommand (and its stdin recording) never happens.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    proc = _run_gateway(
+        ["show"],
+        helper,
+        FAKE_METADATA=(
+            '{"version":"1.0.0","protocol":"pocketshell-tunnel-v2",'
+            '"commit":"abc"}'
+        ),
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 126, proc.stderr
+    stderr = proc.stderr.decode()
+    assert "not compatible" in stderr
+    assert "pocketshell-tunnel-v1" in stderr
+    assert "Traceback" not in stderr
+    assert not argv_file.exists()
+    assert not stdin_file.exists()
+
+
+def test_helper_with_failing_version_subcommand_is_refused_in_subprocess(
+    tmp_path,
+):
+    # Right JSON shape is not enough: a helper whose `version --json`
+    # exits nonzero is broken, and the gate refuses before any exec.
+    helper, argv_file, stdin_file = _recording_helper(tmp_path)
+    proc = _run_gateway(
+        ["run"],
+        helper,
+        FAKE_METADATA_EXIT="3",
+        FAKE_ARGV_FILE=str(argv_file),
+        FAKE_STDIN_FILE=str(stdin_file),
+    )
+    assert proc.returncode == 126
+    stderr = proc.stderr.decode()
+    assert "status 3" in stderr
+    assert "Traceback" not in stderr
+    assert not argv_file.exists()
 
 
 def test_missing_helper_command_fails_with_127(tmp_path):

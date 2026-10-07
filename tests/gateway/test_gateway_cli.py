@@ -179,6 +179,71 @@ def test_enroll_without_token_stdin_is_rejected_before_exec(exec_calls):
 
 
 # ---------------------------------------------------------------------------
+# protocol metadata gate at the CLI surface
+# ---------------------------------------------------------------------------
+
+
+def test_incompatible_helper_exits_126_with_concise_error(
+    pin_helper, exec_calls
+):
+    pin_helper(
+        "#!/bin/sh\nexit 0\n",
+        version_json=(
+            '{"version":"1.0.0","protocol":"pocketshell-tunnel-v2",'
+            '"commit":"abc"}'
+        ),
+    )
+    result = CliRunner().invoke(cli, ["gateway", "show"])
+    assert result.exit_code == 126
+    stderr = result.stderr
+    assert "not compatible" in stderr
+    assert "pocketshell-tunnel-v1" in stderr
+    assert "Traceback" not in stderr
+    # Nothing exec'd: the real subcommand never ran against a stale helper.
+    assert exec_calls == []
+
+
+def test_helper_with_unusable_metadata_is_refused_before_exec(
+    pin_helper, exec_calls
+):
+    pin_helper(
+        "#!/bin/sh\nexit 0\n",
+        # commit missing entirely: not the frozen contract, refuse.
+        version_json='{"version":"devel","protocol":"pocketshell-tunnel-v1"}',
+    )
+    result = CliRunner().invoke(cli, ["gateway", "run"])
+    assert result.exit_code == 126
+    assert "'commit' is missing" in result.stderr
+    assert exec_calls == []
+
+
+def test_uninjected_devel_metadata_passes_the_gate(pin_helper, exec_calls):
+    # The default test double answers exactly what an un-injected source
+    # build answers (devel/unknown, pocketshell-tunnel-v1): protocol-
+    # compatible, so the command proceeds — acceptance proves the protocol,
+    # never release provenance.
+    pin_helper("#!/bin/sh\nexit 0\n")
+    result = CliRunner().invoke(cli, ["gateway", "show"])
+    assert result.exit_code == 0, result.output
+    assert exec_calls[-1][1] == ["show"]
+
+
+def test_every_gateway_subcommand_verifies_before_exec(pin_helper, exec_calls):
+    pin_helper(
+        "#!/bin/sh\nexit 0\n",
+        version_json='{"version":"1.0.0","protocol":"stale","commit":"x"}',
+    )
+    runner = CliRunner()
+    for command in ("enroll", "run", "show"):
+        args = ["gateway", command] + (
+            ["--token-stdin"] if command == "enroll" else []
+        )
+        result = runner.invoke(cli, args)
+        assert result.exit_code == 126, command
+        assert exec_calls == []
+
+
+# ---------------------------------------------------------------------------
 # missing helper
 # ---------------------------------------------------------------------------
 
@@ -189,6 +254,9 @@ def test_missing_helper_exits_127_with_build_instructions(monkeypatch, tmp_path)
     assert result.exit_code == 127
     assert "pocketshell-link" in result.stderr
     assert "go build" in result.stderr
+    # The wheel install route is actionable in the same error (checksum
+    # verification is a docs matter; the wrapper never downloads).
+    assert "--no-index --no-deps" in result.stderr
     # The build source is the REAL private repository (authoritative URL);
     # the -tunnel spelling is only a local worker worktree, never a repo.
     assert "PocketShell-io/pocketshell-gateway" in result.stderr

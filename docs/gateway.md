@@ -41,31 +41,62 @@ apply — this CLI does not carry a second copy of them:
 ## 1. Install the helper
 
 `pocketshell` does **not** bundle or download `pocketshell-link` (and accepts
-no credentials for fetching it). Build it from a checkout of the private
+no credentials for fetching it). Two supported routes, both ending in a
+binary the wrapper protocol-verifies before every use (§1.1):
+
+**Private beta — install the platform wheel (recommended).** The private
+repo's CI packages the helper as `pocketshell-gateway-link` wheels for
+linux amd64/arm64 and darwin amd64/arm64. Retrieve the wheel for your
+platform from the **authenticated private CI** (you need repo access),
+**verify it against the independently published sha256 digest and build
+provenance** — no matching digest, no install — then install offline:
+
+```bash
+sha256sum pocketshell_gateway_link-*.whl   # compare with the published digest
+pip install --no-index --no-deps /verified/path/pocketshell_gateway_link-<version>-<platform>.whl
+```
+
+`--no-index --no-deps` keeps the install fully offline; the wheel is
+dependency-free. There is no public package yet, so there is deliberately
+no `pocketshell` extra to depend on one.
+
+**Build from source.** From a checkout of the private
 [pocketshell-gateway](https://github.com/PocketShell-io/pocketshell-gateway)
-repository — you need access to that repo and a Go toolchain:
+repository (you need access and a Go toolchain):
 
 ```bash
 cd /path/to/pocketshell-gateway
 go build -o "$HOME/.local/bin/pocketshell-link" ./cmd/pocketshell-link
 ```
 
-Resolution order, and what happens when it fails:
+An un-injected source build honestly reports itself as `devel`/`unknown`
+build metadata — protocol-compatible and fine for local testing, but never
+mistaken for a release (release artifacts carry injected version/commit
+values).
+
+### 1.1 Resolution order and failure modes
 
 1. `POCKETSHELL_GATEWAY_HELPER` — an explicit pin to a trusted binary. A pin
    that is missing or not executable is a hard error; the wrapper never
    silently falls back to a different binary off PATH.
-2. `pocketshell-link` on `PATH`.
+2. the binary inside an installed `pocketshell-gateway-link` wheel. An
+   installed-but-broken wheel — binary missing or not executable, wheel
+   built for another platform (Windows has no wheel at all) — is a hard
+   error, never a silent fallback.
+3. `pocketshell-link` on `PATH`.
 
-With neither, every `gateway` subcommand exits **127** and prints the build
-instructions above. (The helper's other subcommands, e.g.
-`pocketshell-link version`, are reachable by calling the helper directly;
-this CLI wraps exactly `enroll`, `run`, and `show`.)
-
-How the helper is *distributed* — today (build it yourself), the planned
-checksum-verified platform wheels, which platforms are unsupported, and why
-the wrapper performs no version check yet — is specified in
-[docs/gateway-distribution.md](gateway-distribution.md).
+With none of the three, every `gateway` subcommand exits **127** and prints
+both routes (wheel install, or the build instructions above). A found
+helper must additionally answer the `version --json` metadata probe with
+the exact protocol tag `pocketshell-tunnel-v1` before anything runs — a
+stale, alien, or misbehaving helper is refused with exit **126** and a
+one-line compatibility error (no helper output is echoed, nothing is
+downloaded). See
+[docs/gateway-distribution.md](gateway-distribution.md) for the full
+distribution contract, the checksum verification steps, and the gate's
+bounds. (The helper's other subcommands, e.g. `pocketshell-link version`,
+are reachable by calling the helper directly; this CLI wraps exactly
+`enroll`, `run`, and `show`.)
 
 ## 2. Prerequisites on the host
 
