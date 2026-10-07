@@ -113,7 +113,7 @@ the ordinary ones for SSH-ing into this machine:
   is entirely between you and your host: the gateway never issues, stores, or
   brokers your SSH user keys. Installing a key *enables* key login; by
   itself it does not disable password, keyboard-interactive, empty-password
-  or root login — see §2.1 for the required endpoint policy.
+  or root login — see §2.1 for the required key-only policy.
 - **Your sshd host key fingerprint**, if you want to pin it explicitly at
   enroll time (recommended):
 
@@ -149,7 +149,7 @@ is the point of the design:
   management and routing during enrollment, nothing more, and expires within
   five minutes (or with your upstream sign-in, whichever is sooner).
 
-### 2.1 Endpoint SSH policy — required, operator-reviewed
+### 2.1 Endpoint SSH policy — key-only required, operator-reviewed
 
 Installing a key (above) enables key login; it does not disable anything
 else. This matters because of what the transport is: **opaque SSH bytes
@@ -165,10 +165,12 @@ daemon allows, and the enroll-time host-key probe deliberately stops
 before user authentication — a successful `gateway enroll` is not an
 audit of your sshd policy.
 
-Required baseline (replace the placeholder account; review the existing
-configuration rather than appending blindly — `Include`d files such as
-`/etc/ssh/sshd_config.d/*` and every `Match` block can override global
-directives):
+Suggested profile — the key-only lines are the **required** part;
+`AllowUsers` and `PermitRootLogin no` are the **recommended** account
+restrictions on top of it (replace the placeholder account; review the
+existing configuration rather than appending blindly — `Include`d files
+such as `/etc/ssh/sshd_config.d/*` and every `Match` block can override
+global directives):
 
 ```text
 AllowUsers YOUR_NONROOT_ACCOUNT
@@ -194,37 +196,71 @@ PermitRootLogin no
   (`prohibit-password` still permits some root authentication) are the
   recommended account/root restrictions — recommended hardening **on top
   of** the required key-only policy, and worth stating explicitly because
-  the opaque route admits any username. Neither this CLI, the helper, nor
-  the gateway enforces them, and neither enforces root denial of any kind:
-  these exist only in your sshd configuration. They also apply to every
-  way the daemon is reached, ordinary direct SSH included — review the
-  change as you would any sshd change.
+  the opaque route admits any username. They are a selected baseline
+  choice, not a protocol or client-enforced universal requirement: this
+  CLI, the helper and the gateway enforce neither these directives nor
+  root denial of any kind, and a deliberately admitted root account would
+  still have to present a key — refusing root and excluded accounts (the
+  checks below) is acceptance evidence for *this chosen profile*, nothing
+  more universal. They exist only in your sshd configuration and apply to
+  every way the daemon is reached, ordinary direct SSH included — review
+  the change as you would any sshd change.
 
 Verify the **effective** policy, not the file you edited — `Match` and
-`Include` can change it per username and per source address:
+`Include` can change it per username, per source address and per local
+destination, and checks that skip the daemon's real configuration input
+can honestly validate a *different* configuration than the one it runs.
+First read the running daemon's actual arguments (`systemctl cat sshd`
+or `systemctl show -p ExecStart sshd` under systemd, `ps -o args= -p PID`
+with your init system's equivalent otherwise) and carry its configuration
+file and **every** `-o` override into both commands — command-line
+options override file values, so a bare `sshd -t`/`sshd -T` reports the
+file alone, not the file plus the overrides your daemon actually applies.
+(If the arguments name neither `-f` nor any `-o`, the daemon is reading
+the default `/etc/ssh/sshd_config`; pass `-f` anyway to pin that
+assumption.) Both commands read the host's private keys, so run them as
+root on a standard install:
 
 ```bash
-sshd -t                                                    # validity first
-sshd -T -C user=YOUR_NONROOT_ACCOUNT,host=localhost,addr=127.0.0.1
+# -f and each -o below must repeat the running daemon's arguments exactly
+sshd -t  -f DAEMON_CONFIG_FILE -o DAEMON_OVERRIDE …                # validity first
+sshd -T -f DAEMON_CONFIG_FILE -o DAEMON_OVERRIDE … \
+        -C user=YOUR_NONROOT_ACCOUNT,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22
 ```
 
 ([test mode](https://man.openbsd.org/sshd#T),
-[connection parameters](https://man.openbsd.org/sshd#C)) Run the `-T -C`
+[connection parameters](https://man.openbsd.org/sshd#C)) The `-C` fields
+describe two different ends of the connection and neither stands in for
+the other: `laddr`/`lport` are the **destination the agent dials** — the
+address and port your listener is bound to, i.e. the configured
+`--ssh-host` endpoint (`127.0.0.1:22` by default) — while `addr`/`host`
+are the **accepted client source** address and the host name that source
+resolves to, as sshd sees them on the accepted socket. A loopback dial
+usually presents a same-family loopback source, but that is an observed
+property, not an identity: confirm what your daemon actually accepted
+(its `Accepted … from` log lines, or `ss -tnp` while a tunnel stream is
+up) instead of equating it with the dialed destination. Run the `-T -C`
 variant for every username you intend to admit **and** for `root` and
-unintended accounts, with `addr` set to the loopback source the agent
-actually dials — the default here is `127.0.0.1`, and the helper equally
-accepts literal loopback IPv6 (`::1`) or `localhost`; a `-T` printout
-without `-C` does not show what your `Match` blocks do.
+unintended accounts, and for **each loopback family the listener
+actually serves** — repeat with `addr=::1,laddr=::1` and the host name
+that source resolves to when IPv6 is reachable too, since the helper
+equally accepts literal `::1` or `localhost` as its endpoint. Supply the
+full context because `Match` blocks are evaluated against exactly these
+values: `LocalAddress`/`LocalPort`/`Host`/`Address` criteria are
+exercised only when the fields they test are supplied, and a `-T`
+printout without `-C` shows none of what your `Match` blocks do.
 
 Applying the change is an ordinary, OS-specific operator procedure, and
-nothing here executes it for you: review the running daemon's real
-arguments and configuration file (e.g. `systemctl cat sshd` or your init
-system's equivalent), edit, pass `sshd -t`, **keep your current SSH
-session open**, reload through your OS service manager (`systemctl reload
-sshd` under systemd, `service ssh reload` on sysv-style Debian/Ubuntu —
-unit and service names differ per OS), then re-run the `-T -C` checks.
+nothing here executes it for you: edit the file the daemon actually
+reads (the `-f` path above, `Include`d snippets and `Match` blocks
+included), pass `sshd -t` with the daemon's same `-f`/`-o` arguments,
+**keep your current SSH session open**, reload through your OS service
+manager (`systemctl reload sshd` under systemd, `service ssh reload` on
+sysv-style Debian/Ubuntu — unit and service names differ per OS), then
+re-run both checks with the same arguments to confirm the effective
+policy you just put live.
 
-Honest limits of this baseline: with the endpoint's verified key-only
+Honest limits of this policy: with the endpoint's verified key-only
 policy, the independently pinned host key, trusted client/host software
 and protected authorized private keys, gateway credentials alone do not
 authenticate an SSH session — the gateway can still initiate connections
@@ -232,7 +268,14 @@ and deny service. Validation and reload commands never remove private
 keys that were already exposed; treat key rotation or removal as its own
 trusted procedure, and note it prevents *new* logins only — it does not
 terminate an established session. That is separate from gateway-side
-routing/device revocation, which is what closes the tunnel.
+routing/device revocation — which tears the tunnel's streams down at an
+honest gateway only: a malicious or compromised gateway can ignore its
+own revocation registry and callbacks, so stopping an abuser immediately
+takes trusted endpoint action on your host. Endpoint-local SSH key
+revocation and session termination remain exactly that — endpoint-local
+— and are a separate mechanism from gateway revocation, the only one of
+the two still under your control when the gateway itself is the
+adversary.
 
 ## 3. Enroll the host
 
