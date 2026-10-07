@@ -272,10 +272,9 @@ routing/device revocation — which tears the tunnel's streams down at an
 honest gateway only: a malicious or compromised gateway can ignore its
 own revocation registry and callbacks, so stopping an abuser immediately
 takes trusted endpoint action on your host. Endpoint-local SSH key
-revocation and session termination remain exactly that — endpoint-local
-— and are a separate mechanism from gateway revocation, the only one of
-the two still under your control when the gateway itself is the
-adversary.
+revocation and session termination are exactly that trusted endpoint
+action — the only one of the two revocations still under your control
+when the gateway itself is the adversary.
 
 ## 3. Enroll the host
 
