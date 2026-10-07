@@ -327,7 +327,10 @@ def _probe_version_json(helper: str) -> tuple[int, bytes]:
     through a selector against it, each read is clamped to the remaining
     output budget (so no transient over-sized buffer), and after stdout
     EOF the child must still be done within what remains of that same
-    deadline — closing stdout early buys no extra answer time. Only the
+    deadline — closing stdout early buys no extra answer time, and
+    resuming at or past the deadline, even around a wait that then
+    succeeds on an already-exited child, refuses the answer instead of
+    accepting it (a scheduler delay cannot widen the window). Only the
     kill/reap CLEANUP may outlive the deadline. Output exceeding
     :data:`METADATA_MAX_OUTPUT_BYTES` is refused the moment it happens, so
     nothing the helper writes is ever captured unboundedly. The probe
@@ -379,13 +382,24 @@ def _probe_version_json(helper: str) -> tuple[int, bytes]:
             # Acceptance, not cleanup: the child must be FINISHED within
             # the original monotonic budget even though it already closed
             # stdout; cleanup below may take longer but never extends the
-            # answer window.
-            try:
-                returncode = proc.wait(
-                    timeout=max(deadline - time.monotonic(), 0.0)
-                )
-            except subprocess.TimeoutExpired:
+            # answer window. An already-exited child makes even
+            # wait(timeout=0) return instantly, so resuming at or past the
+            # deadline — a scheduler delay after EOF suffices — must refuse
+            # the exhausted budget explicitly, and a wait that succeeded is
+            # still rechecked against the deadline before the output is
+            # accepted: a reap that lands outside the window is not an
+            # answer.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 timed_out = True
+            else:
+                try:
+                    returncode = proc.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                else:
+                    if deadline - time.monotonic() <= 0:
+                        timed_out = True
     finally:
         if proc.poll() is None:
             proc.kill()

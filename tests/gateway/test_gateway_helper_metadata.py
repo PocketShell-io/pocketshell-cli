@@ -386,6 +386,112 @@ def test_post_eof_lingering_helper_is_refused_at_the_deadline(
     assert elapsed < 5
 
 
+# ---------------------------------------------------------------------------
+# the acceptance deadline has no post-EOF/post-wait hole
+# ---------------------------------------------------------------------------
+
+
+class _SeamClock:
+    """Controlled monotonic clock for the wrapper module only.
+
+    Each ``time.monotonic()`` read inside :mod:`gateway_helper` consumes
+    the next scripted value (the tail repeats once the script runs out);
+    the module's ``time`` binding is swapped, so the real clock still
+    governs the subprocess and selector machinery. The script models a
+    scheduler delay of the WRAPPER itself — reads while the answer is
+    expected, then a jump past the deadline at the exact EOF→wait seam.
+    """
+
+    def __init__(self, script, tail):
+        self._script = list(script)
+        self._tail = tail
+        self.reads: list[float] = []
+
+    def monotonic(self) -> float:
+        value = self._script.pop(0) if self._script else self._tail
+        self.reads.append(value)
+        return value
+
+
+# For a one-chunk valid answer the wrapper reads its clock exactly: once
+# for the deadline, once per selector loop turn (data turn, then EOF
+# turn), once at the acceptance wait seam, and — since the repair — once
+# more to recheck the deadline across the successful wait. The scripted
+# reads assert that layout, so a structural change recalibrates these
+# tests loudly instead of silently jumping the wrong read.
+_SEAM_READS_BEFORE_WAIT = 4
+
+
+def test_wait_seam_resumed_after_deadline_refuses_finished_child(
+    tmp_path, monkeypatch
+):
+    # Scheduler-delay hole at the EOF→wait seam: the helper printed fully
+    # valid metadata and EXITED — a real, completed Popen child — but the
+    # wrapper only reaches the acceptance wait after the original
+    # deadline. An already-exited child makes even wait(timeout=0) return
+    # instantly, so the old max(deadline - now, 0) wait accepted the late
+    # answer. The exhausted budget must be refused explicitly; cleanup
+    # still reaps the finished child itself (the kill is for running
+    # children only).
+    clock = _SeamClock(
+        [1000.0] * (_SEAM_READS_BEFORE_WAIT - 1) + [1020.0], tail=1020.0
+    )
+    monkeypatch.setattr(gateway_helper, "time", clock)
+    created = _recording_popen(monkeypatch)
+    helper = _sh_helper(tmp_path, _emit(VALID_DEVEL))
+    with pytest.raises(HelperIncompatibleError) as excinfo:
+        verify_helper(helper)
+    assert "within 10s" in str(excinfo.value)
+    # Calibration: the jump landed on the wait-seam read, not inside the
+    # read loop — that is the seam a scheduler delay would hit.
+    assert clock.reads == [1000.0, 1000.0, 1000.0, 1020.0]
+    # The refusal happened despite a successfully finished child: cleanup
+    # reaped its real exit status, it was never killed.
+    assert len(created) == 1
+    assert created[0].returncode == 0
+
+
+def test_deadline_is_rechecked_after_a_successful_wait(tmp_path, monkeypatch):
+    # The inverse seam: the budget still looks alive when wait() is
+    # entered and the wait itself succeeds instantly on the finished
+    # child — but the wrapper is descheduled ACROSS it, and the monotonic
+    # deadline has passed by the time wait() returns. A successful reap is
+    # not an answer: the deadline must be rechecked BEFORE the output is
+    # accepted.
+    clock = _SeamClock(
+        [1000.0] * _SEAM_READS_BEFORE_WAIT + [1020.0], tail=1020.0
+    )
+    monkeypatch.setattr(gateway_helper, "time", clock)
+    created = _recording_popen(monkeypatch)
+    helper = _sh_helper(tmp_path, _emit(VALID_DEVEL))
+    with pytest.raises(HelperIncompatibleError) as excinfo:
+        verify_helper(helper)
+    assert "within 10s" in str(excinfo.value)
+    # Calibration: the jump landed on the post-wait recheck — the read
+    # the old code never made.
+    assert clock.reads == [1000.0, 1000.0, 1000.0, 1000.0, 1020.0]
+    assert len(created) == 1
+    assert created[0].returncode == 0
+
+
+def test_timely_eof_and_exit_still_accepted_on_the_controlled_clock(
+    tmp_path, monkeypatch
+):
+    # Stay-green guard for the two seam refusals: a child that answers and
+    # finishes INSIDE the budget is accepted on the same controlled clock
+    # (whatever the read count — the pre-repair layout made one read
+    # fewer), so the explicit refusals above are not over-broad refusals
+    # of the ordinary fast path.
+    clock = _SeamClock([], tail=1000.0)
+    monkeypatch.setattr(gateway_helper, "time", clock)
+    created = _recording_popen(monkeypatch)
+    helper = _sh_helper(tmp_path, _emit(VALID_DEVEL))
+    verify_helper(helper)  # must not raise
+    assert len(created) == 1
+    assert created[0].returncode == 0
+    assert clock.reads and all(read == 1000.0 for read in clock.reads)
+
+
 def test_oversize_output_is_refused_without_unbounded_capture(tmp_path):
     # 200 KB of one-line-ish output is far over the 4 KB budget; the gate
     # must refuse (and kill the writer) instead of slurping it all.

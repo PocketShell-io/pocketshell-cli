@@ -419,22 +419,14 @@ def test_helper_with_failing_version_subcommand_is_refused_in_subprocess(
     assert not argv_file.exists()
 
 
-@pytest.mark.skipif(
-    _wheel_installed(),
-    reason=(
-        "a pocketshell-gateway-link wheel installed in THIS venv (or on "
-        "PYTHONPATH) is selected BEFORE the empty PATH, so helper absence "
-        "cannot be simulated in this process tree; the fresh-venv "
-        "integration run covers the installed-wheel environment, and this "
-        "test runs wherever no wheel is installed"
-    ),
-)
 @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
 def test_non_json_additive_values_are_refused_in_subprocess(tmp_path, constant):
     # NaN/Infinity/-Infinity parse via Python's legacy float extension but
     # are NOT JSON: an additive field carrying one must fail the gate at
     # the real process boundary (exit 126, concise line, no traceback) and
-    # the real subcommand must never run.
+    # the real subcommand must never run. These are explicit-pin tests —
+    # the pin wins resolution, so they run unchanged even with a helper
+    # wheel installed.
     helper, argv_file, stdin_file = _recording_helper(tmp_path)
     payload = (
         '{"version":"1.0.0","protocol":"pocketshell-tunnel-v1",'
@@ -474,6 +466,17 @@ def test_nested_additive_json_is_accepted_in_subprocess(tmp_path):
     assert argv_file.read_bytes().split(b"\0")[:-1] == [b"show"]
 
 
+@pytest.mark.skipif(
+    _wheel_installed(),
+    reason=(
+        "with a pocketshell-gateway-link wheel installed in THIS venv (or "
+        "on PYTHONPATH), the wheel is selected BEFORE the emptied PATH, so "
+        "helper absence cannot be simulated in this process tree and the "
+        "asserted not-found route is unreachable; the fresh-venv "
+        "integration run covers the installed-wheel environment, and this "
+        "test runs wherever no wheel is installed"
+    ),
+)
 def test_missing_helper_command_fails_with_127(tmp_path):
     env = {
         **os.environ,
