@@ -34,6 +34,7 @@ from pocketshell import __version__
 from pocketshell.account.credentials import SESSION_TOKEN_RE
 from pocketshell.account.errors import (
     AccountError,
+    BrokerRateLimited,
     BrokerUnavailable,
     GatewayToken,
     NotLoggedIn,
@@ -56,6 +57,17 @@ _GATEWAY_TOKEN_MAX_TTL = 300
 _CLOCK_SKEW = 300
 
 _LOGIN_HINT = "run `pocketshell login`"
+_RATE_LIMITED = (
+    "The PocketShell broker is rate limiting requests from this network "
+    "(HTTP 429); try again shortly."
+)
+
+
+def _raise_if_rate_limited(resp: "Response") -> None:
+    """429 on a session-bearing endpoint is transient and says nothing about
+    the session: never NotLoggedIn (which would invite deleting it)."""
+    if resp.status == 429:
+        raise BrokerRateLimited(_RATE_LIMITED)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -269,6 +281,7 @@ class SessionInfo:
 
 def get_session(base_url: str, access_token: str, *, timeout: float = DEFAULT_TIMEOUT) -> SessionInfo:
     resp = request(base_url, "GET", "/cli/session", bearer=access_token, timeout=timeout)
+    _raise_if_rate_limited(resp)
     if resp.status == 401:
         raise NotLoggedIn(f"Your PocketShell login is no longer valid; {_LOGIN_HINT}.")
     if resp.status != 200:
@@ -288,8 +301,12 @@ def get_session(base_url: str, access_token: str, *, timeout: float = DEFAULT_TI
 
 
 def logout(base_url: str, access_token: str) -> bool:
-    """Revoke the session server-side. True on 2xx (or 401: already gone)."""
+    """Revoke the session server-side. True on 2xx (or 401: already gone).
+
+    Raises :class:`BrokerRateLimited` on 429: the session was NOT revoked.
+    """
     resp = request(base_url, "POST", "/cli/logout", bearer=access_token, timeout=10)
+    _raise_if_rate_limited(resp)
     return 200 <= resp.status < 300 or resp.status == 401
 
 
@@ -309,6 +326,7 @@ def mint_gateway_token(
     base_url: str, access_token: str, *, now: float | None = None
 ) -> GatewayToken:
     resp = request(base_url, "POST", "/cli/gateway/token", bearer=access_token)
+    _raise_if_rate_limited(resp)
     if resp.status == 401:
         raise NotLoggedIn(f"Your PocketShell login is no longer valid; {_LOGIN_HINT}.")
     if resp.status == 403:

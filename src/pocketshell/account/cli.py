@@ -14,7 +14,12 @@ import click
 
 from pocketshell.account import broker, credentials, device
 from pocketshell.account.config import SESSIONS_URL, resolve_broker_url, session_broker_url
-from pocketshell.account.errors import AccountError, CredentialsUnsafe, NotLoggedIn
+from pocketshell.account.errors import (
+    AccountError,
+    BrokerRateLimited,
+    CredentialsUnsafe,
+    NotLoggedIn,
+)
 from pocketshell.account.sanitize import clean_text
 
 
@@ -101,8 +106,14 @@ def login_command(label: str | None, no_open: bool, force: bool) -> None:
         _fail(str(exc))
 
 
-def _revoke_quietly(creds: credentials.Credentials) -> str | None:
-    """Revoke at the STORED broker. ``None`` on success, else why not."""
+def _revoke_quietly(
+    creds: credentials.Credentials, *, raise_rate_limited: bool = False
+) -> str | None:
+    """Revoke at the STORED broker. ``None`` on success, else why not.
+
+    ``raise_rate_limited``: let :class:`BrokerRateLimited` propagate, so
+    ``logout`` can keep the still-valid session instead of orphaning it.
+    """
     if creds.expired():
         return None
     try:
@@ -110,8 +121,15 @@ def _revoke_quietly(creds: credentials.Credentials) -> str | None:
         if broker.logout(target, creds.access_token):
             return None
         return "the broker did not confirm the revocation"
+    except BrokerRateLimited:
+        if raise_rate_limited:
+            raise
+        return _RATE_LIMITED_SHORT
     except AccountError as exc:
         return str(exc)
+
+
+_RATE_LIMITED_SHORT = "the broker is rate limiting requests from this network"
 
 
 @click.command(
@@ -140,7 +158,14 @@ def logout_command() -> None:
             else:
                 click.echo("Not logged in.")
             return
-        problem = _revoke_quietly(creds)
+        try:
+            problem = _revoke_quietly(creds, raise_rate_limited=True)
+        except BrokerRateLimited:
+            _fail(
+                "Could not revoke the session: the PocketShell broker is rate limiting "
+                "requests from this network (HTTP 429). Your login was kept so it can "
+                "still be revoked; run `pocketshell logout` again shortly."
+            )
         credentials.delete()
     except KeyboardInterrupt:
         raise click.exceptions.Exit(130) from None

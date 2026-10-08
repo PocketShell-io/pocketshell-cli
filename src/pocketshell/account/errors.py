@@ -46,6 +46,15 @@ class BrokerUnavailable(AccountError):
     """
 
 
+class BrokerRateLimited(BrokerUnavailable):
+    """The broker answered HTTP 429 on a session-bearing endpoint.
+
+    The broker throttles a network after too many failed bearer lookups.
+    This says nothing about *this* session's validity: it is never
+    :class:`NotLoggedIn`, and nothing deletes stored credentials over it.
+    """
+
+
 @dataclass(frozen=True)
 class GatewayToken:
     """A short-lived broker JWT for the PocketShell gateway.

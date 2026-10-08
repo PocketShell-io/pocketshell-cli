@@ -208,3 +208,35 @@ def test_json_body_is_sent_as_json(fake_broker) -> None:
     [req] = fake_broker.requests
     assert req["headers"]["Content-Type"] == "application/json"
     assert json.loads(req["body"]) == {"label": "me@laptop"}
+
+
+# --- 429 rate_limited: transient, never NotLoggedIn ----------------------------
+
+
+def test_mint_on_429_is_rate_limited_not_logged_out(fake_broker) -> None:
+    from pocketshell.account.errors import BrokerRateLimited, BrokerUnavailable
+
+    _login(fake_broker)
+    fake_broker.overrides[("POST", "/cli/gateway/token")] = (429, {"error": "rate_limited"})
+    with pytest.raises(BrokerRateLimited, match="rate limiting") as info:
+        mint_gateway_token()
+    assert isinstance(info.value, BrokerUnavailable)
+    assert not isinstance(info.value, NotLoggedIn)
+    assert store.exists()
+
+
+@pytest.mark.parametrize("call", ["get_session", "logout"])
+def test_session_endpoints_on_429_raise_rate_limited(fake_broker, call) -> None:
+    from pocketshell.account.errors import BrokerRateLimited
+
+    path = {"get_session": ("GET", "/cli/session"), "logout": ("POST", "/cli/logout")}[call]
+    fake_broker.overrides[path] = (429, {"error": "rate_limited"})
+    with pytest.raises(BrokerRateLimited):
+        getattr(client, call)(fake_broker.url, SESSION_TOKEN)
+
+
+def test_mint_idle_session_401_invalid_token_is_not_logged_in(fake_broker) -> None:
+    _login(fake_broker)
+    fake_broker.overrides[("POST", "/cli/gateway/token")] = (401, {"error": "invalid_token"})
+    with pytest.raises(NotLoggedIn):
+        mint_gateway_token()

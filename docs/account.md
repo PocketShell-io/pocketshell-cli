@@ -91,7 +91,17 @@ and deletes the credentials file. If the broker can't be reached, the file
 is still deleted, and a warning says how long the session stays valid on
 the server. The same happens when `POCKETSHELL_BROKER_URL` names a different
 broker: the session isn't sent there. A `401` from the broker means the
-session is already gone and counts as logged out.
+session is already gone (revoked, expired, or idle for 14 days) and counts
+as logged out.
+
+The one exception is `429 rate_limited`: the broker throttles a network
+after too many failed bearer lookups, and the session was **not** revoked.
+`logout` then keeps the credentials file, exits 1 and asks you to run
+`pocketshell logout` again shortly, so the still-valid session doesn't end
+up orphaned on the server. Elsewhere a `429` on `/cli/session` or
+`/cli/gateway/token` is reported as "the broker is rate limiting requests,
+try again shortly" — never as "not logged in", and it never deletes the
+credentials file.
 
 ## Credentials file
 
@@ -137,6 +147,8 @@ session is already gone and counts as logged out.
   process, which no CLI can defend against.
 - Responses must be strict JSON objects: valid UTF-8, no duplicate keys, no
   NaN or Infinity. Every field the CLI uses is type-checked.
+- Requests never carry an `Origin` header (the broker refuses
+  browser-originated calls to the CLI endpoints).
 - Tokens and the device code go only in the `Authorization` header or the JSON
   body. They never appear in a URL, argv, a child process's environment, logs,
   exception messages, or a `repr`.

@@ -300,3 +300,61 @@ def test_network_error_text_is_sanitized(fake_broker, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert "\x1b" not in result.stderr and "\x07" not in result.stderr
     assert "]0;owned dns failure" in result.stderr
+
+
+# --- broker rate limiting (429 rate_limited) and idle sessions ----------------
+
+RATE_LIMITED = (429, {"error": "rate_limited"})
+
+
+def test_logout_on_429_keeps_the_credentials_and_says_retry(fake_broker) -> None:
+    _save(fake_broker)
+    fake_broker.overrides[("POST", "/cli/logout")] = RATE_LIMITED
+    result = _invoke("logout")
+    assert result.exit_code == 1
+    assert "rate limiting" in result.stderr
+    assert "run `pocketshell logout` again" in result.stderr
+    assert "Logged out." not in result.stdout
+    assert store.exists()
+    assert store.load().access_token == SESSION_TOKEN
+    _assert_no_secrets(result)
+    # Once the broker stops throttling, logout works as usual.
+    del fake_broker.overrides[("POST", "/cli/logout")]
+    result = _invoke("logout")
+    assert result.exit_code == 0, result.output
+    assert not store.exists()
+
+
+def test_whoami_on_429_is_not_logged_out(fake_broker) -> None:
+    _save(fake_broker)
+    fake_broker.overrides[("GET", "/cli/session")] = RATE_LIMITED
+    result = _invoke("whoami", "--json")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["verified"] is False
+    assert "rate limiting" in result.stderr
+    assert store.exists()
+
+
+def test_idle_session_401_invalid_token_is_not_logged_in(fake_broker) -> None:
+    _save(fake_broker)
+    fake_broker.overrides[("GET", "/cli/session")] = (401, {"error": "invalid_token"})
+    result = _invoke("whoami")
+    assert result.exit_code == 1
+    assert "no longer valid" in result.stderr
+
+
+def test_no_request_ever_carries_an_origin_header(fake_broker, opened) -> None:
+    """The broker refuses browser-originated calls (403 browser_origin_refused)."""
+    assert _invoke("login", "--no-open").exit_code == 0
+    assert _invoke("whoami").exit_code == 0
+    from pocketshell.account import mint_gateway_token
+
+    mint_gateway_token()
+    assert _invoke("logout").exit_code == 0
+    paths = {r["path"] for r in fake_broker.requests}
+    assert {
+        "/auth/device/start", "/auth/device/token", "/cli/session",
+        "/cli/gateway/token", "/cli/logout",
+    } <= paths
+    for req in fake_broker.requests:
+        assert not any(h.lower() == "origin" for h in req["headers"]), req["path"]
