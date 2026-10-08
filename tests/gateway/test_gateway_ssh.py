@@ -398,6 +398,8 @@ def test_cli_session_for_another_broker_is_exit_3_before_ssh(exec_ssh, logged_in
     result = CliRunner().invoke(cli, ["gateway", "ssh", "home-lab"])
     assert result.exit_code == client_cli.EXIT_NOT_LOGGED_IN, result.output
     assert "differs from the broker you logged in to" in result.output
+    # the account layer's advice arrives whole, not cut at the gateway-text cap
+    assert "run `pocketshell login --force` for that broker." in result.output
     assert exec_ssh == []
 
 

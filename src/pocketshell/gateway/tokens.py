@@ -39,6 +39,12 @@ _NO_ACCOUNT_SUPPORT = (
 )
 
 
+# Account-layer messages are local, already-cleaned advice (they embed
+# broker URLs and what to run next); re-sanitize them but do not cut them
+# to the short cap meant for text from the gateway.
+ACCOUNT_TEXT_LIMIT = 1000
+
+
 class GatewayTokenError(Exception):
     """Could not obtain a usable broker token. Message is safe to print."""
 
@@ -77,9 +83,11 @@ def _account_errors(what: str) -> Iterator[None]:
     except GatewayTokenError:
         raise
     except NotLoggedIn as exc:  # type: ignore[misc]
-        raise _not_logged_in(sanitize_remote_text(str(exc))) from None
+        detail = sanitize_remote_text(str(exc), ACCOUNT_TEXT_LIMIT)
+        raise _not_logged_in(detail) from None
     except AccountError as exc:  # type: ignore[misc]
-        raise GatewayTokenError(f"{what}: {sanitize_remote_text(str(exc))}") from None
+        detail = sanitize_remote_text(str(exc), ACCOUNT_TEXT_LIMIT)
+        raise GatewayTokenError(f"{what}: {detail}") from None
 
 
 def require_login() -> None:
