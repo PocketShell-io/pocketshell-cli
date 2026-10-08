@@ -11,23 +11,18 @@ keep their own protocol and CLI untouched.
 from __future__ import annotations
 
 from typing import Optional, Sequence
-from urllib.parse import urlsplit
 
 import click
 
+from pocketshell.gateway import endpoint as gateway_endpoint
 from pocketshell.gateway import helper as gateway_helper
 
 # The wrapper refuses to aim the DEV-ONLY `--dev-broker-issuer` override at
-# the production gateway, whatever the URL spelling: both names the
-# production deployment serves (`gateway.pocketshell.io` and its legacy
-# `relay.pocketshell.io` alias — see DefaultServerURL/LegacyServerURL in the
-# Go hostagent), compared DNS-style (case-insensitive, trailing FQDN dot
-# ignored) so `gateway.pocketshell.io.` or `RELAY.POCKETSHELL.IO:8080` cannot
-# slip past an exact-string check. This is a target check for known-bad
-# hosts, not URL validation: the helper owns that.
-_PRODUCTION_GATEWAY_HOSTS = frozenset(
-    {"gateway.pocketshell.io", "relay.pocketshell.io"}
-)
+# the production gateway, whatever the URL spelling. The host set and the
+# DNS-style comparison live in :mod:`pocketshell.gateway.endpoint`, shared
+# with the client commands' `--insecure-dev` rules. This is a target check
+# for known-bad hosts, not URL validation: the helper owns that.
+_PRODUCTION_GATEWAY_HOSTS = gateway_endpoint.PRODUCTION_GATEWAY_HOSTS
 
 
 def _canonical_gateway_host(server: str) -> str:
@@ -40,13 +35,11 @@ def _canonical_gateway_host(server: str) -> str:
     ``--server`` it could not check.
     """
     try:
-        host = urlsplit(server).hostname
-    except ValueError as exc:
+        return gateway_endpoint.canonical_host(server)
+    except gateway_endpoint.EndpointError as exc:
         raise click.UsageError(
-            f"--server {server!r} is not a valid URL ({exc}); point it at "
-            "your lab gateway instead."
+            f"{exc}; point it at your lab gateway instead."
         ) from exc
-    return (host or "").strip().lower().rstrip(".")
 
 
 def _preflight_dev_broker_issuer(
