@@ -62,3 +62,24 @@ def test_native_unix_daemon_is_explicitly_unsupported():
     assert result.returncode == 1
     assert 'not supported on Windows' in result.stderr
     assert 'Traceback' not in result.stderr
+
+
+def test_every_enabled_account_gateway_help_encodes_strict_cp1252():
+    from pocketshell.cli import cli
+    from click import Group
+    commands = [["--help"], ["--version"]]
+    def collect(command, prefix):
+        commands.append([*prefix, "--help"])
+        if isinstance(command, Group):
+            for name, child in command.commands.items():
+                collect(child, [*prefix, name])
+    for name in ("login", "logout", "whoami", "gateway"):
+        collect(cli.commands[name], [name])
+    env = dict(os.environ, PYTHONIOENCODING="cp1252:strict")
+    for args in commands:
+        # Deliberately stricter than modern UTF-8 terminals: reproduce the
+        # native Windows redirected-stream encoding without lossy fallback.
+        result = subprocess.run([sys.executable, "-m", "pocketshell", *args], env=env,
+                                capture_output=True, timeout=30)
+        assert result.returncode == 0, (args, result.stderr.decode("cp1252"))
+        assert b"UnicodeEncodeError" not in result.stderr
