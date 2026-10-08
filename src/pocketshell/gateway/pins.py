@@ -296,12 +296,27 @@ def _case_collision(device_id: str, existing) -> Optional[str]:
 def load_pin_entries(path: Optional[Path] = None) -> dict[str, PinEntry]:
     """Read and strictly validate the whole pin file (see :func:`load_pins`)."""
     path = path or pin_file_path()
+    # The containing directory must be ours and not group/world-writable:
+    # otherwise someone else could swap the file between this check and
+    # OpenSSH reading it by name (and only `pin` would have tightened it).
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        dfd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     except FileNotFoundError:
         return {}
     except OSError as exc:
-        raise PinError(f"cannot open pin file {path}: {exc.strerror}") from None
+        raise PinError(f"cannot open pin directory {path.parent}: {exc.strerror}") from None
+    try:
+        _check_owned_private(path.parent, os.fstat(dfd), "pin directory")
+        try:
+            fd = os.open(
+                path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd
+            )
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:
+            raise PinError(f"cannot open pin file {path}: {exc.strerror}") from None
+    finally:
+        os.close(dfd)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):

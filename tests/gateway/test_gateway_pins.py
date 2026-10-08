@@ -423,3 +423,31 @@ def test_repinning_the_same_key_migrates_legacy_lines(tmp_path):
     path = _write_raw(tmp_path, f"pocketshell-gateway.home-lab {ED25519_LINE}\n")
     assert pins.add_pin("home-lab", parse_host_key(ED25519_LINE)) is False
     assert path.read_text() == f"{host_key_alias('home-lab')} {ED25519_LINE} home-lab\n"
+
+
+# --- the containing directory -------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", [0o720, 0o702, 0o777])
+def test_group_or_world_writable_pin_directory_is_refused(tmp_path, mode):
+    path = _write_raw(tmp_path, f"{host_key_alias('home-lab')} {ED25519_LINE} home-lab\n")
+    os.chmod(path.parent, mode)
+    try:
+        with pytest.raises(PinError, match="pin directory .* writable"):
+            load_pins()
+        with pytest.raises(PinError):
+            pins.require_pin("home-lab")
+    finally:
+        os.chmod(path.parent, 0o700)
+
+
+def test_foreign_owned_pin_directory_is_refused(tmp_path, monkeypatch):
+    _write_raw(tmp_path, f"{host_key_alias('home-lab')} {ED25519_LINE} home-lab\n")
+    real_uid = os.getuid()
+    monkeypatch.setattr(pins.os, "getuid", lambda: real_uid + 1)
+    with pytest.raises(PinError, match="pin directory .* not owned by you"):
+        load_pins()
+
+
+def test_missing_pin_directory_means_no_pins(tmp_path):
+    assert load_pins() == {}

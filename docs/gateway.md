@@ -583,8 +583,9 @@ case-insensitively, so the hash of the exact id keeps `Home-Lab` and
 already pinned one only in letter case is refused. The whole file is
 re-validated on every read: a single foreign line (marker, wildcard, hashed
 host, a comment other than the line's own id, second key for one device,
-two ids differing only in case), group/world-writable permissions, a
-foreign owner or a symlink makes it untrusted, and `gateway ssh` refuses to
+two ids differing only in case), group/world-writable permissions or a
+foreign owner on the file **or its directory**, or a symlink makes it
+untrusted, and `gateway ssh` refuses to
 run. Files from earlier versions
 (`pocketshell-gateway.<device-id> <keytype> <base64>`) are still read with
 the same checks — `gateway ssh` then verifies against that older alias — and
