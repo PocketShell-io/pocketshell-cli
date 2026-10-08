@@ -1,4 +1,12 @@
-"""A local fake PocketShell broker (http.server on 127.0.0.1 in a thread)."""
+"""A local fake PocketShell broker (http.server on 127.0.0.1 in a thread).
+
+Shared by the account tests and the gateway end-to-end tests through the
+``fake_broker`` fixture in ``tests/conftest.py``. It speaks the broker's
+device-flow / CLI-session contract: ``/auth/device/start`` and
+``/auth/device/token`` (by default pending once, then approved),
+``/cli/session``, ``/cli/gateway/token`` (Bearer psc_ → broker JWT) and
+``/cli/logout``. Every request is recorded in ``requests``.
+"""
 
 from __future__ import annotations
 
@@ -8,8 +16,6 @@ import threading
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-import pytest
 
 SESSION_TOKEN = "psc_" + "S" * 43
 DEVICE_CODE = "psdc_" + "D" * 43
@@ -73,6 +79,14 @@ class FakeBroker:
             "created_at": int(time.time()),
             "expires_at": self.session_expires_at,
         }
+
+    def start(self) -> "FakeBroker":
+        self.thread.start()
+        return self
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
 
     def requests_to(self, path: str) -> list[dict]:
         return [r for r in self.requests if r["path"] == path]
@@ -154,16 +168,3 @@ class FakeBroker:
                 pass
 
         return Handler
-
-
-@pytest.fixture
-def fake_broker(monkeypatch):
-    broker = FakeBroker()
-    broker.thread.start()
-    monkeypatch.setenv("POCKETSHELL_BROKER_URL", broker.url)
-    monkeypatch.setenv("POCKETSHELL_BROKER_INSECURE_DEV", "1")
-    try:
-        yield broker
-    finally:
-        broker.server.shutdown()
-        broker.server.server_close()

@@ -11,6 +11,8 @@ import textwrap
 
 import pytest
 
+from tests.fake_broker import FakeBroker
+
 
 @pytest.fixture(autouse=True)
 def _isolate_process_environment(tmp_path, monkeypatch):
@@ -95,3 +97,20 @@ def install_fake_a(tmp_path, monkeypatch):
         return script
 
     return _install
+
+
+@pytest.fixture
+def fake_broker(monkeypatch):
+    """A running :class:`tests.fake_broker.FakeBroker`, selected via env.
+
+    ``POCKETSHELL_BROKER_URL`` points at it and
+    ``POCKETSHELL_BROKER_INSECURE_DEV=1`` allows its loopback http URL, so
+    in-process calls and subprocesses inheriting ``os.environ`` both use it.
+    """
+    broker = FakeBroker().start()
+    monkeypatch.setenv("POCKETSHELL_BROKER_URL", broker.url)
+    monkeypatch.setenv("POCKETSHELL_BROKER_INSECURE_DEV", "1")
+    try:
+        yield broker
+    finally:
+        broker.stop()
