@@ -8,6 +8,7 @@ only as an *advertised* fingerprint and never becomes a pin.
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -151,6 +152,10 @@ def fetch_devices(
         raise DevicesError(
             f"cannot reach {endpoint.http_base}: {sanitize_remote_text(str(detail))}"
         ) from None
+    except (http.client.HTTPException, ValueError):
+        # e.g. BadStatusLine / IncompleteRead / LineTooLong: their messages
+        # quote raw gateway bytes (possibly terminal escapes) — never echo.
+        raise DevicesError("malformed HTTP response from the gateway") from None
     if status != 200:
         raise DevicesError(f"the gateway answered HTTP {status}")
     if len(body) > MAX_RESPONSE_BYTES:

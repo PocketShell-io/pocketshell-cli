@@ -263,6 +263,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     Returns an integer exit code rather than letting Click call
     `sys.exit` so the function is testable from the unit suite.
+
+    Last-resort handling: Ctrl-C / :class:`click.Abort` exit 130 quietly; any
+    other unexpected exception prints only its class name (a traceback could
+    echo raw bytes from a broker, gateway or host — terminal escapes
+    included) and exits 1. ``POCKETSHELL_DEBUG=1`` re-raises instead.
     """
     try:
         result = cli.main(args=list(argv) if argv is not None else None,
@@ -273,6 +278,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except click.ClickException as exc:
         exc.show()
         return int(exc.exit_code)
+    except (KeyboardInterrupt, click.Abort):
+        return 130
+    except Exception as exc:
+        if os.environ.get("POCKETSHELL_DEBUG") == "1":
+            raise
+        sys.stderr.write(f"pocketshell: internal error ({type(exc).__name__})\n")
+        return 1
     if result is None:
         return 0
     try:

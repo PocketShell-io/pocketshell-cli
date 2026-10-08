@@ -235,3 +235,47 @@ def test_env_proxies_are_ignored(server, fake_account, monkeypatch):
         assert proxy.seen == []
     finally:
         proxy.close()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"HTTP/1.1 \x1b]52;c;ZXZpbA==\x07 200 OK\r\n\r\n",  # BadStatusLine
+        b"\x1b[2J\x1b]0;pwned\x07garbage\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\x1b[31m\r\n",
+    ],
+)
+def test_malformed_http_response_is_a_clean_error(fake_account, raw):
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(4)
+    port = sock.getsockname()[1]
+
+    def serve():
+        try:
+            conn, _ = sock.accept()
+            with conn:
+                conn.recv(65536)
+                conn.sendall(raw)
+        except OSError:
+            pass
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    try:
+        result = CliRunner().invoke(
+            cli,
+            [
+                "gateway", "devices", "--server", f"http://127.0.0.1:{port}",
+                "--insecure-dev", "--trust-gateway", "127.0.0.1",
+            ],
+        )
+    finally:
+        t.join(5)
+        sock.close()
+    assert result.exit_code == 1, result.output
+    assert "malformed HTTP response from the gateway" in result.output
+    assert "\x1b" not in result.output and "\x07" not in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
