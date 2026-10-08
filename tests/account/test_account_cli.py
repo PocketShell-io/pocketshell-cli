@@ -245,3 +245,14 @@ def test_logout_removes_symlink_without_contacting_broker(fake_broker, tmp_path)
     assert fake_broker.requests == []
     assert not os.path.lexists(path)
     assert real.exists()
+
+
+def test_logout_with_already_revoked_session_is_clean(fake_broker) -> None:
+    """Broker answers 401 invalid_token: already logged out, no warning, file gone."""
+    _save(fake_broker, token=OLD_TOKEN)
+    result = _invoke("logout")
+    assert result.exit_code == 0, result.output
+    assert "Logged out." in result.stdout
+    assert "could not revoke" not in result.stderr
+    assert len(fake_broker.requests_to("/cli/logout")) == 1
+    assert not store.exists()

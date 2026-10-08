@@ -202,6 +202,10 @@ class DeviceStart:
 
 def start_device(base_url: str, label: str) -> DeviceStart:
     resp = request(base_url, "POST", "/auth/device/start", body={"label": label})
+    if resp.status == 429:
+        raise AccountError(
+            "Too many login attempts from this network; wait a few minutes and try again."
+        )
     if resp.status != 200:
         raise AccountError(describe_failure(resp, "Starting the login"))
     what = "device-start"

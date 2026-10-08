@@ -250,3 +250,10 @@ def test_validate_label_rejects_bad_labels(bad) -> None:
 
 def test_validate_label_accepts_unicode() -> None:
     assert device.validate_label("Алексей@laptop") == "Алексей@laptop"
+
+
+def test_start_rate_limited_has_clear_message(fake_broker) -> None:
+    fake_broker.overrides[("POST", "/auth/device/start")] = (429, {"error": "rate_limited"})
+    with pytest.raises(AccountError, match="Too many login attempts"):
+        _run(fake_broker)
+    assert fake_broker.requests_to("/auth/device/token") == []
