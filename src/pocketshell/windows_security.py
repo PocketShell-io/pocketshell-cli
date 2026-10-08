@@ -186,7 +186,11 @@ def _directory(path, *, create=False):
                 with _security() as sa:
                     if not CreateDirectory(str(current), sa) and c.get_last_error() != 183:
                         raise c.WinError(c.get_last_error())
-            handle = _open(current, directory=True, access=0x20080)
+            # READ_CONTROL/READ_ATTRIBUTES alone are metadata-only accesses:
+            # Windows does not enforce the intended delete-sharing exclusion
+            # for those handles. FILE_LIST_DIRECTORY makes this a real read
+            # access, so omitting FILE_SHARE_DELETE pins rename/delete too.
+            handle = _open(current, directory=True, access=0x20081)
             handles.append(handle)
             _check(handle, directory=True, private=current == path)
         yield path

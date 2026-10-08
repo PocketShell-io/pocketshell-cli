@@ -57,7 +57,7 @@ def _server_options(func):
         metavar="HOST",
         help=(
             "Required with a non-production --server: the exact gateway "
-            "host you trust with your (replayable, ≤ 5 min) gateway token."
+            "host you trust with your (replayable, <= 5 min) gateway token."
         ),
     )(func)
     func = click.option(
