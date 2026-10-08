@@ -270,3 +270,32 @@ def test_logout_with_already_revoked_session_is_clean(fake_broker) -> None:
     assert "could not revoke" not in result.stderr
     assert len(fake_broker.requests_to("/cli/logout")) == 1
     assert not store.exists()
+
+
+def test_unexpected_exception_is_one_line_without_traceback(fake_broker, monkeypatch) -> None:
+    def boom(*_a, **_k):
+        raise RuntimeError("server said \x1b[2J" + SESSION_TOKEN)
+
+    monkeypatch.setattr(device.broker, "start_device", boom)
+    result = _invoke("login")
+    assert result.exit_code == 1
+    assert result.stderr.strip() == "error: unexpected internal error (RuntimeError)."
+    assert "Traceback" not in result.output
+    _assert_no_secrets(result)
+
+
+def test_network_error_text_is_sanitized(fake_broker, monkeypatch) -> None:
+    import urllib.error
+
+    from pocketshell.account import broker as client
+
+    class EvilOpener:
+        def open(self, *_a, **_k):
+            raise urllib.error.URLError("\x1b]0;owned\x07 dns failure")
+
+    monkeypatch.setattr(client, "_build_opener", lambda: EvilOpener())
+    _save(fake_broker)
+    result = _invoke("whoami")
+    assert result.exit_code == 0, result.output
+    assert "\x1b" not in result.stderr and "\x07" not in result.stderr
+    assert "]0;owned dns failure" in result.stderr

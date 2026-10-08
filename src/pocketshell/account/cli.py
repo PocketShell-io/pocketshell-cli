@@ -6,6 +6,7 @@ Errors go to stderr as ``error: <message>``; messages never contain tokens.
 
 from __future__ import annotations
 
+import functools
 import json
 import time
 
@@ -18,8 +19,30 @@ from pocketshell.account.sanitize import clean_text
 
 
 def _fail(message: str, code: int = 1) -> None:
-    click.echo(f"error: {message}", err=True)
+    click.echo(f"error: {clean_text(message, max_len=2000)}", err=True)
     raise click.exceptions.Exit(code)
+
+
+def _guarded(func):
+    """No tracebacks: an unexpected exception becomes a one-line error.
+
+    Only the exception TYPE is shown — its text could contain anything,
+    including server-provided bytes.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except (click.exceptions.Exit, click.ClickException, click.Abort):
+            raise
+        except KeyboardInterrupt:
+            click.echo("\nCancelled.", err=True)
+            raise click.exceptions.Exit(130) from None
+        except Exception as exc:  # noqa: BLE001
+            _fail(f"unexpected internal error ({type(exc).__name__}).")
+
+    return wrapper
 
 
 def _when(epoch: int) -> str:
@@ -48,6 +71,7 @@ def _when(epoch: int) -> str:
 )
 @click.option("--no-open", is_flag=True, help="Do not try to open a web browser.")
 @click.option("--force", is_flag=True, help="Replace an existing, still-valid login.")
+@_guarded
 def login_command(label: str | None, no_open: bool, force: bool) -> None:
     try:
         base = resolve_broker_url()
@@ -56,7 +80,7 @@ def login_command(label: str | None, no_open: bool, force: bool) -> None:
         try:
             previous = credentials.load()
         except CredentialsUnsafe as exc:
-            click.echo(f"warning: {exc} It will be replaced.", err=True)
+            click.echo(f"warning: {clean_text(str(exc), max_len=2000)} It will be replaced.", err=True)
         except NotLoggedIn:
             pass
         if previous is not None and not previous.expired() and not force:
@@ -98,6 +122,7 @@ def _revoke_quietly(creds: credentials.Credentials) -> str | None:
         "the stored credentials."
     ),
 )
+@_guarded
 def logout_command() -> None:
     try:
         try:
@@ -136,6 +161,7 @@ def logout_command() -> None:
     help="Show which PocketShell account this machine is logged in to.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@_guarded
 def whoami_command(as_json: bool) -> None:
     try:
         creds = credentials.require_session()
@@ -183,11 +209,11 @@ def whoami_command(as_json: bool) -> None:
         click.echo(f"  expires:  {_when(expires_at)}")
         click.echo(f"  verified: {'yes' if verified else 'no'}")
     for warning in warnings:
-        click.echo(f"warning: {warning}", err=True)
+        click.echo(f"warning: {clean_text(warning, max_len=2000)}", err=True)
 
 
 def _not_logged_in(exc: NotLoggedIn, as_json: bool) -> None:
     if as_json:
         click.echo(json.dumps({"logged_in": False}))
-    click.echo(f"error: {exc}", err=True)
+    click.echo(f"error: {clean_text(str(exc), max_len=2000)}", err=True)
     raise click.exceptions.Exit(1)

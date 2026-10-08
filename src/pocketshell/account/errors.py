@@ -10,9 +10,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pocketshell.account.sanitize import clean_text
+
 
 class AccountError(Exception):
-    """A login/account failure whose message is safe to show to the user."""
+    """A login/account failure whose message is safe to show to the user.
+
+    The message is passed through :func:`clean_text` on construction, so even
+    a message that embeds a path or a server-derived fragment can never carry
+    terminal control/escape or invisible format characters to whoever
+    prints ``str(exc)``.
+    """
+
+    def __init__(self, message: object = "") -> None:
+        super().__init__(clean_text(str(message), max_len=2000))
 
 
 class NotLoggedIn(AccountError):

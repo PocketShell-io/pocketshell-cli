@@ -109,3 +109,8 @@ def test_http_requires_dev_flag_and_loopback(monkeypatch) -> None:
         validate_broker_url("http://broker.example.com")
     with pytest.raises(AccountError, match="https"):
         validate_broker_url("http://10.0.0.1")
+
+
+def test_account_error_messages_are_sanitized_on_construction() -> None:
+    exc = NotLoggedIn("bad \x1b]52;c;ZXZpbA==\x07path‮/x\nmore")
+    assert str(exc) == "bad ]52;c;ZXZpbA==path/xmore"
