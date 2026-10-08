@@ -327,7 +327,7 @@ def enroll(
         token = gateway_tokens.obtain_token(_enroll_token_provider)
     except gateway_tokens.NotLoggedInError as exc:
         raise _EnrollNotLoggedIn(
-            f"{exc}. Or pipe a gateway enrollment token instead: "
+            f"{str(exc).rstrip('.')}. Or pipe a gateway enrollment token instead: "
             "pocketshell gateway enroll --token-stdin < enrollment-token.txt"
         ) from None
     except gateway_tokens.GatewayTokenError as exc:
