@@ -76,3 +76,11 @@ def validate_broker_url(raw: str) -> str:
 def resolve_broker_url() -> str:
     """``$POCKETSHELL_BROKER_URL`` if set, else the production broker."""
     return validate_broker_url(os.environ.get(ENV_BROKER_URL) or DEFAULT_BROKER_URL)
+
+
+def normalize_or_none(raw: str) -> str | None:
+    """Normalized URL, or ``None`` if it is not acceptable under the current policy."""
+    try:
+        return validate_broker_url(raw)
+    except AccountError:
+        return None
