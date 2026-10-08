@@ -14,6 +14,7 @@ from typing import Optional, Sequence
 
 import click
 
+from pocketshell.gateway import client_cli as gateway_client_cli
 from pocketshell.gateway import endpoint as gateway_endpoint
 from pocketshell.gateway import helper as gateway_helper
 
@@ -326,3 +327,6 @@ def show(ctx: click.Context, config_dir: Optional[str]) -> None:
 gateway_group.add_command(enroll)
 gateway_group.add_command(run)
 gateway_group.add_command(show)
+
+for _client_command in gateway_client_cli.CLIENT_COMMANDS:
+    gateway_group.add_command(_client_command)
