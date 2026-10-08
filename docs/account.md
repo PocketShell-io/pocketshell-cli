@@ -122,6 +122,19 @@ session is already gone and counts as logged out.
 - Only HTTPS, with TLS verification always on. Redirects aren't followed,
   because they would replay the `Authorization` header somewhere else. Every
   request has a timeout, and response bodies are capped at 64 KiB.
+- Environment proxies and CA overrides are ignored for every request that
+  carries a token (the session token here, the gateway JWT in
+  `pocketshell gateway`): `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` (either
+  case) and `NO_PROXY` have no effect, and the trust store is the platform's
+  compiled-in default CA file/directory, not `SSL_CERT_FILE`/`SSL_CERT_DIR`.
+  If your network needs a proxy or a private CA to reach the broker, these
+  commands won't work there. If no CA bundle exists at the default location
+  (e.g. a python.org macOS build without "Install Certificates"), TLS
+  verification fails rather than falling back to the environment.
+- Beyond those variables and `POCKETSHELL_BROKER_URL` (see above), the
+  process environment is trusted. An `.envrc` or profile that can set
+  `PYTHONPATH`, `LD_PRELOAD` and the like can run code inside the CLI
+  process, which no CLI can defend against.
 - Responses must be strict JSON objects: valid UTF-8, no duplicate keys, no
   NaN or Infinity. Every field the CLI uses is type-checked.
 - Tokens and the device code go only in the `Authorization` header or the JSON

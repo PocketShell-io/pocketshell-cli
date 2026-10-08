@@ -217,3 +217,21 @@ def test_refused_endpoints_never_mint_or_send(server, fake_account, args):
     assert result.exit_code == 2
     assert server.requests == []
     assert fake_account.calls == 0
+
+
+def test_env_proxies_are_ignored(server, fake_account, monkeypatch):
+    """HTTPS_PROXY/http_proxy must not see the broker JWT (cleartext in dev)."""
+    from tests.account.test_account_tls import PROXY_VARS, RecordingProxy
+
+    proxy = RecordingProxy()
+    try:
+        for name in PROXY_VARS:
+            monkeypatch.setenv(name, proxy.url)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        result = _invoke(server)
+        assert result.exit_code == 0, result.output
+        assert server.requests[0][1]["Authorization"] == f"Bearer {FAKE_JWT}"
+        assert proxy.seen == []
+    finally:
+        proxy.close()

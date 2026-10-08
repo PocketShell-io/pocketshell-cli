@@ -189,9 +189,11 @@ _WS_LOGGER.propagate = False
 
 
 def _ssl_context() -> ssl.SSLContext:
-    ctx = ssl.create_default_context()  # CERT_REQUIRED + hostname checking
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    return ctx
+    # CERT_REQUIRED + hostname checking, TLS >= 1.2, trust store from the
+    # platform defaults only (SSL_CERT_FILE/SSL_CERT_DIR are ignored).
+    from pocketshell.tokentls import token_ssl_context
+
+    return token_ssl_context()
 
 
 def _connect(url: str, *, secure: bool, timeout: float):

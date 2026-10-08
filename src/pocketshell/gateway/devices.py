@@ -9,7 +9,6 @@ only as an *advertised* fingerprint and never becomes a pin.
 from __future__ import annotations
 
 import json
-import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -18,6 +17,7 @@ from typing import Optional
 from pocketshell.gateway.endpoint import DEVICE_ID_RE, GatewayEndpoint
 from pocketshell.gateway.pins import HostKey, PinError, parse_host_key
 from pocketshell.gateway.tokens import TokenProvider, obtain_token, sanitize_remote_text
+from pocketshell.tokentls import token_opener
 
 HTTP_TIMEOUT_SECONDS = 15.0
 MAX_RESPONSE_BYTES = 1 << 20
@@ -49,11 +49,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _opener() -> urllib.request.OpenerDirector:
-    ctx = ssl.create_default_context()
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    return urllib.request.build_opener(
-        _NoRedirect(), urllib.request.HTTPSHandler(context=ctx)
-    )
+    # No environment proxy, no SSL_CERT_FILE/SSL_CERT_DIR: see
+    # pocketshell.tokentls.
+    return token_opener(_NoRedirect())
 
 
 def _strict_pairs(pairs):

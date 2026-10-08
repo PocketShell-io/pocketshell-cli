@@ -2,8 +2,12 @@
 
 stdlib ``urllib`` only. Hardening relative to a bare ``urlopen``:
 
-* TLS verification always on (``ssl.create_default_context``); the base URL
-  went through :func:`pocketshell.account.config.validate_broker_url`.
+* TLS verification always on, against the platform's compiled-in trust
+  store only (:func:`pocketshell.tokentls.token_ssl_context`:
+  ``SSL_CERT_FILE``/``SSL_CERT_DIR`` are ignored); the base URL went through
+  :func:`pocketshell.account.config.validate_broker_url`.
+* Environment proxies (``HTTPS_PROXY``, ``http_proxy`` …) are ignored: the
+  session token goes straight to the broker.
 * Redirects are refused: urllib would replay the ``Authorization`` header to
   whatever ``Location`` says, including an ``http://`` downgrade.
 * Every request has a timeout; response bodies are capped at 64 KiB.
@@ -36,6 +40,7 @@ from pocketshell.account.errors import (
 )
 from pocketshell.account.jsonutil import StrictJSONError, loads_strict
 from pocketshell.account.sanitize import clean_text
+from pocketshell.tokentls import token_opener
 
 MAX_BODY_BYTES = 64 * 1024
 DEFAULT_TIMEOUT = 15.0
@@ -59,8 +64,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _build_opener() -> urllib.request.OpenerDirector:
-    context = ssl.create_default_context()
-    return urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), _NoRedirect)
+    return token_opener(_NoRedirect())
 
 
 @dataclass(frozen=True)

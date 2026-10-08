@@ -5,6 +5,14 @@ strict: ``https`` only, no userinfo/query/fragment. Plain ``http`` is allowed
 solely for local development and tests, behind
 ``POCKETSHELL_BROKER_INSECURE_DEV=1`` AND a loopback host — there is no way to
 send a token over cleartext to a remote machine.
+
+Token-bearing requests ignore environment proxies (``HTTPS_PROXY``,
+``http_proxy``, ``ALL_PROXY`` …) and CA overrides (``SSL_CERT_FILE``,
+``SSL_CERT_DIR``); see :mod:`pocketshell.tokentls`. Those are the only
+environment variables treated as hostile, together with the broker/web-origin
+overrides handled below. The process environment is otherwise trusted: an
+``.envrc`` that can set ``PYTHONPATH`` (or ``LD_PRELOAD``) can run code inside
+this process, which no CLI can defend against.
 """
 
 from __future__ import annotations
@@ -20,8 +28,8 @@ DEFAULT_BROKER_URL = "https://a7sota2qic.execute-api.eu-west-1.amazonaws.com"
 ENV_BROKER_URL = "POCKETSHELL_BROKER_URL"
 ENV_INSECURE_DEV = "POCKETSHELL_BROKER_INSECURE_DEV"
 # The only origin whose verification URLs `login` prints or opens. A broker
-# (or an `.envrc`-redirected one) cannot steer the user to a look-alike
-# approval page. Overridable for staging/dev ONLY together with an explicit
+# (including one that $POCKETSHELL_BROKER_URL, e.g. from an `.envrc`, points
+# to) cannot steer the user to a look-alike approval page. Overridable for staging/dev ONLY together with an explicit
 # broker URL override.
 DEFAULT_WEB_ORIGIN = "https://app.pocketshell.io"
 SESSIONS_URL = f"{DEFAULT_WEB_ORIGIN}/device/sessions"
@@ -97,10 +105,12 @@ def session_broker_url(stored: str, requested: str | None = None) -> str:
     """The ONLY URL an existing session token may be sent to: the stored one.
 
     The session token is a 30-day credential bound to the broker that issued
-    it at login. ``$POCKETSHELL_BROKER_URL`` (easy to set by accident, or by a
-    hostile ``.envrc``) is ignored for an existing session; if it — or an
+    it at login. ``$POCKETSHELL_BROKER_URL`` (easy to set by accident, or by
+    an ``.envrc``) is ignored for an existing session; if it — or an
     explicit ``requested`` URL — names a different broker, this refuses with
-    :class:`NotLoggedIn` instead of choosing either one.
+    :class:`NotLoggedIn` instead of choosing either one. (This guards the
+    token's destination against a redirecting variable; an environment that
+    can also set ``PYTHONPATH`` already runs code in this process.)
     """
     from pocketshell.account.errors import NotLoggedIn
 

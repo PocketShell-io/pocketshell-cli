@@ -523,6 +523,13 @@ the `Authorization` header (`devices`) or the first WebSocket text frame
 (`proxy`) — never in a URL, argv, environment variable, file or log line.
 Not logged in → exit **3**.
 
+Both token-bearing connections ignore environment proxies (`HTTPS_PROXY`,
+`HTTP_PROXY`, `ALL_PROXY`, either case, and `NO_PROXY`) and CA overrides
+(`SSL_CERT_FILE`, `SSL_CERT_DIR`): they go direct and verify TLS against the
+platform's compiled-in default CA file/directory only. Otherwise the process
+environment is trusted — an `.envrc` that can set `PYTHONPATH` or
+`LD_PRELOAD` runs code inside the CLI, which no CLI can defend against.
+
 ### 9.1 Choosing the gateway
 
 The default is the production gateway `wss://gateway.pocketshell.io`
@@ -539,8 +546,8 @@ The default is the production gateway `wss://gateway.pocketshell.io`
 - plain `ws://`/`http://` additionally requires `--insecure-dev` **and** a
   loopback IP literal or `localhost` (a single-label docker service name
   such as `gateway` is accepted with a cleartext warning). TLS
-  certificate verification is never optional, and environment proxy
-  settings are not used for the WebSocket.
+  certificate verification is never optional, and neither environment
+  proxies nor `SSL_CERT_FILE`/`SSL_CERT_DIR` are used (see above).
 
 ### 9.2 `gateway devices [--json]`
 
