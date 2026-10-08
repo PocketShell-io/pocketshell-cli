@@ -8,7 +8,8 @@ the broker's OAuth-style device flow and stores a CLI session token in
 
 Public API (consumed by the gateway connect commands; keep stable)::
 
-    AccountError, NotLoggedIn, GatewayToken, mint_gateway_token, broker_url
+    AccountError, NotLoggedIn, GatewayToken, mint_gateway_token, broker_url,
+    require_login
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ __all__ = [
     "NotLoggedIn",
     "broker_url",
     "mint_gateway_token",
+    "require_login",
 ]
 
 
@@ -50,3 +52,18 @@ def mint_gateway_token(*, broker_url: str | None = None) -> GatewayToken:
     creds = credentials.require_session()
     target = session_broker_url(creds.broker_url, broker_url)
     return broker.mint_gateway_token(target, creds.access_token)
+
+
+def require_login(*, broker_url: str | None = None) -> None:
+    """Check, locally and without any network I/O, that a session is usable.
+
+    Raises :class:`NotLoggedIn` exactly when :func:`mint_gateway_token`
+    would refuse before contacting the broker: no credentials file, an
+    unsafe or expired one, or ``broker_url`` / ``$POCKETSHELL_BROKER_URL``
+    naming a different broker than the stored one. A session revoked on
+    the broker side is only detected by minting.
+    """
+    from pocketshell.account import credentials
+
+    creds = credentials.require_session()
+    session_broker_url(creds.broker_url, broker_url)

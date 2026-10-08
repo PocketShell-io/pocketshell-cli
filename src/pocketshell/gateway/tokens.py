@@ -11,9 +11,10 @@ The token is never printed, logged, put in argv, a URL, or the environment.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import unicodedata
-from typing import Callable, Protocol
+from typing import Callable, Iterator, Protocol
 
 
 class TokenLike(Protocol):
@@ -32,6 +33,12 @@ LOGIN_HINT = (
 )
 
 
+_NO_ACCOUNT_SUPPORT = (
+    "this pocketshell build has no `pocketshell login` support yet; "
+    "upgrade pocketshell"
+)
+
+
 class GatewayTokenError(Exception):
     """Could not obtain a usable broker token. Message is safe to print."""
 
@@ -45,11 +52,49 @@ def default_token_provider() -> TokenLike:
     try:
         from pocketshell.account import mint_gateway_token
     except ImportError:
-        raise NotLoggedInError(
-            "this pocketshell build has no `pocketshell login` support yet; "
-            "upgrade pocketshell"
-        ) from None
+        raise NotLoggedInError(_NO_ACCOUNT_SUPPORT) from None
     return mint_gateway_token()
+
+
+def _not_logged_in(detail: str) -> NotLoggedInError:
+    # The account layer's own message usually already says what to run;
+    # do not repeat the hint after it.
+    if "pocketshell login" in detail:
+        return NotLoggedInError(detail)
+    return NotLoggedInError(f"not logged in{': ' + detail if detail else ''}; {LOGIN_HINT}")
+
+
+@contextlib.contextmanager
+def _account_errors(what: str) -> Iterator[None]:
+    """Map account-layer exceptions to :class:`GatewayTokenError` /
+    :class:`NotLoggedInError` with a sanitized message."""
+    try:
+        from pocketshell.account import AccountError, NotLoggedIn
+    except ImportError:
+        AccountError = NotLoggedIn = ()  # type: ignore[assignment,misc]
+    try:
+        yield
+    except GatewayTokenError:
+        raise
+    except NotLoggedIn as exc:  # type: ignore[misc]
+        raise _not_logged_in(sanitize_remote_text(str(exc))) from None
+    except AccountError as exc:  # type: ignore[misc]
+        raise GatewayTokenError(f"{what}: {sanitize_remote_text(str(exc))}") from None
+
+
+def require_login() -> None:
+    """Fail fast, without network I/O, when there is no usable login session.
+
+    For commands that hand the actual minting to a child process (``gateway
+    ssh`` → ssh → ``gateway proxy``), where the child's exit status would
+    be lost behind ssh's own 255.
+    """
+    with _account_errors("cannot use your `pocketshell login` session"):
+        try:
+            from pocketshell.account import require_login as account_require_login
+        except ImportError:
+            raise NotLoggedInError(_NO_ACCOUNT_SUPPORT) from None
+        account_require_login()
 
 
 def obtain_token(provider: TokenProvider) -> str:
@@ -59,23 +104,8 @@ def obtain_token(provider: TokenProvider) -> str:
     :class:`NotLoggedInError` with a sanitized message; anything else
     propagates (a bug, not a user condition).
     """
-    try:
-        from pocketshell.account import AccountError, NotLoggedIn
-    except ImportError:
-        AccountError = NotLoggedIn = ()  # type: ignore[assignment,misc]
-    try:
+    with _account_errors("could not get a gateway token"):
         minted = provider()
-    except GatewayTokenError:
-        raise
-    except NotLoggedIn as exc:  # type: ignore[misc]
-        detail = sanitize_remote_text(str(exc))
-        raise NotLoggedInError(
-            f"not logged in{': ' + detail if detail else ''}; {LOGIN_HINT}"
-        ) from None
-    except AccountError as exc:  # type: ignore[misc]
-        raise GatewayTokenError(
-            f"could not get a gateway token: {sanitize_remote_text(str(exc))}"
-        ) from None
     token = getattr(minted, "token", None)
     if (
         not isinstance(token, str)

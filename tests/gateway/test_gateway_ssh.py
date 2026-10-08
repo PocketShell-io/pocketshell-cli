@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -307,6 +308,25 @@ def exec_ssh(monkeypatch):
     return calls
 
 
+@pytest.fixture
+def logged_in(monkeypatch):
+    """A real stored `pocketshell login` session (no broker is contacted:
+    `gateway ssh` only checks it locally; the ProxyCommand mints)."""
+    from pocketshell.account import credentials
+
+    monkeypatch.delenv("POCKETSHELL_BROKER_URL", raising=False)
+    credentials.save(
+        credentials.Credentials(
+            broker_url="https://broker.example",
+            access_token="psc_" + "S" * 43,
+            token_id="tok_1",
+            email="me@example.com",
+            expires_at=int(time.time()) + 3600,
+            label="me@laptop",
+        )
+    )
+
+
 def test_cli_refuses_without_a_pin_and_explains(exec_ssh):
     result = CliRunner().invoke(cli, ["gateway", "ssh", "home-lab"])
     assert result.exit_code == 1
@@ -328,7 +348,7 @@ def test_cli_refuses_an_untrusted_pin_file(exec_ssh):
 
 
 @pytest.mark.skipif(shutil.which("ssh") is None, reason="OpenSSH client unavailable")
-def test_cli_execs_hardened_ssh(exec_ssh):
+def test_cli_execs_hardened_ssh(exec_ssh, logged_in):
     pins.add_pin("home-lab", pins.parse_host_key(ED25519_LINE))
     result = CliRunner().invoke(
         cli, ["gateway", "ssh", "home-lab", "-l", "me", "--", "-N", "-D", "1080"]
@@ -356,4 +376,41 @@ def test_cli_refusals(exec_ssh, args):
     pins.add_pin("home-lab", pins.parse_host_key(ED25519_LINE))
     result = CliRunner().invoke(cli, ["gateway", *args])
     assert result.exit_code == 2, result.output
+    assert exec_ssh == []
+
+
+@pytest.mark.skipif(shutil.which("ssh") is None, reason="OpenSSH client unavailable")
+def test_cli_not_logged_in_is_exit_3_before_ssh(exec_ssh):
+    # Without this preflight ssh would start, the ProxyCommand would exit 3
+    # and the user would get ssh's generic 255 instead.
+    pins.add_pin("home-lab", pins.parse_host_key(ED25519_LINE))
+    result = CliRunner().invoke(cli, ["gateway", "ssh", "home-lab", "--", "uptime"])
+    assert result.exit_code == client_cli.EXIT_NOT_LOGGED_IN, result.output
+    assert "run `pocketshell login`" in result.output
+    assert result.output.count("pocketshell login") == 1  # hint not repeated
+    assert exec_ssh == []
+
+
+@pytest.mark.skipif(shutil.which("ssh") is None, reason="OpenSSH client unavailable")
+def test_cli_session_for_another_broker_is_exit_3_before_ssh(exec_ssh, logged_in, monkeypatch):
+    monkeypatch.setenv("POCKETSHELL_BROKER_URL", "https://other-broker.example")
+    pins.add_pin("home-lab", pins.parse_host_key(ED25519_LINE))
+    result = CliRunner().invoke(cli, ["gateway", "ssh", "home-lab"])
+    assert result.exit_code == client_cli.EXIT_NOT_LOGGED_IN, result.output
+    assert "differs from the broker you logged in to" in result.output
+    assert exec_ssh == []
+
+
+@pytest.mark.skipif(shutil.which("ssh") is None, reason="OpenSSH client unavailable")
+def test_cli_expired_session_is_exit_3_before_ssh(exec_ssh, logged_in):
+    from pocketshell.account import credentials
+
+    creds = credentials.load()
+    credentials.save(
+        credentials.Credentials(**{**creds.__dict__, "expires_at": int(time.time()) - 1})
+    )
+    pins.add_pin("home-lab", pins.parse_host_key(ED25519_LINE))
+    result = CliRunner().invoke(cli, ["gateway", "ssh", "home-lab"])
+    assert result.exit_code == client_cli.EXIT_NOT_LOGGED_IN, result.output
+    assert "expired" in result.output
     assert exec_ssh == []

@@ -34,6 +34,10 @@ def _token_provider() -> gateway_tokens.TokenLike:
     return gateway_tokens.default_token_provider()
 
 
+def _require_login() -> None:
+    gateway_tokens.require_login()
+
+
 def _resolve_endpoint(
     server: Optional[str], insecure_dev: bool, trust_gateway: Optional[str]
 ) -> gateway_endpoint.GatewayEndpoint:
@@ -304,6 +308,15 @@ def ssh(
         raise click.ClickException(str(exc)) from None
     except gateway_sshcmd.SshArgsError as exc:
         raise click.UsageError(str(exc)) from None
+    # The ProxyCommand mints the gateway token, but its exit status is lost
+    # behind ssh's 255: check the login here (locally, no network) so "not
+    # logged in" is exit 3 before ssh or the gateway is ever started.
+    try:
+        _require_login()
+    except gateway_tokens.NotLoggedInError as exc:
+        raise _NotLoggedIn(str(exc)) from None
+    except gateway_tokens.GatewayTokenError as exc:
+        raise click.ClickException(str(exc)) from None
     _exec_ssh(ssh_path, argv, gateway_sshcmd.ssh_environment())
 
 
