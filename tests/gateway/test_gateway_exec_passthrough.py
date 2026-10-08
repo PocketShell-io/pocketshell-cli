@@ -677,3 +677,22 @@ def test_docker_lab_server_reaches_the_helper_in_subprocess(tmp_path):
         b"--dev-broker-issuer", b"https://lab-broker.example",
         b"--insecure-dev",
     ]
+
+
+def test_piped_token_reaches_the_helper_when_stdin_was_closed(tmp_path):
+    """With fd 0 closed, os.pipe() returns read_fd == 0 (close-on-exec): it
+    must still be the helper's stdin after exec."""
+    helper = tmp_path / "helper.sh"
+    out = tmp_path / "stdin.bin"
+    helper.write_text(f"#!/bin/sh\ncat > {out}\n")
+    helper.chmod(0o755)
+    code = (
+        "import os, sys\n"
+        "from pocketshell.gateway.helper import exec_helper_with_stdin_token\n"
+        "os.close(0)\n"
+        "r, w = os.pipe(); assert r == 0, r; os.close(r); os.close(w)  # the case under test\n"
+        f"exec_helper_with_stdin_token({str(helper)!r}, [], 'tok-123')\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    assert out.read_bytes() == b"tok-123\n"

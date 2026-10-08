@@ -654,6 +654,11 @@ def exec_helper_with_stdin_token(helper: str, argv: list[str], token: str) -> No
     finally:
         os.close(write_fd)
     if read_fd != 0:
-        os.dup2(read_fd, 0)
+        os.dup2(read_fd, 0)  # dup2 makes fd 0 inheritable
         os.close(read_fd)
+    else:
+        # Our stdin was closed, so the pipe landed on fd 0 itself — but
+        # os.pipe() fds are close-on-exec: without this the helper would
+        # start with no stdin at all.
+        os.set_inheritable(0, True)
     os.execv(helper, [helper, *argv])
