@@ -78,6 +78,9 @@ def test_every_hardening_option_is_present_and_first(tmp_path):
         "CheckHostIP=no",
         "EnableEscapeCommandline=no",
         "Compression=no",
+        "ConnectTimeout=30",
+        "ServerAliveInterval=30",
+        "ServerAliveCountMax=3",
     ):
         assert required in opts, required
     assert opts.index("IgnoreUnknown=EnableEscapeCommandline") < opts.index(
@@ -287,6 +290,9 @@ def test_real_ssh_accepts_options_and_ignores_user_config(tmp_path):
     assert conf["globalknownhostsfile"] == "/dev/null"
     assert conf["hostkeyalias"] == host_key_alias("home:lab_1")
     assert conf["identitiesonly"] == "yes"
+    assert conf["connecttimeout"] == "30"
+    assert conf["serveraliveinterval"] == "30"
+    assert conf["serveralivecountmax"] == "3"
     assert conf["passwordauthentication"] == "no"
     assert conf["kbdinteractiveauthentication"] == "no"
     assert conf["user"] == "me"

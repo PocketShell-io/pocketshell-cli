@@ -78,6 +78,12 @@ HARDENING_OPTIONS: tuple[str, ...] = (
     "PreferredAuthentications=publickey",
     "IdentitiesOnly=yes",
     "Compression=no",
+    # Bounded connection setup (TCP via the ProxyCommand + SSH banner) and
+    # dead-peer detection, so a stalling gateway or host cannot hang the
+    # session forever.
+    "ConnectTimeout=30",
+    "ServerAliveInterval=30",
+    "ServerAliveCountMax=3",
     "ExitOnForwardFailure=yes",
 )
 

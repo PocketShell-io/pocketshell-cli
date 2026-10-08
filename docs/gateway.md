@@ -615,6 +615,10 @@ explicit configuration; refuses to run without a valid pin:
   `HostbasedAuthentication=no`, `IdentitiesOnly=yes` (always: `-i KEY`, or
   your default `~/.ssh/id_*` files; agent-only keys without a file are not
   offered); `Compression=no`, `ExitOnForwardFailure=yes`;
+- bounded waits: `ConnectTimeout=30` (connection setup through the
+  ProxyCommand, including the SSH banner), `ServerAliveInterval=30`,
+  `ServerAliveCountMax=3` (a silent gateway or host ends the session after
+  about 90 s);
 - `ProxyCommand=<absolute python> -P -m pocketshell gateway proxy <id> […]`:
   the device id is validated against `^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$`,
   each element is `shlex.quote`d and `%` is doubled for ssh's token
@@ -641,6 +645,23 @@ pocketshell gateway ssh home-lab -l me -i ~/.ssh/id_ed25519
 pocketshell gateway ssh home-lab -l me -- -N -L 8080:localhost:80
 pocketshell gateway ssh home-lab -l me -- uptime
 ```
+
+Things worth knowing about the session itself:
+
+- **Forward bind addresses.** `-L 8080:…` and `-D 1080` listen on your
+  laptop's loopback only, but a bind address is honoured as given:
+  `-L '*:8080:…'`, `-L 0.0.0.0:8080:…` or `-D '*:1080'` listen on **all**
+  of the laptop's interfaces, so anyone on your network can reach the
+  host's forwarded service (or use the SOCKS proxy). Leave the bind
+  address out unless you mean that.
+- **Terminal.** The host controls what your terminal receives. Prefer a
+  terminal emulator with OSC 52 clipboard *writes* and answerback/title
+  reporting disabled, so a hostile host can neither fill your clipboard
+  with a command nor make your terminal type into the session.
+- **Escape character.** `~` stays the escape character (`~.` to drop a
+  hung session, `~^Z`, `~#`, `~?` all work); only the `~C` command line is
+  disabled (`EnableEscapeCommandline=no`, OpenSSH ≥ 9.2), so forwards
+  cannot be added mid-session. On older OpenSSH `~C` remains available.
 
 ### 9.5 `gateway proxy DEVICE_ID` (the ProxyCommand)
 
