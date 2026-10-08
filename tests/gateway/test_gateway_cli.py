@@ -168,11 +168,15 @@ def test_helper_pin_reaches_the_exec_boundary(pin_helper, exec_calls):
 # ---------------------------------------------------------------------------
 
 
-def test_enroll_without_token_stdin_is_rejected_before_exec(exec_calls):
+def test_enroll_without_token_stdin_or_login_is_rejected_before_exec(
+    exec_calls, pin_helper, no_account
+):
+    pin_helper("#!/bin/sh\nexit 0\n")
     result = CliRunner().invoke(cli, ["gateway", "enroll"])
-    assert result.exit_code != 0
+    assert result.exit_code == 3
     assert "--token-stdin" in result.output
     assert "enrollment token" in result.output
+    assert "pocketshell" in result.output
     assert "Google" not in result.output
     # The failure happens at the wrapper: nothing was exec'd.
     assert exec_calls == []

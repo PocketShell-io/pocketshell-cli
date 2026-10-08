@@ -252,7 +252,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "quse", specifier = ">=0.0.15" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
-    { name = "websockets", marker = "extra == 'link'", specifier = ">=13,<17" },
+    { name = "websockets", marker = "extra == 'link'", specifier = ">=15,<17" },
 ]
 provides-extras = ["dev", "link"]
 

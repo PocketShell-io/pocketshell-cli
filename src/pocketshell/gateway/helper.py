@@ -627,3 +627,33 @@ def exec_helper(helper: str, argv: list[str]) -> NoReturn:
     same assumption the bundled aplexer dependency already makes.
     """
     os.execv(helper, [helper, *argv])
+
+
+def exec_helper_with_stdin_token(helper: str, argv: list[str], token: str) -> NoReturn:
+    """Exec the helper with ``token`` + newline as its ENTIRE stdin.
+
+    For `gateway enroll` without ``--token-stdin`` (token minted from the
+    `pocketshell login` session): the token is written into a fresh pipe,
+    the write end is closed (so the helper's read-to-EOF terminates), the
+    read end is dup2'd onto fd 0, and the process image is replaced. The
+    token is never in argv, the environment, or a file, and the caller's
+    original stdin is not inherited. The write end is non-blocking: a
+    token too large for the pipe buffer is refused instead of deadlocking.
+    """
+    data = token.encode("ascii") + b"\n"
+    read_fd, write_fd = os.pipe()
+    try:
+        os.set_blocking(write_fd, False)
+        view = memoryview(data)
+        while view:
+            try:
+                view = view[os.write(write_fd, view) :]
+            except BlockingIOError:
+                os.close(read_fd)
+                raise ValueError("gateway token does not fit the stdin pipe") from None
+    finally:
+        os.close(write_fd)
+    if read_fd != 0:
+        os.dup2(read_fd, 0)
+        os.close(read_fd)
+    os.execv(helper, [helper, *argv])
