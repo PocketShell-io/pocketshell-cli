@@ -574,12 +574,21 @@ patterns, `@cert-authority`/`@revoked` markers and extra lines are refused.
 `pin` prints the `SHA256:` fingerprint — compare it with the host's.
 
 Pins live in `${XDG_CONFIG_HOME:-~/.config}/pocketshell/gateway_known_hosts`
-(directory `0700`, file `0600`, written atomically) as
-`pocketshell-gateway.<device-id> <keytype> <base64>` lines. The whole file
-is re-validated on every read: a single foreign line (marker, wildcard,
-hashed host, comment, second key for one device), group/world-writable
-permissions, a foreign owner or a symlink makes it untrusted, and
-`gateway ssh` refuses to run. A different key for an already pinned device
+(directory `0700`, file `0600`, written atomically) as known_hosts lines
+`pocketshell-gateway.<id lower-cased>-<sha256(id)[:12]> <keytype> <base64> <device-id>`
+(the last field is the known_hosts comment, holding the exact id; the name
+must be the alias derived from it). OpenSSH matches known_hosts names
+case-insensitively, so the hash of the exact id keeps `Home-Lab` and
+`home-lab` on different aliases, and pinning an id that differs from an
+already pinned one only in letter case is refused. The whole file is
+re-validated on every read: a single foreign line (marker, wildcard, hashed
+host, a comment other than the line's own id, second key for one device,
+two ids differing only in case), group/world-writable permissions, a
+foreign owner or a symlink makes it untrusted, and `gateway ssh` refuses to
+run. Files from earlier versions
+(`pocketshell-gateway.<device-id> <keytype> <base64>`) are still read with
+the same checks — `gateway ssh` then verifies against that older alias — and
+the next `pin`/`unpin` rewrites them in the current format. A different key for an already pinned device
 needs `--replace` (re-keyed host — verify on the host first).
 
 ### 9.4 `gateway ssh DEVICE_ID [-l USER] [-i KEY] [-- SSH_ARGS…]`
@@ -590,7 +599,7 @@ explicit configuration; refuses to run without a valid pin:
 - `-F none` — your `~/.ssh/config` is not read (`Host *` `ForwardAgent`,
   `ProxyJump`, `LocalCommand`, `ControlMaster`… cannot apply);
 - host trust: `StrictHostKeyChecking=yes`, `UserKnownHostsFile=<pin file>`,
-  `GlobalKnownHostsFile=/dev/null`, `HostKeyAlias=pocketshell-gateway.<id>`,
+  `GlobalKnownHostsFile=/dev/null`, `HostKeyAlias=<the pin's alias>`,
   `UpdateHostKeys=no`, `CheckHostIP=no`, `VerifyHostKeyDNS=no`,
   `CanonicalizeHostname=no`;
 - nothing of yours is exposed to the host: `ForwardAgent=no`,

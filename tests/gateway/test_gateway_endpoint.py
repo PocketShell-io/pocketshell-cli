@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from pocketshell.gateway.endpoint import (
@@ -18,7 +20,16 @@ from pocketshell.gateway.endpoint import (
 )
 def test_valid_device_ids(device_id):
     assert validate_device_id(device_id) == device_id
-    assert host_key_alias(device_id) == "pocketshell-gateway." + device_id
+    digest = hashlib.sha256(device_id.encode()).hexdigest()[:12]
+    assert host_key_alias(device_id) == f"pocketshell-gateway.{device_id.lower()}-{digest}"
+    assert host_key_alias(device_id) == host_key_alias(device_id).lower()
+
+
+def test_host_key_alias_is_case_safe():
+    """OpenSSH matches known_hosts names case-insensitively: ids differing
+    only in case must still get different aliases."""
+    a, b = host_key_alias("Home-Lab"), host_key_alias("home-lab")
+    assert a.lower() != b.lower()
 
 
 @pytest.mark.parametrize(

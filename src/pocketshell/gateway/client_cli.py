@@ -292,7 +292,7 @@ def ssh(
         raise click.UsageError(str(exc)) from None
     endpoint = _resolve_endpoint(server, insecure_dev, trust_gateway)
     try:
-        gateway_pins.require_pin(device_id)
+        pin_entry = gateway_pins.require_pin_entry(device_id)
         ssh_path = gateway_sshcmd.find_ssh()
         argv = gateway_sshcmd.build_ssh_argv(
             ssh=ssh_path,
@@ -303,6 +303,7 @@ def ssh(
             identity=identity,
             extra=extra,
             insecure_dev=insecure_dev,
+            alias=pin_entry.alias,
         )
     except gateway_pins.PinError as exc:
         raise click.ClickException(str(exc)) from None

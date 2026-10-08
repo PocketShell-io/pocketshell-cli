@@ -14,6 +14,7 @@ broker JWT to it, so they resolve the URL here, strictly.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import re
 from dataclasses import dataclass
@@ -74,6 +75,19 @@ def validate_device_id(device_id: str) -> str:
 
 
 def host_key_alias(device_id: str) -> str:
+    """``pocketshell-gateway.<id lower-cased>-<sha256(id)[:12]>``.
+
+    OpenSSH matches known_hosts names case-insensitively, so the plain id
+    would let ``Home-Lab`` and ``home-lab`` share one pin. The hash of the
+    exact id keeps distinct ids on distinct (lower-case) aliases.
+    """
+    validate_device_id(device_id)
+    digest = hashlib.sha256(device_id.encode("ascii")).hexdigest()[:12]
+    return f"{HOST_KEY_ALIAS_PREFIX}{device_id.lower()}-{digest}"
+
+
+def legacy_host_key_alias(device_id: str) -> str:
+    """The pre-hash alias ``pocketshell-gateway.<id>`` (read-only migration)."""
     return HOST_KEY_ALIAS_PREFIX + validate_device_id(device_id)
 
 

@@ -2,13 +2,25 @@
 
 A pin is one OpenSSH known_hosts line
 
-    pocketshell-gateway.<device-id> <keytype> <base64-blob>
+    pocketshell-gateway.<id lower-cased>-<sha256(id)[:12]> <keytype> <base64-blob> <device-id>
 
 in ``${XDG_CONFIG_HOME:-~/.config}/pocketshell/gateway_known_hosts``
-(directory 0700, file 0600, written atomically). `gateway ssh` hands that
-file to OpenSSH as its only known_hosts (``UserKnownHostsFile``) with
-``HostKeyAlias=pocketshell-gateway.<device-id>`` and
-``StrictHostKeyChecking=yes``.
+(directory 0700, file 0600, written atomically). The trailing field is the
+known_hosts *comment* (ignored by OpenSSH) and records the exact device id;
+the name must equal :func:`host_key_alias` of that id. `gateway ssh` hands
+the file to OpenSSH as its only known_hosts (``UserKnownHostsFile``) with
+``HostKeyAlias=<that name>`` and ``StrictHostKeyChecking=yes``.
+
+OpenSSH compares known_hosts names case-insensitively, so ``Home-Lab`` and
+``home-lab`` must never share a name: the hash of the exact id keeps their
+aliases distinct, and on top of that two pinned ids that differ only in
+case are refused outright (on write and on read).
+
+Migration: files written before the hashed alias hold three-field lines
+``pocketshell-gateway.<device-id> <keytype> <base64>``. They are still
+accepted (same strict validation); `gateway ssh` verifies against the alias
+that is actually in the file, and the next `pin`/`unpin` rewrites every
+line in the current format.
 
 The key comes out of band — `pocketshell gateway show --host-key` run on
 the host itself — and never from the gateway (the gateway's
@@ -37,6 +49,7 @@ from pocketshell.gateway.endpoint import (
     DEVICE_ID_RE,
     HOST_KEY_ALIAS_PREFIX,
     EndpointError,
+    host_key_alias,
     validate_device_id,
 )
 
@@ -229,31 +242,59 @@ def _check_owned_private(path: Path, st: os.stat_result, what: str) -> None:
         )
 
 
-def _parse_pin_line(line: str, lineno: int, path: Path) -> tuple[str, HostKey]:
-    parts = line.split(" ", 1)
-    if len(parts) != 2 or not parts[0].startswith(HOST_KEY_ALIAS_PREFIX):
-        raise PinError(
-            f"{path}:{lineno} is not a pocketshell gateway pin; this file "
-            "must only be edited with `pocketshell gateway pin/unpin`"
-        )
-    device_id = parts[0][len(HOST_KEY_ALIAS_PREFIX) :]
-    if not DEVICE_ID_RE.match(device_id):
-        raise PinError(f"{path}:{lineno} has an invalid device id")
+@dataclass(frozen=True)
+class PinEntry:
+    """One validated pin: the exact device id, its key, and the known_hosts
+    name it is stored under (the current alias, or a legacy one)."""
+
+    device_id: str
+    key: HostKey
+    alias: str
+
+    @property
+    def legacy(self) -> bool:
+        return self.alias != host_key_alias(self.device_id)
+
+
+def _not_a_pin(path: Path, lineno: int) -> PinError:
+    return PinError(
+        f"{path}:{lineno} is not a pocketshell gateway pin; this file "
+        "must only be edited with `pocketshell gateway pin/unpin`"
+    )
+
+
+def _parse_pin_line(line: str, lineno: int, path: Path) -> PinEntry:
+    fields = line.split(" ")
+    if len(fields) not in (3, 4) or not fields[0].startswith(HOST_KEY_ALIAS_PREFIX):
+        raise _not_a_pin(path, lineno)
+    alias = fields[0]
+    if len(fields) == 4:
+        device_id = fields[3]
+        if not DEVICE_ID_RE.match(device_id):
+            raise PinError(f"{path}:{lineno} has an invalid device id")
+        if alias != host_key_alias(device_id):
+            raise _not_a_pin(path, lineno)
+    else:  # legacy: pocketshell-gateway.<device-id> <keytype> <base64>
+        device_id = alias[len(HOST_KEY_ALIAS_PREFIX) :]
+        if not DEVICE_ID_RE.match(device_id):
+            raise PinError(f"{path}:{lineno} has an invalid device id")
     try:
-        key = parse_host_key(parts[1])
+        key = parse_host_key(" ".join(fields[1:3]))
     except PinError as exc:
         raise PinError(f"{path}:{lineno}: {exc}") from None
-    return device_id, key
+    return PinEntry(device_id=device_id, key=key, alias=alias)
 
 
-def load_pins(path: Optional[Path] = None) -> dict[str, HostKey]:
-    """Read and strictly validate the whole pin file.
+def _case_collision(device_id: str, existing) -> Optional[str]:
+    folded = device_id.lower()
+    for other in existing:
+        if other != device_id and other.lower() == folded:
+            return other
+    return None
 
-    Missing file → no pins. Any foreign line (a ``@cert-authority`` /
-    ``@revoked`` marker, a wildcard or hashed host, a comment, a second key
-    for one device) makes the whole file untrusted and raises, because
-    OpenSSH would honor it when the file is used as known_hosts.
-    """
+
+def load_pin_entries(path: Optional[Path] = None) -> dict[str, PinEntry]:
+    """Read and strictly validate the whole pin file (see :func:`load_pins`)."""
     path = path or pin_file_path()
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -277,13 +318,32 @@ def load_pins(path: Optional[Path] = None) -> dict[str, HostKey]:
         raise PinError(f"pin file {path} contains non-ASCII bytes") from None
     if text and not text.endswith("\n"):
         raise PinError(f"pin file {path} is truncated (no final newline)")
-    pins: dict[str, HostKey] = {}
+    entries: dict[str, PinEntry] = {}
     for lineno, line in enumerate(text.split("\n")[:-1], start=1):
-        device_id, key = _parse_pin_line(line, lineno, path)
-        if device_id in pins:
-            raise PinError(f"{path}:{lineno} pins device {device_id} twice")
-        pins[device_id] = key
-    return pins
+        entry = _parse_pin_line(line, lineno, path)
+        if entry.device_id in entries:
+            raise PinError(f"{path}:{lineno} pins device {entry.device_id} twice")
+        other = _case_collision(entry.device_id, entries)
+        if other is not None:
+            raise PinError(
+                f"{path}:{lineno} pins device {entry.device_id}, which differs from "
+                f"pinned device {other} only in letter case; OpenSSH would not "
+                "tell them apart. Remove one with `pocketshell gateway unpin`."
+            )
+        entries[entry.device_id] = entry
+    return entries
+
+
+def load_pins(path: Optional[Path] = None) -> dict[str, HostKey]:
+    """Read and strictly validate the whole pin file.
+
+    Missing file → no pins. Any foreign line (a ``@cert-authority`` /
+    ``@revoked`` marker, a wildcard or hashed host, a comment that is not
+    the line's own device id, a second key for one device, two ids that
+    differ only in case) makes the whole file untrusted and raises,
+    because OpenSSH would honor it when the file is used as known_hosts.
+    """
+    return {device_id: e.key for device_id, e in load_pin_entries(path).items()}
 
 
 def _ensure_private_dir(directory: Path) -> None:
@@ -297,8 +357,9 @@ def _ensure_private_dir(directory: Path) -> None:
 def _write_pins(pins: dict[str, HostKey], path: Path) -> None:
     directory = path.parent
     _ensure_private_dir(directory)
+    # Always the current format: legacy lines are migrated on every write.
     body = "".join(
-        f"{HOST_KEY_ALIAS_PREFIX}{device_id} {key.line}\n"
+        f"{host_key_alias(device_id)} {key.line} {device_id}\n"
         for device_id, key in sorted(pins.items())
     ).encode("ascii")
     tmp = directory / f".{PIN_FILE_NAME}.{os.getpid()}.{os.urandom(4).hex()}.tmp"
@@ -339,9 +400,20 @@ def add_pin(
     except EndpointError as exc:
         raise PinError(str(exc)) from None
     path = path or pin_file_path()
-    pins = load_pins(path)
+    entries = load_pin_entries(path)
+    pins = {i: e.key for i, e in entries.items()}
+    other = _case_collision(device_id, pins)
+    if other is not None:
+        raise PinError(
+            f"device {device_id} differs from the already pinned device {other} "
+            "only in letter case; OpenSSH would not tell them apart. Unpin "
+            f"{other} first if it is really the same host."
+        )
     current = pins.get(device_id)
+    if current == key and not any(e.legacy for e in entries.values()):
+        return False
     if current == key:
+        _write_pins(pins, path)  # migrate legacy lines; the pin itself is unchanged
         return False
     if current is not None and not replace:
         raise PinError(
@@ -371,9 +443,14 @@ def remove_pin(device_id: str, *, path: Optional[Path] = None) -> HostKey:
 
 def require_pin(device_id: str, *, path: Optional[Path] = None) -> HostKey:
     """The pinned key for ``device_id`` (validating the whole file)."""
+    return require_pin_entry(device_id, path=path).key
+
+
+def require_pin_entry(device_id: str, *, path: Optional[Path] = None) -> PinEntry:
+    """The pin for ``device_id`` with the alias actually in the file."""
     path = path or pin_file_path()
-    key = load_pins(path).get(device_id)
-    if key is None:
+    entry = load_pin_entries(path).get(device_id)
+    if entry is None:
         raise PinError(
             f"no host key is pinned for device {device_id}. On the host, run\n"
             "    pocketshell gateway show --host-key\n"
@@ -382,4 +459,4 @@ def require_pin(device_id: str, *, path: Optional[Path] = None) -> HostKey:
             "and paste that one key line when prompted. The gateway's "
             "advertised key is never trusted."
         )
-    return key
+    return entry

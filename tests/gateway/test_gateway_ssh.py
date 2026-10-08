@@ -17,7 +17,7 @@ from click.testing import CliRunner
 from gateway_keyblobs import ED25519_LINE
 from pocketshell.cli import cli
 from pocketshell.gateway import client_cli, pins, sshcmd
-from pocketshell.gateway.endpoint import resolve_endpoint
+from pocketshell.gateway.endpoint import host_key_alias, resolve_endpoint
 from pocketshell.gateway.sshcmd import SshArgsError, build_ssh_argv, parse_extra_args
 
 PROD = resolve_endpoint(None, False)
@@ -56,7 +56,7 @@ def test_every_hardening_option_is_present_and_first(tmp_path):
         "StrictHostKeyChecking=yes",
         f"UserKnownHostsFile={tmp_path / 'pins'}",
         "GlobalKnownHostsFile=/dev/null",
-        "HostKeyAlias=pocketshell-gateway.home-lab",
+        f"HostKeyAlias={host_key_alias('home-lab')}",
         "UpdateHostKeys=no",
         "ForwardAgent=no",
         "ForwardX11=no",
@@ -89,7 +89,7 @@ def test_every_hardening_option_is_present_and_first(tmp_path):
     last_o = max(i for i, a in enumerate(argv) if a == "-o")
     assert last_o < argv.index("-N")
     # destination after `--`, remote command after the destination
-    assert argv[-3:] == ["--", "pocketshell-gateway.home-lab", "uptime"]
+    assert argv[-3:] == ["--", host_key_alias("home-lab"), "uptime"]
     assert argv[argv.index("-l") + 1] == "me"
 
 
@@ -285,7 +285,7 @@ def test_real_ssh_accepts_options_and_ignores_user_config(tmp_path):
     assert conf["permitlocalcommand"] == "no"
     assert conf["userknownhostsfile"] == str(tmp_path / "pins")
     assert conf["globalknownhostsfile"] == "/dev/null"
-    assert conf["hostkeyalias"] == "pocketshell-gateway.home:lab_1"
+    assert conf["hostkeyalias"] == host_key_alias("home:lab_1")
     assert conf["identitiesonly"] == "yes"
     assert conf["passwordauthentication"] == "no"
     assert conf["kbdinteractiveauthentication"] == "no"
@@ -358,7 +358,7 @@ def test_cli_execs_hardened_ssh(exec_ssh, logged_in):
     assert os.path.isabs(path) and argv[0] == path
     assert env["SHELL"] == "/bin/sh"
     assert f"UserKnownHostsFile={pins.pin_file_path()}" in argv
-    assert argv[-2:] == ["--", "pocketshell-gateway.home-lab"]
+    assert argv[-2:] == ["--", host_key_alias("home-lab")]
     assert Path(_proxy_argv(argv)[0]) == Path(sys.executable)
 
 
@@ -416,3 +416,21 @@ def test_cli_expired_session_is_exit_3_before_ssh(exec_ssh, logged_in):
     assert result.exit_code == client_cli.EXIT_NOT_LOGGED_IN, result.output
     assert "expired" in result.output
     assert exec_ssh == []
+
+
+@pytest.mark.skipif(shutil.which("ssh") is None, reason="OpenSSH client unavailable")
+def test_cli_uses_the_alias_in_a_legacy_pin_file(exec_ssh, logged_in):
+    path = pins.pin_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(f"pocketshell-gateway.home-lab {ED25519_LINE}\n")
+    os.chmod(path, 0o600)
+    result = CliRunner().invoke(cli, ["gateway", "ssh", "home-lab"])
+    assert result.exit_code == 0, result.output
+    _path, argv, _env = exec_ssh[0]
+    assert "HostKeyAlias=pocketshell-gateway.home-lab" in argv
+    assert argv[-2:] == ["--", "pocketshell-gateway.home-lab"]
+
+
+def test_build_argv_refuses_a_foreign_alias(tmp_path):
+    with pytest.raises(SshArgsError, match="alias"):
+        _argv(tmp_path, alias=host_key_alias("other-host"))

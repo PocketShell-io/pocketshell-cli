@@ -23,6 +23,7 @@ from gateway_keyblobs import (
 )
 from pocketshell.cli import cli
 from pocketshell.gateway import pins
+from pocketshell.gateway.endpoint import host_key_alias, legacy_host_key_alias
 from pocketshell.gateway.pins import PinError, load_pins, parse_host_key
 
 
@@ -134,7 +135,7 @@ def test_pin_writes_a_private_strict_known_hosts_line(tmp_path):
     key = parse_host_key(ED25519_LINE)
     assert f"pinned home-lab: {key.fingerprint} (ED25519)" in result.output
     path = _pin_file(tmp_path)
-    assert path.read_text() == f"pocketshell-gateway.home-lab {ED25519_LINE}\n"
+    assert path.read_text() == f"{host_key_alias('home-lab')} {ED25519_LINE} home-lab\n"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert load_pins() == {"home-lab": key}
@@ -213,6 +214,15 @@ def _write_raw(tmp_path, text, mode=0o600):
         "\n",
         f"pocketshell-gateway.home-lab {ED25519_LINE_2}\n",  # second key, same device
         f"pocketshell-gateway.other-host {ED25519_LINE} comment\n",
+        # current format, but the alias does not belong to the recorded id
+        f"{host_key_alias('other-host')} {ED25519_LINE} another-host\n",
+        f"{host_key_alias('Other-Host')} {ED25519_LINE} other-host\n",
+        f"{host_key_alias('other-host')} {ED25519_LINE} other-host extra\n",
+        # same device in both formats
+        f"{host_key_alias('home-lab')} {ED25519_LINE} home-lab\n",
+        # an id differing only in case (OpenSSH matches names case-insensitively)
+        f"pocketshell-gateway.Home-Lab {ED25519_LINE_2}\n",
+        f"{host_key_alias('HOME-LAB')} {ED25519_LINE_2} HOME-LAB\n",
     ],
 )
 def test_foreign_lines_make_the_whole_file_untrusted(tmp_path, extra):
@@ -350,3 +360,66 @@ def test_show_host_key_passes_helper_failure_through(pin_helper):
     result = CliRunner().invoke(cli, ["gateway", "show", "--host-key"])
     assert result.exit_code == 4
     assert result.stdout == ""
+
+
+# --- case-insensitive OpenSSH name matching ----------------------------------
+
+
+def test_pin_refuses_an_id_differing_only_in_case(tmp_path):
+    runner = CliRunner()
+    assert runner.invoke(cli, ["gateway", "pin", "home-lab", ED25519_LINE]).exit_code == 0
+    result = runner.invoke(cli, ["gateway", "pin", "Home-Lab", ED25519_LINE_2])
+    assert result.exit_code == 1
+    assert "only in letter case" in result.output
+    assert load_pins() == {"home-lab": parse_host_key(ED25519_LINE)}
+
+
+@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="ssh-keygen unavailable")
+def test_openssh_finds_each_pin_only_under_its_own_alias(tmp_path):
+    """The real OpenSSH known_hosts lookup: the trailing id is a comment,
+    and case variants of a pinned id never resolve to its key."""
+    pins.add_pin("home-lab", parse_host_key(ED25519_LINE))
+    path = _pin_file(tmp_path)
+
+    def lookup(name):
+        return subprocess.run(
+            ["ssh-keygen", "-F", name, "-f", str(path)], capture_output=True, text=True
+        )
+
+    found = lookup(host_key_alias("home-lab"))
+    assert found.returncode == 0 and ED25519_LINE in found.stdout
+    for other in ("Home-Lab", "HOME-LAB"):
+        assert lookup(host_key_alias(other)).returncode != 0
+        assert lookup(host_key_alias(other).upper()).returncode != 0
+
+
+# --- migration from the pre-hash alias ---------------------------------------
+
+
+def test_legacy_pin_file_is_read_and_ssh_uses_its_alias(tmp_path):
+    _write_raw(tmp_path, f"pocketshell-gateway.home-lab {ED25519_LINE}\n")
+    assert load_pins() == {"home-lab": parse_host_key(ED25519_LINE)}
+    entry = pins.require_pin_entry("home-lab")
+    assert entry.legacy and entry.alias == legacy_host_key_alias("home-lab")
+
+
+def test_next_write_migrates_legacy_lines(tmp_path):
+    path = _write_raw(
+        tmp_path,
+        f"pocketshell-gateway.home-lab {ED25519_LINE}\n"
+        f"pocketshell-gateway.Box-1 {ED25519_LINE_2}\n",
+    )
+    pins.add_pin("new-host", parse_host_key(ED25519_LINE))
+    assert path.read_text() == "".join(
+        f"{host_key_alias(i)} {k} {i}\n"
+        for i, k in sorted(
+            [("home-lab", ED25519_LINE), ("Box-1", ED25519_LINE_2), ("new-host", ED25519_LINE)]
+        )
+    )
+    assert not any(e.legacy for e in pins.load_pin_entries().values())
+
+
+def test_repinning_the_same_key_migrates_legacy_lines(tmp_path):
+    path = _write_raw(tmp_path, f"pocketshell-gateway.home-lab {ED25519_LINE}\n")
+    assert pins.add_pin("home-lab", parse_host_key(ED25519_LINE)) is False
+    assert path.read_text() == f"{host_key_alias('home-lab')} {ED25519_LINE} home-lab\n"

@@ -36,7 +36,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
 
-from pocketshell.gateway.endpoint import GatewayEndpoint, host_key_alias, validate_device_id
+from pocketshell.gateway.endpoint import (
+    GatewayEndpoint,
+    host_key_alias,
+    legacy_host_key_alias,
+    validate_device_id,
+)
 
 
 class SshArgsError(ValueError):
@@ -189,9 +194,19 @@ def build_ssh_argv(
     extra: Sequence[str] = (),
     insecure_dev: bool = False,
     python: Optional[str] = None,
+    alias: Optional[str] = None,
 ) -> list[str]:
-    """The complete, hardened ssh argv (argv[0] is the ssh path)."""
-    alias = host_key_alias(device_id)
+    """The complete, hardened ssh argv (argv[0] is the ssh path).
+
+    ``alias`` is the known_hosts name the pin is stored under
+    (:attr:`pocketshell.gateway.pins.PinEntry.alias`); it must be this
+    device's current or legacy alias. Default: the current one.
+    """
+    current = host_key_alias(device_id)
+    if alias is None:
+        alias = current
+    elif alias not in (current, legacy_host_key_alias(device_id)):
+        raise SshArgsError(f"host key alias does not belong to device {device_id}")
     if not os.path.isabs(ssh):
         raise SshArgsError("ssh path must be absolute")
     pin_path = _check_path(str(pin_file), "pin file")
