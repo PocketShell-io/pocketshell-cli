@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import subprocess
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -101,6 +102,8 @@ _REFUSAL_HINT = (
 def _check_path(path: str, what: str) -> str:
     if not os.path.isabs(path):
         raise SshArgsError(f"{what} path must be absolute")
+    if os.name == "nt":
+        path = path.replace("\\", "/")  # Windows OpenSSH accepts drive paths with /
     if _UNSAFE_PATH_RE.search(path):
         raise SshArgsError(
             f"{what} path {ascii(path)[:120]} contains whitespace, '%', '$', "
@@ -138,6 +141,12 @@ def proxy_command(
         argv += ["--trust-gateway", endpoint.host]
     if insecure_dev:
         argv.append("--insecure-dev")
+    if os.name == "nt":
+        argv[0] = argv[0].replace("\\", "/")
+        for item in argv:
+            if any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch in '%!&|<>^"\\' for ch in item):
+                raise SshArgsError("unsafe Windows ProxyCommand element")
+        return subprocess.list2cmdline(argv)
     return " ".join(shlex.quote(_check_proxy_element(a)).replace("%", "%%") for a in argv)
 
 
@@ -252,5 +261,6 @@ def find_ssh() -> str:
 def ssh_environment(base: Optional[dict] = None) -> dict:
     """ssh's environment: ProxyCommand always runs under /bin/sh."""
     env = dict(os.environ if base is None else base)
-    env["SHELL"] = "/bin/sh"
+    if os.name != "nt":
+        env["SHELL"] = "/bin/sh"
     return env

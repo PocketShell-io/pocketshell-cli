@@ -23,26 +23,29 @@ import click
 
 from pocketshell import __version__
 from pocketshell.account.cli import login_command, logout_command, whoami_command
-from pocketshell.agents.conversations.cli import agent_log_command
-from pocketshell.cards import register_push_card_commands
-from pocketshell.agents import agents_group
-from pocketshell.agents.launch.cli import agent_group
-from pocketshell.env import env_group
-from pocketshell.engines import engines_group
 from pocketshell.gateway import gateway_group
-from pocketshell.github import github_group
-from pocketshell.hooks import hooks_group
-from pocketshell.link.cli import link_group, relay_group
-from pocketshell.logs import logs_group
-from pocketshell.profiles import profiles_group
-from pocketshell.attachments import prune_attachments_command
-from pocketshell.push import push_group
-from pocketshell.repos import repos_group
-from pocketshell.sessions import sessions_group
-from pocketshell.serve import serve_command
-from pocketshell.tree import tree_group
-from pocketshell.tree.workspaces.cli import workspaces_group
-from pocketshell.usage import usage_command
+
+if os.name != "nt":
+    from pocketshell.agents.conversations.cli import agent_log_command
+    from pocketshell.cards import register_push_card_commands
+    from pocketshell.agents import agents_group
+    from pocketshell.agents.launch.cli import agent_group
+    from pocketshell.env import env_group
+    from pocketshell.engines import engines_group
+    from pocketshell.github import github_group
+    from pocketshell.hooks import hooks_group
+    from pocketshell.link.cli import link_group, relay_group
+    from pocketshell.logs import logs_group
+    from pocketshell.profiles import profiles_group
+    from pocketshell.attachments import prune_attachments_command
+    from pocketshell.push import push_group
+    from pocketshell.repos import repos_group
+    from pocketshell.sessions import sessions_group
+    from pocketshell.serve import serve_command
+    from pocketshell.tree import tree_group
+    from pocketshell.tree.workspaces.cli import workspaces_group
+    from pocketshell.usage import usage_command
+
 
 
 @click.group(
@@ -60,34 +63,52 @@ def cli() -> None:
     """Top-level group. Each subcommand is registered below."""
 
 
-cli.add_command(usage_command, name="usage")
-cli.add_command(agent_group, name="agent")
-cli.add_command(agents_group, name="agents")
-cli.add_command(profiles_group, name="profiles")
-cli.add_command(engines_group, name="engines")
-cli.add_command(sessions_group, name="sessions")
-cli.add_command(tree_group, name="tree")
-cli.add_command(agent_log_command, name="agent-log")
-cli.add_command(repos_group, name="repos")
-cli.add_command(github_group, name="github")
-cli.add_command(env_group, name="env")
-cli.add_command(hooks_group, name="hooks")
-cli.add_command(logs_group, name="logs")
-cli.add_command(prune_attachments_command, name="prune-attachments")
-cli.add_command(push_group, name="push")
-# Generic typed-card feed verbs (epic #859) extend the same `push` group:
-# `push checklist|get|status|check`. Additive — the FCM `push` group stays the
-# single owner of the group object (see pocketshell.cards).
-register_push_card_commands(push_group)
-cli.add_command(serve_command, name="serve")
-cli.add_command(link_group, name="link")
-cli.add_command(relay_group, name="relay")
-# `gateway` wraps the Go `pocketshell-link` host agent (reverse-tunnel
-# transport, per-device enrolled keys). Deliberately separate from the
-# legacy shared-token `link`/`relay` commands above — the two protocols
-# are not interoperable and must not be cross-routed.
-cli.add_command(gateway_group, name="gateway")
-cli.add_command(workspaces_group, name="workspaces")
+if os.name != "nt":
+    cli.add_command(usage_command, name="usage")
+    cli.add_command(agent_group, name="agent")
+    cli.add_command(agents_group, name="agents")
+    cli.add_command(profiles_group, name="profiles")
+    cli.add_command(engines_group, name="engines")
+    cli.add_command(sessions_group, name="sessions")
+    cli.add_command(tree_group, name="tree")
+    cli.add_command(agent_log_command, name="agent-log")
+    cli.add_command(repos_group, name="repos")
+    cli.add_command(github_group, name="github")
+    cli.add_command(env_group, name="env")
+    cli.add_command(hooks_group, name="hooks")
+    cli.add_command(logs_group, name="logs")
+    cli.add_command(prune_attachments_command, name="prune-attachments")
+    cli.add_command(push_group, name="push")
+    # Generic typed-card feed verbs (epic #859) extend the same `push` group:
+    # `push checklist|get|status|check`. Additive — the FCM `push` group stays the
+    # single owner of the group object (see pocketshell.cards).
+    register_push_card_commands(push_group)
+    cli.add_command(serve_command, name="serve")
+    cli.add_command(link_group, name="link")
+    cli.add_command(relay_group, name="relay")
+    # `gateway` wraps the Go `pocketshell-link` host agent (reverse-tunnel
+    # transport, per-device enrolled keys). Deliberately separate from the
+    # legacy shared-token `link`/`relay` commands above — the two protocols
+    # are not interoperable and must not be cross-routed.
+    cli.add_command(gateway_group, name="gateway")
+    cli.add_command(workspaces_group, name="workspaces")
+else:
+    # These groups load Unix locks/PTY/daemon modules. Do not fake those APIs
+    # or let their import failure disable the independent account/gateway CLI.
+    def _unsupported_windows(ctx: click.Context) -> None:
+        raise click.ClickException(
+            f"{ctx.command.name} is not supported on Windows by this CLI; "
+            "use login/logout/whoami or gateway."
+        )
+
+    for _name in (
+        "usage", "agent", "agents", "profiles", "engines", "sessions", "tree",
+        "agent-log", "repos", "github", "env", "hooks", "logs", "prune-attachments",
+        "push", "serve", "link", "relay", "workspaces",
+    ):
+        cli.add_command(click.Command(_name, callback=click.pass_context(_unsupported_windows)))
+    cli.add_command(gateway_group, name="gateway")
+
 # Account device-flow login (docs/account.md). The stored CLI session only
 # ever leaves this machine to mint short-lived gateway tokens.
 cli.add_command(login_command, name="login")
@@ -113,6 +134,8 @@ cli.add_command(whoami_command, name="whoami")
 )
 def daemon_group() -> None:
     """Daemon lifecycle subgroup."""
+    if os.name == "nt":
+        raise click.ClickException("The Unix-socket daemon is not supported on Windows.")
 
 
 def _serve_foreground(
