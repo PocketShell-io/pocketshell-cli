@@ -105,7 +105,16 @@ def _open_dir_for_read(directory: Path) -> int:
         ) from None
     st = os.fstat(dfd)
     if st.st_uid != os.geteuid() or st.st_mode & 0o022:
-        os.close(dfd)
+        try:
+            os.lstat(FILE_NAME, dir_fd=dfd)
+        except FileNotFoundError:
+            # Nothing to refuse: a lax shared config dir alone is just "not
+            # logged in" (login tightens it to 0700 when it writes).
+            raise NotLoggedIn(f"Not logged in; {_LOGIN_HINT}.") from None
+        except OSError:
+            pass
+        finally:
+            os.close(dfd)
         raise CredentialsUnsafe(
             f"{directory} is not owned by you or is writable by others "
             f"(mode {_mode(st)}); refusing to read credentials. "

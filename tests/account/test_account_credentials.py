@@ -222,3 +222,12 @@ def test_delete_removes_symlink_not_target(tmp_path) -> None:
     assert target.read_text() == "keep"
     assert not store.exists()
     assert store.delete() is False
+
+
+def test_lax_config_dir_without_credentials_is_plain_not_logged_in() -> None:
+    directory = store.config_dir()
+    directory.mkdir(parents=True)
+    os.chmod(directory, 0o775)
+    with pytest.raises(NotLoggedIn, match="^Not logged in") as info:
+        store.load()
+    assert not isinstance(info.value, CredentialsUnsafe)
