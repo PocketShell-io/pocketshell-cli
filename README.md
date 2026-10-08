@@ -68,6 +68,9 @@ pocketshell logs ...                        # server-side trace sink
 pocketshell daemon ...                      # IPC daemon lifecycle
 pocketshell serve --dir PATH [--port N]     # foreground static HTTP server
 pocketshell gateway enroll|run|show         # gateway host agent (docs/gateway.md)
+pocketshell login [--label T] [--no-open]   # device-flow account login (docs/account.md)
+pocketshell whoami [--json]                 # show the logged-in account
+pocketshell logout                          # revoke and delete the CLI session
 ```
 
 Run `pocketshell --help` or `pocketshell <command> --help` for the live
