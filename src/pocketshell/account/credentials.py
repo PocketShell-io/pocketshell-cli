@@ -114,8 +114,14 @@ def _open_dir_for_read(directory: Path) -> int:
     return dfd
 
 
-def load() -> Credentials:
-    """Return the stored session (possibly expired) or raise :class:`NotLoggedIn`."""
+def load(*, allow_shared_mode: bool = False) -> Credentials:
+    """Return the stored session (possibly expired) or raise :class:`NotLoggedIn`.
+
+    ``allow_shared_mode`` is for ``logout`` only: a file we own whose mode
+    leaked it to other users still holds *our* token, and revoking it is
+    exactly what should happen next. Symlinks and foreign-owned files are
+    refused regardless — their contents are not ours to trust.
+    """
     directory = config_dir()
     path = directory / FILE_NAME
     dfd = _open_dir_for_read(directory)
@@ -150,11 +156,11 @@ def load() -> Credentials:
                 f"{path} is not owned by you; refusing to read it. "
                 f"Remove it and {_LOGIN_HINT}."
             )
-        if st.st_mode & 0o077:
+        if st.st_mode & 0o077 and not allow_shared_mode:
             raise CredentialsUnsafe(
                 f"{path} is accessible by other users (mode {_mode(st)}); refusing to "
-                f"use it. Treat the session as leaked: remove the file and {_LOGIN_HINT} "
-                f"(or `pocketshell login --force`)."
+                f"use it. Treat the session as leaked: run `pocketshell logout` to revoke "
+                f"it, then `pocketshell login`."
             )
         if st.st_size > MAX_FILE_BYTES:
             raise NotLoggedIn(f"{path} is too large to be a credentials file; {_LOGIN_HINT}.")

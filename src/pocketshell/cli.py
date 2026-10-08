@@ -22,6 +22,7 @@ from typing import Optional, Sequence
 import click
 
 from pocketshell import __version__
+from pocketshell.account.cli import login_command, logout_command, whoami_command
 from pocketshell.agents.conversations.cli import agent_log_command
 from pocketshell.cards import register_push_card_commands
 from pocketshell.agents import agents_group
@@ -87,6 +88,11 @@ cli.add_command(relay_group, name="relay")
 # are not interoperable and must not be cross-routed.
 cli.add_command(gateway_group, name="gateway")
 cli.add_command(workspaces_group, name="workspaces")
+# Account device-flow login (docs/account.md). The stored CLI session only
+# ever leaves this machine to mint short-lived gateway tokens.
+cli.add_command(login_command, name="login")
+cli.add_command(logout_command, name="logout")
+cli.add_command(whoami_command, name="whoami")
 
 
 # ---------------------------------------------------------------------------

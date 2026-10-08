@@ -58,11 +58,14 @@ def login(
     label: str,
     open_browser: bool = True,
     echo: Callable[[str], None] = print,
-    sleep: Callable[[float], None] = time.sleep,
-    monotonic: Callable[[], float] = time.monotonic,
-    browser_open: Callable[[str], object] = webbrowser.open,
+    sleep: Callable[[float], None] | None = None,
+    monotonic: Callable[[], float] | None = None,
+    browser_open: Callable[[str], object] | None = None,
 ) -> Credentials:
     """Run the device flow and save the resulting session. Returns it."""
+    sleep = sleep or time.sleep
+    monotonic = monotonic or time.monotonic
+    browser_open = browser_open or webbrowser.open
     start = broker.start_device(base_url, label)
     verification_uri = https_url(start.verification_uri)
     if verification_uri is None:
