@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Optional
 
 import click
@@ -247,11 +248,20 @@ def proxy(
     except gateway_endpoint.EndpointError as exc:
         raise click.UsageError(str(exc)) from None
     endpoint = _resolve_endpoint(server, insecure_dev, trust_gateway)
+    if sys.platform == "win32":
+        # Python's CRT descriptors otherwise translate CRLF and treat Ctrl+Z
+        # as EOF. SSH transport bytes must pass unchanged in both directions.
+        import msvcrt
+        msvcrt.setmode(0, os.O_BINARY)
+        msvcrt.setmode(1, os.O_BINARY)
     ctx.exit(gateway_proxy.run_proxy(device_id, endpoint, _token_provider))
 
 
 def _exec_ssh(path: str, argv: list[str], env: dict) -> None:
     """Replace this process with ssh (tests swap this seam)."""
+    if sys.platform == "win32":
+        from pocketshell.gateway.helper import wait_windows_child
+        wait_windows_child(argv, env=env)
     os.execve(path, argv, env)
 
 
