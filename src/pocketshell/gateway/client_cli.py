@@ -34,22 +34,27 @@ def _token_provider() -> gateway_tokens.TokenLike:
 
 
 def _resolve_endpoint(
-    server: Optional[str], insecure_dev: bool
+    server: Optional[str], insecure_dev: bool, trust_gateway: Optional[str]
 ) -> gateway_endpoint.GatewayEndpoint:
     try:
-        ep = gateway_endpoint.resolve_endpoint(server, insecure_dev)
+        ep = gateway_endpoint.resolve_endpoint(server, insecure_dev, trust_gateway)
     except gateway_endpoint.EndpointError as exc:
         raise click.UsageError(str(exc)) from None
-    if not ep.is_default:
-        click.echo(
-            f"note: sending your gateway token to non-default gateway "
-            f"{ep.host}; only do this for a gateway you trust",
-            err=True,
-        )
+    if ep.warning:
+        click.echo(ep.warning, err=True)
     return ep
 
 
 def _server_options(func):
+    func = click.option(
+        "--trust-gateway",
+        default=None,
+        metavar="HOST",
+        help=(
+            "Required with a non-production --server: the exact gateway "
+            "host you trust with your (replayable, ≤ 5 min) gateway token."
+        ),
+    )(func)
     func = click.option(
         "--insecure-dev",
         is_flag=True,
@@ -70,14 +75,16 @@ def _server_options(func):
 @click.command("devices")
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
 @_server_options
-def devices(as_json: bool, server: Optional[str], insecure_dev: bool) -> None:
+def devices(
+    as_json: bool, server: Optional[str], insecure_dev: bool, trust_gateway: Optional[str]
+) -> None:
     """List the hosts enrolled under your account (client side).
 
     Needs `pocketshell login`. The host keys shown are ADVERTISED by the
     gateway and NOT trusted: pin the key you get from the host itself
     (`pocketshell gateway show --pin-command` on the host).
     """
-    endpoint = _resolve_endpoint(server, insecure_dev)
+    endpoint = _resolve_endpoint(server, insecure_dev, trust_gateway)
     try:
         listed = gateway_devices.fetch_devices(endpoint, _token_provider)
     except gateway_tokens.NotLoggedInError as exc:
@@ -99,6 +106,9 @@ def devices(as_json: bool, server: Optional[str], insecure_dev: bool) -> None:
         return pinned.fingerprint, "pinned (DIFFERS from advertised)"
 
     if as_json:
+        # Fingerprints only, never the advertised key line itself: a
+        # `devices --json | jq … | gateway pin` pipeline would turn the
+        # gateway's untrusted claim into a pin (trust on first use).
         doc = {
             "gateway": endpoint.host,
             "devices": [
@@ -106,9 +116,6 @@ def devices(as_json: bool, server: Optional[str], insecure_dev: bool) -> None:
                     "id": dev.id,
                     "id_valid": dev.id_valid,
                     "revoked": dev.revoked,
-                    "advertised_ssh_host_key": (
-                        dev.advertised_key.line if dev.advertised_key else None
-                    ),
                     "advertised_fingerprint": (
                         dev.advertised_key.fingerprint if dev.advertised_key else None
                     ),

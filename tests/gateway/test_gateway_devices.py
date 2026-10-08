@@ -70,7 +70,11 @@ def _dev(id_, key=ED25519_LINE, revoked=False):
 
 def _invoke(server, *extra):
     return CliRunner().invoke(
-        cli, ["gateway", "devices", "--server", server.url, "--insecure-dev", *extra]
+        cli,
+        [
+            "gateway", "devices", "--server", server.url, "--insecure-dev",
+            "--trust-gateway", "127.0.0.1", *extra,
+        ],
     )
 
 
@@ -90,7 +94,6 @@ def test_lists_devices_with_bearer_header_only(server, fake_account):
     assert fp in result.output
     assert "UNTRUSTED" in result.output
     assert "not pinned" in result.output
-    assert "non-default gateway 127.0.0.1" in result.output  # stderr note (mixed)
 
 
 def test_json_output_and_pin_state(server, fake_account):
@@ -102,7 +105,10 @@ def test_json_output_and_pin_state(server, fake_account):
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["gateway", "devices", "--json", "--server", server.url, "--insecure-dev"],
+        [
+            "gateway", "devices", "--json", "--server", server.url,
+            "--insecure-dev", "--trust-gateway", "127.0.0.1",
+        ],
     )
     assert result.exit_code == 0, result.output
     doc = json.loads(result.stdout)
@@ -111,7 +117,10 @@ def test_json_output_and_pin_state(server, fake_account):
     assert by_id["home-lab"]["pinned_fingerprint"] == fp1
     assert by_id["home-lab"]["advertised_fingerprint"] == fp1
     assert by_id["other-box"]["advertised_fingerprint"] != fp1
-    assert by_id["new-box"]["advertised_ssh_host_key"] is None
+    assert by_id["new-box"]["advertised_fingerprint"] is None
+    # never the paste-able key line (no `jq | gateway pin` TOFU)
+    assert ED25519_LINE.split()[1] not in result.stdout
+    assert "advertised_ssh_host_key" not in result.stdout
     assert by_id["new-box"]["pinned_fingerprint"] is None
     text = _invoke(server)
     assert "pinned (DIFFERS from advertised)" in text.output
@@ -195,8 +204,16 @@ def test_account_error_message_is_sanitized(server, fake_account):
     assert "\x1b" not in result.output
 
 
-def test_plain_http_requires_insecure_dev(server, fake_account):
-    result = CliRunner().invoke(cli, ["gateway", "devices", "--server", server.url])
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--trust-gateway", "127.0.0.1"],  # plain http without --insecure-dev
+        ["--insecure-dev"],  # non-production host without --trust-gateway
+        ["--insecure-dev", "--trust-gateway", "localhost"],  # trust must match exactly
+    ],
+)
+def test_refused_endpoints_never_mint_or_send(server, fake_account, args):
+    result = CliRunner().invoke(cli, ["gateway", "devices", "--server", server.url, *args])
     assert result.exit_code == 2
     assert server.requests == []
     assert fake_account.calls == 0
