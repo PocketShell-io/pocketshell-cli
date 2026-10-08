@@ -13,7 +13,7 @@ import time
 import click
 
 from pocketshell.account import broker, credentials, device
-from pocketshell.account.config import resolve_broker_url, session_broker_url
+from pocketshell.account.config import SESSIONS_URL, resolve_broker_url, session_broker_url
 from pocketshell.account.errors import AccountError, CredentialsUnsafe, NotLoggedIn
 from pocketshell.account.sanitize import clean_text
 
@@ -208,6 +208,7 @@ def whoami_command(as_json: bool) -> None:
         click.echo(f"  broker:   {clean_text(creds.broker_url)}")
         click.echo(f"  expires:  {_when(expires_at)}")
         click.echo(f"  verified: {'yes' if verified else 'no'}")
+        click.echo(f"Review or revoke sessions at {SESSIONS_URL}")
     for warning in warnings:
         click.echo(f"warning: {clean_text(warning, max_len=2000)}", err=True)
 

@@ -137,11 +137,70 @@ def test_transient_5xx_is_retried_then_gives_up(fake_broker) -> None:
         _run(fake_broker)
 
 
-def test_server_strings_are_sanitized_before_printing(fake_broker) -> None:
-    fake_broker.start_response["user_code"] = "\x1b]0;pwned\x07BCDF-\x1b[2JGHJK‮"
+def test_output_tells_user_to_confirm_code_and_type_last_four(fake_broker) -> None:
     _, out, _, _ = _run(fake_broker)
-    assert "\x1b" not in out and "\x07" not in out and "‮" not in out
-    assert "BCDF-[2JGHJK" in out
+    assert "To log in, open:  https://app.pocketshell.io/device?code=BCDF-GHJK\n" in out
+    assert "Confirm the code shown in the browser matches: BCDF-GHJK" in out
+    assert "last 4 characters" in out
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "\x1b]0;pwned\x07BCDF-\x1b[2JGHJK\u202e",
+        "bcdf-ghjk",
+        "BCDFGHJK",
+        "BCDF-GHJ",
+        "BCDF-GHJKL",
+        "ABCD-EFGH",  # vowels are outside the alphabet
+        "BCD0-GHJ1",  # 0 and 1 are outside the alphabet
+        " BCDF-GHJK",
+        "BCDF-GHJK\n",
+        "\uff22CDF-GHJK",  # fullwidth B
+    ],
+)
+def test_malformed_user_code_is_refused_and_not_echoed(fake_broker, bad) -> None:
+    fake_broker.start_response["user_code"] = bad
+    clock = Clock()
+    lines: list[str] = []
+    opened: list[str] = []
+    with pytest.raises(AccountError, match="malformed user code") as info:
+        device.login(
+            fake_broker.url,
+            label="me@laptop",
+            echo=lines.append,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            browser_open=opened.append,
+        )
+    assert bad not in str(info.value)
+    assert lines == [] and opened == []
+    assert [r["path"] for r in fake_broker.requests] == ["/auth/device/start"]
+    assert not store.exists()
+
+
+@pytest.mark.parametrize(
+    "complete",
+    [
+        "https://app.pocketshell.io/device?code=ZZZZ-ZZZZ",  # a different code
+        "https://app.pocketshell.io/device?code=BCDF-GHJK&code=ZZZZ-ZZZZ",
+        "https://app.pocketshell.io/device?code=bcdf-ghjk",
+        "https://app.pocketshell.io/device/?code=BCDF-GHJK",
+        "https://app.pocketshell.io/other?code=BCDF-GHJK",
+        "https://app.pocketshell.io/device?code=BCDF-GHJK#x",
+        "https://app.pocketshell.io/device?user_code=BCDF-GHJK",
+    ],
+)
+def test_complete_uri_not_tied_to_printed_code_is_not_used(fake_broker, complete) -> None:
+    fake_broker.start_response["verification_uri_complete"] = complete
+    _, out, opened, _ = _run(fake_broker)
+    assert opened == []
+    assert "?" not in out
+    assert "To log in, open:  https://app.pocketshell.io/device\n" in out
+    assert "and enter code:   BCDF-GHJK" in out
+    assert "Confirm the code shown in the browser matches: BCDF-GHJK" in out
+    assert "ZZZZ" not in out
+    assert store.exists()
 
 
 @pytest.mark.parametrize(
@@ -233,6 +292,7 @@ def test_unsafe_complete_uri_is_never_opened(fake_broker, bad) -> None:
         ("interval", -1),
         ("interval", True),
         ("user_code", ""),
+        ("user_code", 12),
     ],
 )
 def test_malformed_start_response_is_refused(fake_broker, field, value) -> None:

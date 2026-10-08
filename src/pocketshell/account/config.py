@@ -24,6 +24,7 @@ ENV_INSECURE_DEV = "POCKETSHELL_BROKER_INSECURE_DEV"
 # approval page. Overridable for staging/dev ONLY together with an explicit
 # broker URL override.
 DEFAULT_WEB_ORIGIN = "https://app.pocketshell.io"
+SESSIONS_URL = f"{DEFAULT_WEB_ORIGIN}/device/sessions"
 ENV_DEV_WEB_ORIGIN = "POCKETSHELL_DEV_WEB_ORIGIN"
 
 

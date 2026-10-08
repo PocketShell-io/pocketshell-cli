@@ -161,6 +161,7 @@ def test_whoami_shows_verified_session(fake_broker) -> None:
     assert result.exit_code == 0, result.output
     assert "Logged in as me@example.com" in result.stdout
     assert "verified: yes" in result.stdout
+    assert "https://app.pocketshell.io/device/sessions" in result.stdout
     assert "\x1b" not in result.stdout and "\x07" not in result.stdout
     _assert_no_secrets(result)
 
