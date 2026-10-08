@@ -717,44 +717,70 @@ def wait_windows_child(argv: list[str], *, env: Optional[dict] = None,
     No shell or new console/process group: console Ctrl+C also reaches the
     child's own handlers. Tokens supplied here travel only through stdin.
     """
+    # SIGBREAK and queued handlers need bytecode dispatch opportunities;
+    # an infinite Windows process-handle wait can otherwise defer them.
+    # Handlers only record state, so repeated signals cannot interrupt reap.
+    cancellation = None
+    previous = {}
+    proc = None
+    def cancel(signum, frame):
+        nonlocal cancellation
+        cancellation = 143 if signum == signal.SIGTERM else 130
     try:
-        proc = subprocess.Popen(argv, env=env,
-                                stdin=subprocess.PIPE if stdin_data is not None else None)
-    except OSError:
-        print("pocketshell: could not start the trusted child process", file=sys.stderr)
-        raise SystemExit(127) from None
-    def on_term(signum, frame):
-        proc.terminate()
-        raise SystemExit(128 + signum)
-    old_term = None
-    try:
-        old_term = signal.signal(signal.SIGTERM, on_term)
-    except ValueError:  # Non-main-thread embedding; terminal Ctrl+C still shared.
-        pass
-    try:
-        if stdin_data is None:
-            code = proc.wait()
-        else:
-            proc.communicate(input=stdin_data)
-            code = proc.returncode
-    except KeyboardInterrupt:
+        for signum in (signal.SIGINT, getattr(signal, "SIGBREAK", None), signal.SIGTERM):
+            if signum is None:
+                continue
+            try:
+                previous[signum] = signal.signal(signum, cancel)
+            except ValueError:  # Non-main-thread embedding cannot own handlers.
+                break
+        if cancellation is not None:
+            raise SystemExit(cancellation)
         try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
+            proc = subprocess.Popen(argv, env=env,
+                                    stdin=subprocess.PIPE if stdin_data is not None else None)
+        except OSError:
+            print("pocketshell: could not start the trusted child process", file=sys.stderr)
+            raise SystemExit(127) from None
+        first_input = True
+        while cancellation is None:
+            try:
+                if stdin_data is None:
+                    code = proc.wait(timeout=0.1)
+                else:
+                    proc.communicate(input=stdin_data if first_input else None, timeout=0.1)
+                    code = proc.returncode
+                if cancellation is None:
+                    raise SystemExit(code)
+            except subprocess.TimeoutExpired:
+                pass
+            except KeyboardInterrupt:
+                cancellation = 130
+            finally:
+                first_input = False
+        if cancellation == 130:
+            deadline = time.monotonic() + 2
+            while proc.poll() is None and time.monotonic() < deadline:
+                try:
+                    proc.wait(timeout=min(0.1, max(0, deadline - time.monotonic())))
+                except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                    pass
+        if proc.poll() is None:
             proc.terminate()
             try:
                 proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.wait()
-        raise SystemExit(130) from None
+                proc.wait(timeout=2)
+        raise SystemExit(cancellation) from None
     finally:
-        if old_term is not None:
-            signal.signal(signal.SIGTERM, old_term)
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
-    raise SystemExit(code)
+        try:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=2)
+        finally:
+            for signum, old_handler in previous.items():
+                signal.signal(signum, old_handler)
 
 
 def exec_helper_with_stdin_token(helper: str, argv: list[str], token: str) -> NoReturn:

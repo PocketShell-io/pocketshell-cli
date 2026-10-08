@@ -13,7 +13,10 @@ The Windows wrapper waits for the helper/OpenSSH child, inherits terminal
 streams and returns the child's exit status. Console Ctrl+C reaches the
 shared console child; the wrapper waits briefly for shutdown, then terminates
 and reaps a remaining child. A SIGTERM handled by the wrapper also terminates
-the child. POSIX continues to replace its process with execv/execve.
+the child. SIGINT/SIGBREAK/SIGTERM handlers record cancellation state; finite
+process waits give queued handlers dispatch opportunities and cleanup completes
+before prior handlers are restored. POSIX continues to replace its process with
+execv/execve.
 
 Enrollment tokens travel only over stdin: a caller pipe is inherited, while
 a login-minted token gets its own anonymous child pipe. Tokens are never added
@@ -26,6 +29,28 @@ CRLF, Ctrl+Z, NUL and arbitrary SSH bytes survive unchanged. Diagnostics remain
 on stderr. Native tests cover exact bytes, waited status, token-only stdin,
 bounded metadata, and cancellation. A fixture child proves the process boundary;
 it does not establish production enrollment, WSS connectivity or SSH trust.
+The cancellation fixture owns a hidden NEW_CONSOLE and a separate emitter
+attached only to that console. Before broadcasting CTRL_BREAK within it, the
+emitter requires GetConsoleProcessList to contain exactly the owned wrapper,
+audit child and emitter PIDs. It uses no NEW_PROCESS_GROUP flag (ignored with
+NEW_CONSOLE), and no parent/unrelated console can be targeted. It requires
+actual handler delivery before exit130 and child-reap assertions. A separate
+CREATE_NO_WINDOW fixture tests process-local
+signal.raise_signal(SIGTERM), exit143 and child reap; Windows os.kill(15) is a
+hard termination and cannot prove that handler contract. Delivery in an
+unrelated terminal/ConPTY is not inferred. No console fixture may skip an absent
+delivery witness or emit to the parent/unrelated process groups.
+Only these console-topology fixtures use verified sys._base_executable with
+isolated `-I` execution to avoid venv redirector processes. The wrapper explicitly
+injects only the trusted candidate package root and checks the helper file path
+and digest before calling its production function. Wrapper PID and child parent
+PID witnesses prove the direct topology. Other native process tests continue to
+exercise the installed private venv interpreter. No global PYTHONPATH, profile or
+credential settings change.
+The fixture follows Microsoft's documented
+[creation flags](https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags),
+[console membership](https://learn.microsoft.com/en-us/windows/console/getconsoleprocesslist)
+and [console event scope](https://learn.microsoft.com/en-us/windows/console/generateconsolectrlevent).
 
 Parent native test commands, from the exact reviewed source snapshot and
 private interpreter (use parent-confirmed absolute paths):
