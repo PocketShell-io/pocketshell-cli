@@ -10,7 +10,7 @@ file to OpenSSH as its only known_hosts (``UserKnownHostsFile``) with
 ``HostKeyAlias=pocketshell-gateway.<device-id>`` and
 ``StrictHostKeyChecking=yes``.
 
-The key comes out of band — `pocketshell gateway show --pin-command` run on
+The key comes out of band — `pocketshell gateway show --host-key` run on
 the host itself — and never from the gateway (the gateway's
 ``ready.ssh_host_key`` and the device listing are advisory and untrusted).
 
@@ -166,7 +166,7 @@ def parse_host_key(text: str) -> HostKey:
     ``@cert-authority``/``@revoked`` can appear); a supported key type;
     canonical base64 that decodes to a well-formed key blob of the stated
     type with nothing trailing. A trailing comment is refused rather than
-    silently dropped: pin exactly what `gateway show --pin-command` prints.
+    silently dropped: pin exactly what `gateway show --host-key` prints.
     """
     if not isinstance(text, str):
         raise PinError("host key must be text")
@@ -376,9 +376,10 @@ def require_pin(device_id: str, *, path: Optional[Path] = None) -> HostKey:
     if key is None:
         raise PinError(
             f"no host key is pinned for device {device_id}. On the host, run\n"
-            "    pocketshell gateway show --pin-command\n"
-            "and run the `pocketshell gateway pin …` line it prints here, "
-            "after checking it came from your host. The gateway's advertised "
-            "key is never trusted."
+            "    pocketshell gateway show --host-key\n"
+            "then here run\n"
+            f"    pocketshell gateway pin {device_id}\n"
+            "and paste that one key line when prompted. The gateway's "
+            "advertised key is never trusted."
         )
     return key

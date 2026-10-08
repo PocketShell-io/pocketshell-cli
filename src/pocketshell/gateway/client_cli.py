@@ -82,7 +82,7 @@ def devices(
 
     Needs `pocketshell login`. The host keys shown are ADVERTISED by the
     gateway and NOT trusted: pin the key you get from the host itself
-    (`pocketshell gateway show --pin-command` on the host).
+    (`pocketshell gateway show --host-key` on the host).
     """
     endpoint = _resolve_endpoint(server, insecure_dev, trust_gateway)
     try:
@@ -145,30 +145,60 @@ def devices(
         click.echo("  ".join(r[i].ljust(widths[i]) for i in range(3)) + "  " + r[3])
     click.echo(
         "\nAdvertised keys come from the gateway and are never trusted. Pin the "
-        "key printed by `pocketshell gateway show --pin-command` on the host."
+        "key printed by `pocketshell gateway show --host-key` on the host."
     )
+
+
+MAX_PIN_INPUT_BYTES = 16384
+
+
+def _read_host_key_input() -> str:
+    """One host-key line from an interactive prompt or from stdin.
+
+    Exactly one line: a single trailing newline is tolerated, anything
+    after it (a second line) is refused by the strict parser.
+    """
+    stdin = click.get_text_stream("stdin")
+    if stdin.isatty():
+        return click.prompt(
+            "Paste the host key line printed by `pocketshell gateway show "
+            "--host-key` ON THE HOST",
+            prompt_suffix=":\n",
+        )
+    data = stdin.read(MAX_PIN_INPUT_BYTES + 1)
+    if len(data) > MAX_PIN_INPUT_BYTES:
+        raise gateway_pins.PinError("host key input is too large")
+    if data.endswith("\r\n"):
+        data = data[:-2]
+    elif data.endswith("\n"):
+        data = data[:-1]
+    return data
 
 
 @click.command("pin")
 @click.argument("device_id", metavar="DEVICE_ID")
-@click.argument("host_key", metavar="'KEYTYPE BASE64'")
+@click.argument("host_key", metavar="['KEYTYPE BASE64']", required=False)
 @click.option(
     "--replace",
     is_flag=True,
     help="Replace a DIFFERENT key already pinned for this device (host re-keyed).",
 )
-def pin(device_id: str, host_key: str, replace: bool) -> None:
-    """Trust HOST_KEY as the SSH host key of DEVICE_ID (client side).
+def pin(device_id: str, host_key: Optional[str], replace: bool) -> None:
+    """Trust a host key as the SSH host key of DEVICE_ID (client side).
 
     This is the ONLY way a host key becomes trusted for `gateway ssh`.
-    Get the line by running `pocketshell gateway show --pin-command` ON
-    THE HOST and copy it over a channel you trust — never from the
-    gateway or `gateway devices` (that key is advertised, untrusted).
+    On the HOST run `pocketshell gateway show --host-key`; bring that one
+    line over a channel you trust and paste it at the prompt (or pipe it
+    on stdin). It is a bare `<keytype> <base64>` line, never a command to
+    run. Never take it from the gateway or `gateway devices` — that key is
+    advertised, untrusted.
     """
     try:
-        key = gateway_pins.parse_host_key(host_key)
+        gateway_endpoint.validate_device_id(device_id)
+        text = host_key if host_key is not None else _read_host_key_input()
+        key = gateway_pins.parse_host_key(text)
         changed = gateway_pins.add_pin(device_id, key, replace=replace)
-    except gateway_pins.PinError as exc:
+    except (gateway_pins.PinError, gateway_endpoint.EndpointError) as exc:
         raise click.ClickException(str(exc)) from None
     verb = "pinned" if changed else "already pinned"
     click.echo(f"{verb} {device_id}: {key.fingerprint} ({key.label})")

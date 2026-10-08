@@ -306,6 +306,70 @@ def run(
     _run_helper(argv, ctx)
 
 
+SHOW_TIMEOUT_SECONDS = 10.0
+SHOW_MAX_OUTPUT_BYTES = 65536
+
+
+def _print_host_key(ctx: click.Context, config_dir: Optional[str]) -> None:
+    """``show --host-key``: print ONLY the pinned sshd host-key line.
+
+    Runs the verified helper's ``show`` as a bounded subprocess (stdin
+    detached), extracts the ``pinned ssh host key:`` value and re-validates
+    it with the client's strict pin parser. stdout gets exactly one
+    ``<keytype> <base64>`` line — never a shell command — so a client
+    can paste it at the `pocketshell gateway pin <device-id>` prompt.
+    """
+    import subprocess
+
+    from pocketshell.gateway import pins as gateway_pins
+
+    try:
+        binary = gateway_helper.resolve_helper()
+        gateway_helper.verify_helper(binary)
+    except gateway_helper.HelperNotFoundError as exc:
+        click.echo(f"error: {exc}", err=True)
+        ctx.exit(127)
+    except gateway_helper.HelperIncompatibleError as exc:
+        click.echo(f"error: {exc}", err=True)
+        ctx.exit(126)
+    argv = [binary, *gateway_helper.build_helper_argv("show", config_dir=config_dir)]
+    try:
+        proc = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            timeout=SHOW_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        click.echo("error: the gateway helper's `show` timed out", err=True)
+        ctx.exit(1)
+    if proc.returncode != 0:
+        ctx.exit(proc.returncode)
+    out = proc.stdout[:SHOW_MAX_OUTPUT_BYTES].decode("utf-8", "replace")
+    fields = {}
+    for line in out.splitlines():
+        name, sep, value = line.partition(":")
+        if sep:
+            fields[name.strip()] = value.strip()
+    try:
+        key = gateway_pins.parse_host_key(fields.get("pinned ssh host key", ""))
+    except gateway_pins.PinError as exc:
+        raise click.ClickException(
+            f"the enrolled state has no usable pinned host key ({exc}); "
+            "re-run `pocketshell gateway enroll`"
+        ) from None
+    device_id = fields.get("device id", "")
+    click.echo(key.line)
+    if gateway_endpoint.DEVICE_ID_RE.match(device_id):
+        click.echo(
+            f"device {device_id}, host key {key.fingerprint} ({key.label}).\n"
+            f"On the client run `pocketshell gateway pin {device_id}` and paste "
+            "the key line above at its prompt.",
+            err=True,
+        )
+
+
 @click.command("show")
 @click.option(
     "--config-dir",
@@ -313,13 +377,26 @@ def run(
     metavar="DIR",
     help="Agent state directory (default: ${XDG_CONFIG_HOME:-$HOME/.config}/pocketshell-link).",
 )
+@click.option(
+    "--host-key",
+    "host_key",
+    is_flag=True,
+    help=(
+        "Print only the pinned sshd host-key line, to paste at the "
+        "client's `pocketshell gateway pin DEVICE_ID` prompt."
+    ),
+)
 @click.pass_context
-def show(ctx: click.Context, config_dir: Optional[str]) -> None:
+def show(ctx: click.Context, config_dir: Optional[str], host_key: bool) -> None:
     """Print the enrolled configuration (no secrets).
 
     Reports the gateway URL, device ID, local SSH endpoint, device key
-    fingerprint, and the pinned sshd host key.
+    fingerprint, and the pinned sshd host key. With `--host-key`, prints
+    just the host-key line a client pins with `pocketshell gateway pin`.
     """
+    if host_key:
+        _print_host_key(ctx, config_dir)
+        return
     argv = gateway_helper.build_helper_argv("show", config_dir=config_dir)
     _run_helper(argv, ctx)
 
