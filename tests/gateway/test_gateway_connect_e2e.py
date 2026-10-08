@@ -1,11 +1,21 @@
-"""End to end: real `ssh` → `gateway proxy` → fake gateway → real local sshd.
+"""End to end: `pocketshell login` → `gateway pin` → `gateway ssh` → real sshd.
 
-Runs `pocketshell gateway ssh` exactly as a user would (subprocess, real
-OpenSSH, ProxyCommand `python -P -m pocketshell gateway proxy …`). The fake
-gateway bridges the WebSocket to an unprivileged sshd on 127.0.0.1 and
-advertises a WRONG `ssh_host_key` in `ready` to prove the client ignores
-it. A fake `pocketshell.account` is injected into the proxy subprocess via
-`sitecustomize` on PYTHONPATH (the real account layer lands separately).
+Every step runs the real CLI as a subprocess, exactly as a user would, with
+nothing monkeypatched inside pocketshell:
+
+1. `pocketshell login --no-open` performs the device flow against the
+   local fake broker (tests/fake_broker.py: pending once, then approved)
+   and stores a real psc_ CLI session in an isolated XDG_CONFIG_HOME;
+2. `pocketshell gateway pin` trusts the sshd host key, read from stdin;
+3. `pocketshell gateway ssh` execs real OpenSSH, whose ProxyCommand
+   (`python -P -m pocketshell gateway proxy …`) mints a broker JWT through
+   `POST /cli/gateway/token` with the psc_ bearer and bridges to a fake
+   gateway, which forwards to an unprivileged sshd on 127.0.0.1. The fake
+   gateway advertises a WRONG `ssh_host_key` in `ready` to prove the client
+   ignores it.
+4. `pocketshell logout`, after which `gateway ssh` refuses with exit 3
+   before ssh (or the gateway) is ever started.
+
 Skipped when sshd/ssh/ssh-keygen are unavailable or sshd cannot start.
 """
 
@@ -30,9 +40,8 @@ pytest.importorskip("websockets")
 from websockets.exceptions import ConnectionClosed  # noqa: E402
 from websockets.sync.server import serve  # noqa: E402
 
-from conftest import FAKE_JWT  # noqa: E402
 from gateway_keyblobs import ED25519_LINE  # noqa: E402
-from pocketshell.gateway import pins  # noqa: E402
+from tests.fake_broker import DEVICE_CODE, SESSION_TOKEN  # noqa: E402
 
 SSHD = shutil.which("sshd") or ("/usr/sbin/sshd" if os.path.exists("/usr/sbin/sshd") else None)
 pytestmark = pytest.mark.skipif(
@@ -41,23 +50,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 DEVICE = "e2e-host"
-
-SITECUSTOMIZE = textwrap.dedent(
-    """
-    import dataclasses, sys, types
-    m = types.ModuleType("pocketshell.account")
-    class AccountError(Exception): pass
-    class NotLoggedIn(AccountError): pass
-    @dataclasses.dataclass(frozen=True)
-    class GatewayToken:
-        token: str
-        expires_at: int
-    m.AccountError, m.NotLoggedIn, m.GatewayToken = AccountError, NotLoggedIn, GatewayToken
-    m.mint_gateway_token = lambda *, broker_url=None: GatewayToken({token!r}, 2000000000)
-    m.broker_url = lambda: "https://broker.invalid"
-    sys.modules["pocketshell.account"] = m
-    """
-)
+EXIT_NOT_LOGGED_IN = 3
 
 
 def _free_port() -> int:
@@ -123,12 +116,17 @@ def sshd(tmp_path):
 
 @pytest.fixture
 def gateway(sshd):
-    seen = {}
+
+    seen = {"connections": 0}
 
     def handle(ws):
-        auth = json.loads(ws.recv(timeout=10))
+        seen["connections"] += 1
+        raw = ws.recv(timeout=10)
+        auth = json.loads(raw)
+        seen["raw"] = raw
         seen["auth"] = auth
         seen["path"] = ws.request.path
+        seen["headers"] = str(ws.request.headers)
         # A hostile/compromised gateway's advertised key: must be ignored.
         ws.send(json.dumps({
             "type": "ready", "v": 1, "device_id": auth["device_id"],
@@ -175,49 +173,115 @@ def gateway(sshd):
     server.shutdown()
 
 
-def _run_gateway_ssh(tmp_path, gateway, sshd, *command):
-    site = tmp_path / "site"
-    site.mkdir(exist_ok=True)
-    (site / "sitecustomize.py").write_text(SITECUSTOMIZE.format(token=FAKE_JWT))
+def _env(tmp_path) -> dict:
+    """The user's environment: isolated HOME/XDG, the fake broker selected
+    by POCKETSHELL_BROKER_URL + POCKETSHELL_BROKER_INSECURE_DEV=1 (set by
+    the fake_broker fixture), no ssh-agent."""
     home = tmp_path / "home"
     (home / ".ssh").mkdir(parents=True, exist_ok=True)
     # A hostile user config that -F none must neutralize.
     (home / ".ssh" / "config").write_text("Host *\n  StrictHostKeyChecking no\n  ForwardAgent yes\n")
     env = {k: v for k, v in os.environ.items() if k not in ("SSH_AUTH_SOCK", "PYTHONSAFEPATH")}
-    env.update({
-        "HOME": str(home),
-        "PYTHONPATH": str(site),
-        "XDG_CONFIG_HOME": os.environ["XDG_CONFIG_HOME"],
-    })
+    env["HOME"] = str(home)
+    assert env["POCKETSHELL_BROKER_INSECURE_DEV"] == "1"
+    assert env["POCKETSHELL_BROKER_URL"].startswith("http://127.0.0.1:")
+    return env
+
+
+def _pocketshell(tmp_path, *args, stdin: bytes = b"") -> subprocess.CompletedProcess:
     return subprocess.run(
-        [
-            sys.executable, "-m", "pocketshell", "gateway", "ssh", DEVICE,
-            "-l", getpass.getuser(), "-i", str(sshd["client_key"]),
-            "--server", f"ws://127.0.0.1:{gateway['port']}", "--insecure-dev",
-            "--trust-gateway", "127.0.0.1",
-            "--", *command,
-        ],
-        capture_output=True, env=env, cwd=tmp_path, timeout=60,
+        [sys.executable, "-m", "pocketshell", *args],
+        input=stdin, capture_output=True, env=_env(tmp_path), cwd=tmp_path, timeout=60,
     )
 
 
-def test_ssh_through_gateway_to_real_sshd(tmp_path, sshd, gateway):
-    pins.add_pin(DEVICE, pins.parse_host_key(sshd["host_pub"]))
-    proc = _run_gateway_ssh(tmp_path, gateway, sshd, "echo", "hello-through-gateway")
+def _gateway_ssh(tmp_path, gateway, sshd, *command) -> subprocess.CompletedProcess:
+    return _pocketshell(
+        tmp_path,
+        "gateway", "ssh", DEVICE,
+        "-l", getpass.getuser(), "-i", str(sshd["client_key"]),
+        "--server", f"ws://127.0.0.1:{gateway['port']}", "--insecure-dev",
+        "--trust-gateway", "127.0.0.1",
+        "--", *command,
+    )
+
+
+def _assert_no_secrets(proc: subprocess.CompletedProcess, broker) -> None:
+    out = proc.stdout + proc.stderr
+    for secret in (SESSION_TOKEN, DEVICE_CODE, broker.gateway_jwt):
+        assert secret.encode() not in out
+
+
+@pytest.fixture
+def logged_in(tmp_path, fake_broker):
+    """`pocketshell login --no-open` for real, against the fake broker."""
+    fake_broker.start_response["interval"] = 1  # pending once, then approved
+    proc = _pocketshell(tmp_path, "login", "--no-open", "--label", "e2e@laptop")
+    assert proc.returncode == 0, proc.stderr.decode()
+    assert b"BCDF-GHJK" in proc.stdout
+    assert b"Logged in as me@example.com." in proc.stdout
+    _assert_no_secrets(proc, fake_broker)
+    assert [r["path"] for r in fake_broker.requests] == [
+        "/auth/device/start", "/auth/device/token", "/auth/device/token", "/cli/session",
+    ]
+    fake_broker.requests.clear()
+    return fake_broker
+
+
+def _pin(tmp_path, key_line: str) -> None:
+    proc = _pocketshell(tmp_path, "gateway", "pin", DEVICE, stdin=key_line.encode() + b"\n")
+    assert proc.returncode == 0, proc.stderr.decode()
+    assert proc.stdout.startswith(f"pinned {DEVICE}: SHA256:".encode())
+
+
+def test_login_pin_ssh_logout_through_gateway_to_real_sshd(tmp_path, sshd, gateway, logged_in):
+    broker = logged_in
+    _pin(tmp_path, sshd["host_pub"])
+
+    proc = _gateway_ssh(tmp_path, gateway, sshd, "echo", "hello-through-gateway")
     assert proc.returncode == 0, proc.stderr.decode()
     assert proc.stdout == b"hello-through-gateway\n"
+    _assert_no_secrets(proc, broker)
+
+    # The proxy minted the broker JWT with the psc_ session as bearer …
+    [mint] = broker.requests_to("/cli/gateway/token")
+    assert mint["method"] == "POST" and mint["body"] == b""
+    assert mint["headers"]["Authorization"] == f"Bearer {SESSION_TOKEN}"
+    # … and the gateway saw exactly that JWT, never the session token.
     assert gateway["seen"]["path"] == f"/api/v1/hosts/{DEVICE}/ssh"
     assert gateway["seen"]["auth"] == {
-        "type": "auth", "v": 1, "token": FAKE_JWT, "device_id": DEVICE,
+        "type": "auth", "v": 1, "token": broker.gateway_jwt, "device_id": DEVICE,
     }
-    assert FAKE_JWT.encode() not in proc.stdout + proc.stderr
+    assert SESSION_TOKEN not in gateway["seen"]["raw"]
+    assert SESSION_TOKEN not in gateway["seen"]["headers"]
+    assert "psc_" not in gateway["seen"]["raw"] + gateway["seen"]["headers"]
+    assert gateway["seen"]["connections"] == 1
+
+    proc = _pocketshell(tmp_path, "logout")
+    assert proc.returncode == 0, proc.stderr.decode()
+    assert proc.stdout == b"Logged out.\n"
+    _assert_no_secrets(proc, broker)
+    assert broker.logged_out
+    [revoke] = broker.requests_to("/cli/logout")
+    assert revoke["headers"]["Authorization"] == f"Bearer {SESSION_TOKEN}"
+
+    broker.requests.clear()
+    proc = _gateway_ssh(tmp_path, gateway, sshd, "echo", "must-not-run")
+    assert proc.returncode == EXIT_NOT_LOGGED_IN, proc.stderr.decode()
+    assert b"must-not-run" not in proc.stdout
+    assert b"pocketshell login" in proc.stderr
+    _assert_no_secrets(proc, broker)
+    assert gateway["seen"]["connections"] == 1  # the gateway was never contacted
+    assert broker.requests == []  # nor the broker: there is no session to use
 
 
-def test_wrong_pin_fails_closed_despite_gateway_advertisement(tmp_path, sshd, gateway):
+def test_wrong_pin_fails_closed_despite_gateway_advertisement(tmp_path, sshd, gateway, logged_in):
     # Pin the key the gateway advertises (not the real sshd key): OpenSSH
     # must refuse, whatever the gateway or ~/.ssh/config say.
-    pins.add_pin(DEVICE, pins.parse_host_key(ED25519_LINE))
-    proc = _run_gateway_ssh(tmp_path, gateway, sshd, "echo", "must-not-run")
+    _pin(tmp_path, ED25519_LINE)
+    proc = _gateway_ssh(tmp_path, gateway, sshd, "echo", "must-not-run")
     assert proc.returncode == 255
     assert b"must-not-run" not in proc.stdout
     assert b"HOST IDENTIFICATION HAS CHANGED" in proc.stderr or b"verification failed" in proc.stderr
+    _assert_no_secrets(proc, logged_in)
+    assert gateway["seen"]["auth"]["token"] == logged_in.gateway_jwt
