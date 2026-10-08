@@ -119,8 +119,13 @@ session is already gone and counts as logged out.
   exception messages, or a `repr`.
 - Anything the server sends that the CLI prints (user code, email, label,
   error codes) has control, escape and invisible format characters removed
-  first. The verification URL must be `https://`. A pre-filled URL that isn't
-  plain HTTPS is never opened.
+  first.
+- `login` prints or opens a verification URL only when it is plain `https://`
+  on the trusted approval origin, `https://app.pocketshell.io`. If the broker
+  sends any other URL, `login` doesn't show or open it. It prints a warning,
+  shows `https://app.pocketshell.io/device` and the code instead, and keeps
+  waiting. A broker, including one an `.envrc` points to, can't send you to a
+  look-alike approval page.
 - The gateway token from `/cli/gateway/token` must look like a JWT (three
   base64url segments with a JSON header). Its `expires_at` must fall within
   300 seconds plus 5 minutes of clock skew from now.
@@ -130,6 +135,7 @@ session is already gone and counts as logged out.
 | Variable | Meaning |
 | --- | --- |
 | `POCKETSHELL_BROKER_URL` | Broker base URL for `login` (default: the production broker). Must be `https://` with no credentials, query or fragment. An existing session always uses the broker stored with it, and the command refuses to run when this variable names a different one. |
+| `POCKETSHELL_DEV_WEB_ORIGIN` | Staging and development only: the trusted approval origin, as a bare `https://host[:port]`. It's honored only when `POCKETSHELL_BROKER_URL` is also set. |
 | `POCKETSHELL_BROKER_INSECURE_DEV=1` | Development and tests only: also allows `http://` when the host is loopback (`127.0.0.0/8`, `::1`, `localhost`). |
 
 ## Exit codes

@@ -144,11 +144,67 @@ def test_server_strings_are_sanitized_before_printing(fake_broker) -> None:
     assert "BCDF-[2JGHJK" in out
 
 
-def test_non_https_verification_uri_is_refused(fake_broker) -> None:
-    fake_broker.start_response["verification_uri"] = "http://app.pocketshell.io/device"
-    with pytest.raises(AccountError, match="non-https"):
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "http://app.pocketshell.io/device",
+        "https://app.pocketshell.io.evil.example/device",
+        "https://evil.example/device",
+        "https://app.pocketshell.io:8443/device",
+        "https://app.pocketshell.io/\x1b[2Jdevice",
+        None,
+    ],
+)
+def test_foreign_verification_uri_is_never_shown_or_opened(fake_broker, bad) -> None:
+    fake_broker.start_response["verification_uri"] = bad
+    fake_broker.start_response["verification_uri_complete"] = (
+        "https://evil.example/device?code=BCDF-GHJK"
+    )
+    _, out, opened, _ = _run(fake_broker)
+    assert opened == []
+    assert "warning: the broker sent a verification URL outside https://app.pocketshell.io" in out
+    assert "To log in, open:  https://app.pocketshell.io/device\n" in out
+    assert "BCDF-GHJK" in out
+    assert "evil" not in out and "\x1b" not in out
+    assert store.exists()  # the flow still completes
+
+
+def test_complete_uri_on_foreign_origin_is_not_opened(fake_broker) -> None:
+    fake_broker.start_response["verification_uri_complete"] = (
+        "https://evil.example/device?code=BCDF-GHJK"
+    )
+    _, out, opened, _ = _run(fake_broker)
+    assert opened == []
+    assert "warning" not in out
+
+
+def test_dev_web_origin_override_with_broker_override(fake_broker, monkeypatch) -> None:
+    monkeypatch.setenv("POCKETSHELL_DEV_WEB_ORIGIN", "https://staging.example.com/")
+    fake_broker.start_response["verification_uri"] = "https://staging.example.com/device"
+    fake_broker.start_response["verification_uri_complete"] = (
+        "https://staging.example.com/device?code=BCDF-GHJK"
+    )
+    _, out, opened, _ = _run(fake_broker)
+    assert opened == ["https://staging.example.com/device?code=BCDF-GHJK"]
+    assert "warning" not in out
+
+
+def test_dev_web_origin_ignored_without_broker_override(monkeypatch) -> None:
+    from pocketshell.account.config import web_origin
+
+    monkeypatch.delenv("POCKETSHELL_BROKER_URL", raising=False)
+    monkeypatch.setenv("POCKETSHELL_DEV_WEB_ORIGIN", "https://evil.example")
+    assert web_origin() == "https://app.pocketshell.io"
+
+
+@pytest.mark.parametrize(
+    "bad", ["http://staging.example.com", "https://staging.example.com/path", "https://u@h", "x"]
+)
+def test_dev_web_origin_must_be_bare_https(fake_broker, monkeypatch, bad) -> None:
+    monkeypatch.setenv("POCKETSHELL_DEV_WEB_ORIGIN", bad)
+    with pytest.raises(AccountError, match="bare https origin"):
         _run(fake_broker)
-    assert fake_broker.requests_to("/auth/device/token") == []
+    assert fake_broker.requests == []
 
 
 @pytest.mark.parametrize(

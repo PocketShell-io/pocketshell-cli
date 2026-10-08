@@ -22,6 +22,7 @@ import webbrowser
 from typing import Callable
 
 from pocketshell.account import broker
+from pocketshell.account.config import same_origin, web_origin
 from pocketshell.account.credentials import Credentials, save
 from pocketshell.account.errors import AccountError, BrokerUnavailable
 from pocketshell.account.sanitize import clean_text, https_url
@@ -66,14 +67,21 @@ def login(
     sleep = sleep or time.sleep
     monotonic = monotonic or time.monotonic
     browser_open = browser_open or webbrowser.open
+    origin = web_origin()
     start = broker.start_device(base_url, label)
-    verification_uri = https_url(start.verification_uri)
-    if verification_uri is None:
-        raise AccountError("The broker returned an invalid (non-https) verification URL.")
-    complete_uri = https_url(start.verification_uri_complete)
     user_code = clean_text(start.user_code, max_len=32)
     if not user_code:
         raise AccountError("The broker returned an empty user code.")
+    verification_uri = _trusted(start.verification_uri, origin)
+    complete_uri = _trusted(start.verification_uri_complete, origin)
+    if verification_uri is None:
+        # Never print or open a URL outside the trusted approval origin.
+        echo(
+            "warning: the broker sent a verification URL outside "
+            f"{origin}; it was not shown or opened."
+        )
+        verification_uri = f"{origin}/device"
+        complete_uri = None
 
     echo(f"To log in, open:  {verification_uri}")
     echo(f"and enter code:   {user_code}")
@@ -103,6 +111,11 @@ def login(
         _revoke_quietly(base_url, token.access_token)
         raise
     return creds
+
+
+def _trusted(value: object, origin: str) -> str | None:
+    url = https_url(value)
+    return url if url is not None and same_origin(url, origin) else None
 
 
 def _poll(base_url, start, *, sleep, monotonic) -> broker.DeviceToken:

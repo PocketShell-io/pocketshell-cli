@@ -19,6 +19,12 @@ from pocketshell.account.sanitize import clean_text
 DEFAULT_BROKER_URL = "https://a7sota2qic.execute-api.eu-west-1.amazonaws.com"
 ENV_BROKER_URL = "POCKETSHELL_BROKER_URL"
 ENV_INSECURE_DEV = "POCKETSHELL_BROKER_INSECURE_DEV"
+# The only origin whose verification URLs `login` prints or opens. A broker
+# (or an `.envrc`-redirected one) cannot steer the user to a look-alike
+# approval page. Overridable for staging/dev ONLY together with an explicit
+# broker URL override.
+DEFAULT_WEB_ORIGIN = "https://app.pocketshell.io"
+ENV_DEV_WEB_ORIGIN = "POCKETSHELL_DEV_WEB_ORIGIN"
 
 
 def insecure_dev_enabled() -> bool:
@@ -115,3 +121,46 @@ def session_broker_url(stored: str, requested: str | None = None) -> str:
             f"session to it. Unset it, or run `pocketshell login --force` for that broker."
         )
     return target
+
+
+def _origin_parts(url: str) -> tuple[str, str, int] | None:
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme.lower() != "https" or not host or "@" in parts.netloc:
+        return None
+    return ("https", host.lower().rstrip("."), port or 443)
+
+
+def web_origin() -> str:
+    """The trusted approval-page origin (``https://app.pocketshell.io``).
+
+    ``$POCKETSHELL_DEV_WEB_ORIGIN`` is honoured only when
+    ``$POCKETSHELL_BROKER_URL`` is also set, and must be a bare ``https``
+    origin (no path, query, fragment or credentials).
+    """
+    raw = os.environ.get(ENV_DEV_WEB_ORIGIN) or ""
+    if not raw or not os.environ.get(ENV_BROKER_URL):
+        return DEFAULT_WEB_ORIGIN
+    value = raw.strip()
+    shown = clean_text(value, max_len=120)
+    parsed = _origin_parts(value) if value.isascii() and value.isprintable() else None
+    try:
+        rest = urlsplit(value)
+    except ValueError:
+        rest = None
+    if parsed is None or rest is None or rest.path not in ("", "/") or rest.query or rest.fragment:
+        raise AccountError(
+            f"{ENV_DEV_WEB_ORIGIN} {shown!r} must be a bare https origin like https://host[:port]"
+        )
+    scheme, host, port = parsed
+    netloc = f"[{host}]" if ":" in host else host
+    return f"{scheme}://{netloc}" + ("" if port == 443 else f":{port}")
+
+
+def same_origin(url: str, origin: str) -> bool:
+    a, b = _origin_parts(url), _origin_parts(origin)
+    return a is not None and a == b
