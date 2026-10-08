@@ -120,3 +120,74 @@ def forbid_helper_launch(monkeypatch):
         )
 
     monkeypatch.setattr(gateway_helper, "resolve_helper", _refuse)
+
+
+# --- client side: a fake `pocketshell.account` (the real one lands on another
+# branch; the gateway client imports it lazily against this exact contract).
+
+FAKE_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJlLWZha2U"
+
+
+class FakeAccount:
+    """Controls for the injected ``pocketshell.account`` module."""
+
+    def __init__(self, module):
+        self.module = module
+        self.calls = 0
+        self.token = FAKE_JWT
+        self.error = None  # an exception instance to raise from mint
+
+    def mint(self, *, broker_url=None):
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.module.GatewayToken(token=self.token, expires_at=2_000_000_000)
+
+
+def make_fake_account_module():
+    import dataclasses
+    import types
+
+    module = types.ModuleType("pocketshell.account")
+
+    class AccountError(Exception):
+        pass
+
+    class NotLoggedIn(AccountError):
+        pass
+
+    @dataclasses.dataclass(frozen=True)
+    class GatewayToken:
+        token: str
+        expires_at: int
+
+    module.AccountError = AccountError
+    module.NotLoggedIn = NotLoggedIn
+    module.GatewayToken = GatewayToken
+    return module
+
+
+@pytest.fixture
+def fake_account(monkeypatch):
+    import sys
+
+    module = make_fake_account_module()
+    ctl = FakeAccount(module)
+    module.mint_gateway_token = ctl.mint
+    module.broker_url = lambda: "https://broker.invalid"
+    monkeypatch.setitem(sys.modules, "pocketshell.account", module)
+    return ctl
+
+
+@pytest.fixture
+def no_account(monkeypatch):
+    """Make `import pocketshell.account` fail (login support absent)."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "pocketshell.account", None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_client_config(tmp_path_factory, monkeypatch):
+    """Client pins/credentials never touch the developer's real config."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("xdg")))
