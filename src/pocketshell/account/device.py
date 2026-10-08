@@ -1,8 +1,10 @@
 """OAuth-style device-authorization login against the PocketShell broker.
 
 1. ``POST /auth/device/start`` with a human label (``user@hostname``).
-2. Show the user code and the https verification URL (sanitized), and
-   optionally open ``verification_uri_complete`` in a browser.
+2. Show the user code (which must match ``USER_CODE_RE``) and the https
+   verification URL on the trusted origin. ``verification_uri_complete`` is
+   shown and opened only when it is exactly
+   ``{verification_uri}?code={user_code}``.
 3. Poll ``POST /auth/device/token`` every ``interval`` seconds; ``slow_down``
    (or HTTP 429) adds 5 s; ``access_denied`` / ``expired_token`` stop.
 4. Confirm the new token with ``GET /cli/session`` and store it.
@@ -16,6 +18,7 @@ is revoked best-effort so no orphaned session lingers.
 from __future__ import annotations
 
 import getpass
+import re
 import socket
 import time
 import webbrowser
@@ -33,6 +36,9 @@ MAX_INTERVAL = 60
 MAX_TRANSIENT_FAILURES = 5
 
 _AGAIN = "Run `pocketshell login` again."
+
+# Crockford-like alphabet without vowels or ambiguous characters (0/O, 1/I/L).
+USER_CODE_RE = re.compile(r"[BCDFGHJKLMNPQRSTVWXZ2-9]{4}-[BCDFGHJKLMNPQRSTVWXZ2-9]{4}")
 
 
 def default_label() -> str:
@@ -69,9 +75,10 @@ def login(
     browser_open = browser_open or webbrowser.open
     origin = web_origin()
     start = broker.start_device(base_url, label)
-    user_code = clean_text(start.user_code, max_len=32)
-    if not user_code:
-        raise AccountError("The broker returned an empty user code.")
+    user_code = start.user_code
+    if not isinstance(user_code, str) or USER_CODE_RE.fullmatch(user_code) is None:
+        # Never echo it: an unexpected code could carry terminal escapes.
+        raise AccountError(f"The broker returned a malformed user code. {_AGAIN}")
     verification_uri = _trusted(start.verification_uri, origin)
     complete_uri = _trusted(start.verification_uri_complete, origin)
     if verification_uri is None:
@@ -82,10 +89,18 @@ def login(
         )
         verification_uri = f"{origin}/device"
         complete_uri = None
+    # The pre-filled link must carry exactly the code shown here, so a
+    # hostile broker can't pre-fill a different pairing on the trusted page.
+    if complete_uri != f"{verification_uri}?code={user_code}":
+        complete_uri = None
 
-    echo(f"To log in, open:  {verification_uri}")
-    echo(f"and enter code:   {user_code}")
-    echo("Check that the code shown in the browser matches before approving.")
+    if complete_uri is not None:
+        echo(f"To log in, open:  {complete_uri}")
+    else:
+        echo(f"To log in, open:  {verification_uri}")
+        echo(f"and enter code:   {user_code}")
+    echo(f"Confirm the code shown in the browser matches: {user_code}")
+    echo("The page will ask you to type its last 4 characters before approving.")
     if open_browser and complete_uri is not None:
         try:
             browser_open(complete_uri)

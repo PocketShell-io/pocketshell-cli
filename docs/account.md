@@ -17,9 +17,9 @@ pocketshell logout
 
 ```console
 $ pocketshell login
-To log in, open:  https://app.pocketshell.io/device
-and enter code:   BCDF-GHJK
-Check that the code shown in the browser matches before approving.
+To log in, open:  https://app.pocketshell.io/device?code=BCDF-GHJK
+Confirm the code shown in the browser matches: BCDF-GHJK
+The page will ask you to type its last 4 characters before approving.
 Waiting for approval (Ctrl+C to cancel)...
 Logged in as you@example.com.
 ```
@@ -29,13 +29,21 @@ Logged in as you@example.com.
    characters). The approval page shows this label so you can tell which
    machine is asking.
 2. It prints the code and the verification URL. If a browser is available
-   and you didn't pass `--no-open`, it also opens the pre-filled URL.
-3. Sign in on the page, check that the code and label match, and approve.
+   and you didn't pass `--no-open`, it also opens the pre-filled URL. The
+   code must have the form `XXXX-XXXX`, using only the letters
+   `BCDFGHJKLMNPQRSTVWXZ` and the digits `2`-`9`. `login` refuses any other
+   code and doesn't print it.
+3. Sign in on the page, check that the code and label match what the
+   terminal shows, type the code's last 4 characters when the page asks
+   (it asks even when you opened the pre-filled link), and approve.
 4. The CLI polls at the interval the broker asks for, and adds 5 seconds
    whenever the broker answers `slow_down`. It stops with a clear message
    when you deny the request or the code expires (10 minutes). Press Ctrl+C
    to cancel cleanly (exit 130).
 5. The CLI checks the new session with `GET /cli/session` and then saves it.
+
+You can review and revoke your CLI sessions at
+<https://app.pocketshell.io/device/sessions>. `whoami` prints this link too.
 
 If you're already logged in with a session that hasn't expired, `login`
 refuses to replace it and exits 1. Run `pocketshell logout` first, or run
@@ -59,8 +67,10 @@ the same token `POST /gateway/token` mints for the app. If the broker answers
 
 ## `whoami`
 
-`whoami` prints the account, the session label, the broker and the expiry. It
-also checks the session with the broker. If the broker can't be reached, it
+`whoami` prints the account, the session label, the broker and the expiry,
+followed by the link where you can review or revoke sessions,
+<https://app.pocketshell.io/device/sessions>. It also checks the session with
+the broker. If the broker can't be reached, it
 shows the local copy and marks it `verified: no`, with a warning on stderr.
 `--json` prints:
 
@@ -126,6 +136,12 @@ session is already gone and counts as logged out.
   shows `https://app.pocketshell.io/device` and the code instead, and keeps
   waiting. A broker, including one an `.envrc` points to, can't send you to a
   look-alike approval page.
+- The pre-filled link (`verification_uri_complete`) is printed or opened only
+  when it is exactly `<verification_uri>?code=<the printed code>`. Otherwise
+  `login` prints the plain verification URL and the code, so a broker can't
+  pre-fill a different code on the trusted page than the one your terminal
+  shows. The page also makes you type the code's last 4 characters, so
+  approving always means comparing it with the terminal.
 - The gateway token from `/cli/gateway/token` must look like a JWT (three
   base64url segments with a JSON header). Its `expires_at` must fall within
   300 seconds plus 5 minutes of clock skew from now.
