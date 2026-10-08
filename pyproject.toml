@@ -216,12 +216,14 @@ dev = [
     "ruff>=0.15.0",
 ]
 # Outbound-WSS transport for hosts without inbound SSH
-# (docs/link-transport.md). `websockets` is imported lazily inside
-# `link run` / `relay serve`, so the base install never pays for it.
+# (docs/link-transport.md), and the gateway client (`gateway proxy` /
+# `gateway ssh`, docs/gateway.md). `websockets` is imported lazily inside
+# those commands, so the base install never pays for it. >= 15 because the
+# gateway client passes `proxy=None` (the kwarg appeared in 15.0).
 # Every published websockets release predates the `exclude-newer`
 # cutoff below, so adding it needs no cutoff move.
 link = [
-    "websockets>=13,<17",
+    "websockets>=15,<17",
 ]
 
 [tool.hatch.build.targets.wheel]

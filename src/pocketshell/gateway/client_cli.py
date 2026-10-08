@@ -216,4 +216,33 @@ def unpin(device_id: str) -> None:
     click.echo(f"unpinned {device_id}: {key.fingerprint} ({key.label})")
 
 
-CLIENT_COMMANDS = (devices, pin, unpin)
+@click.command("proxy")
+@click.argument("device_id", metavar="DEVICE_ID")
+@_server_options
+@click.pass_context
+def proxy(
+    ctx: click.Context,
+    device_id: str,
+    server: Optional[str],
+    insecure_dev: bool,
+    trust_gateway: Optional[str],
+) -> None:
+    """OpenSSH ProxyCommand: bridge stdin/stdout to DEVICE_ID via the gateway.
+
+    Normally started by `pocketshell gateway ssh`, not by hand. stdout
+    carries SSH bytes only; diagnostics go to stderr. Exit status: 0 clean,
+    2 usage, 3 not logged in, 4 connect/TLS failure, 5 handshake timeout,
+    6 gateway protocol violation, 7 unauthorized, 8 unknown/forbidden
+    device, 9 host offline, 10 quota, 11 connection lost.
+    """
+    from pocketshell.gateway import proxy as gateway_proxy
+
+    try:
+        gateway_endpoint.validate_device_id(device_id)
+    except gateway_endpoint.EndpointError as exc:
+        raise click.UsageError(str(exc)) from None
+    endpoint = _resolve_endpoint(server, insecure_dev, trust_gateway)
+    ctx.exit(gateway_proxy.run_proxy(device_id, endpoint, _token_provider))
+
+
+CLIENT_COMMANDS = (devices, pin, unpin, proxy)
