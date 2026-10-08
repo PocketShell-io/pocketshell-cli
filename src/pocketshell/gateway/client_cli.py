@@ -10,6 +10,7 @@ laptop (the host-side ``enroll`` / ``run`` / ``show`` wrappers live in
 from __future__ import annotations
 
 import json
+import os
 from typing import Optional
 
 import click
@@ -245,4 +246,65 @@ def proxy(
     ctx.exit(gateway_proxy.run_proxy(device_id, endpoint, _token_provider))
 
 
-CLIENT_COMMANDS = (devices, pin, unpin, proxy)
+def _exec_ssh(path: str, argv: list[str], env: dict) -> None:
+    """Replace this process with ssh (tests swap this seam)."""
+    os.execve(path, argv, env)
+
+
+@click.command("ssh")
+@click.argument("device_id", metavar="DEVICE_ID")
+@click.option("-l", "--login", "login_name", default=None, metavar="USER",
+              help="Remote user name (default: your local user name).")
+@click.option("-i", "--identity", default=None, metavar="KEYFILE",
+              help="Private key for user authentication (IdentitiesOnly is always on).")
+@_server_options
+@click.argument("extra", nargs=-1, type=click.UNPROCESSED, metavar="[-- SSH_ARGS…]")
+def ssh(
+    device_id: str,
+    login_name: Optional[str],
+    identity: Optional[str],
+    server: Optional[str],
+    insecure_dev: bool,
+    trust_gateway: Optional[str],
+    extra: tuple[str, ...],
+) -> None:
+    """SSH to an enrolled host through the gateway (client side).
+
+    Runs OpenSSH with a hardened explicit configuration: your ~/.ssh/config
+    is ignored (-F none), the host key must match the pin from
+    `pocketshell gateway pin` (StrictHostKeyChecking=yes, nothing else is
+    trusted), agent/X11 forwarding, password and keyboard-interactive
+    auth are off. After `--` only -L SPEC, -D SPEC, -N, -T, -t, -v, -q
+    and a remote command are accepted, e.g.
+
+        pocketshell gateway ssh home-lab -l me -- -N -L 8080:localhost:80
+        pocketshell gateway ssh home-lab -- uptime
+    """
+    from pocketshell.gateway import sshcmd as gateway_sshcmd
+
+    try:
+        gateway_endpoint.validate_device_id(device_id)
+    except gateway_endpoint.EndpointError as exc:
+        raise click.UsageError(str(exc)) from None
+    endpoint = _resolve_endpoint(server, insecure_dev, trust_gateway)
+    try:
+        gateway_pins.require_pin(device_id)
+        ssh_path = gateway_sshcmd.find_ssh()
+        argv = gateway_sshcmd.build_ssh_argv(
+            ssh=ssh_path,
+            device_id=device_id,
+            endpoint=endpoint,
+            pin_file=gateway_pins.pin_file_path(),
+            user=login_name,
+            identity=identity,
+            extra=extra,
+            insecure_dev=insecure_dev,
+        )
+    except gateway_pins.PinError as exc:
+        raise click.ClickException(str(exc)) from None
+    except gateway_sshcmd.SshArgsError as exc:
+        raise click.UsageError(str(exc)) from None
+    _exec_ssh(ssh_path, argv, gateway_sshcmd.ssh_environment())
+
+
+CLIENT_COMMANDS = (devices, pin, unpin, proxy, ssh)
