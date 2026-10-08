@@ -84,3 +84,34 @@ def normalize_or_none(raw: str) -> str | None:
         return validate_broker_url(raw)
     except AccountError:
         return None
+
+
+def session_broker_url(stored: str, requested: str | None = None) -> str:
+    """The ONLY URL an existing session token may be sent to: the stored one.
+
+    The session token is a 30-day credential bound to the broker that issued
+    it at login. ``$POCKETSHELL_BROKER_URL`` (easy to set by accident, or by a
+    hostile ``.envrc``) is ignored for an existing session; if it — or an
+    explicit ``requested`` URL — names a different broker, this refuses with
+    :class:`NotLoggedIn` instead of choosing either one.
+    """
+    from pocketshell.account.errors import NotLoggedIn
+
+    target = normalize_or_none(stored)
+    if target is None:
+        raise NotLoggedIn(
+            "The broker URL stored with your login is not allowed by the current "
+            "settings; run `pocketshell login`."
+        )
+    if requested is None:
+        requested = os.environ.get(ENV_BROKER_URL) or None
+        source = ENV_BROKER_URL
+    else:
+        source = "the requested broker URL"
+    if requested is not None and normalize_or_none(requested) != target:
+        raise NotLoggedIn(
+            f"{source} ({clean_text(requested, max_len=120)}) differs from the broker you "
+            f"logged in to ({clean_text(target, max_len=120)}); refusing to send your "
+            f"session to it. Unset it, or run `pocketshell login --force` for that broker."
+        )
+    return target

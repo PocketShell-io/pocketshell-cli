@@ -194,12 +194,24 @@ def test_whoami_offline_falls_back_to_local_info(fake_broker, monkeypatch) -> No
     assert "could not verify" in result.stderr
 
 
-def test_whoami_warns_when_active_broker_differs(fake_broker, monkeypatch) -> None:
+def test_whoami_does_not_send_session_to_env_broker(fake_broker, monkeypatch) -> None:
     _save(fake_broker)
     monkeypatch.setenv("POCKETSHELL_BROKER_URL", "https://other.example.com")
-    result = _invoke("whoami")
+    result = _invoke("whoami", "--json")
     assert result.exit_code == 0, result.output
-    assert "commands currently use broker https://other.example.com" in result.stderr
+    assert json.loads(result.stdout)["verified"] is False
+    assert "differs from the broker you logged in to" in result.stderr
+    assert fake_broker.requests == []
+
+
+def test_logout_with_env_broker_mismatch_deletes_without_sending(fake_broker, monkeypatch) -> None:
+    _save(fake_broker)
+    monkeypatch.setenv("POCKETSHELL_BROKER_URL", "https://other.example.com")
+    result = _invoke("logout")
+    assert result.exit_code == 0, result.output
+    assert "could not revoke" in result.stderr
+    assert fake_broker.requests == []
+    assert not store.exists()
 
 
 def test_logout_revokes_and_deletes(fake_broker) -> None:
@@ -219,9 +231,11 @@ def test_logout_revokes_and_deletes(fake_broker) -> None:
 
 def test_logout_still_deletes_when_broker_unreachable(fake_broker, monkeypatch) -> None:
     _save(fake_broker, broker_url="http://127.0.0.1:1")
+    monkeypatch.delenv("POCKETSHELL_BROKER_URL")
     result = _invoke("logout")
     assert result.exit_code == 0, result.output
     assert "could not revoke" in result.stderr
+    assert "Could not reach" in result.stderr
     assert not store.exists()
 
 

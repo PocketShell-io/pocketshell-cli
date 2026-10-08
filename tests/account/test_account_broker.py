@@ -73,10 +73,29 @@ def test_mint_on_401_raises_not_logged_in(fake_broker) -> None:
 
 
 def test_mint_never_sends_session_to_a_different_broker(fake_broker, monkeypatch) -> None:
-    _login(fake_broker, broker_url="https://other-broker.example.com")
-    with pytest.raises(NotLoggedIn, match="different PocketShell broker"):
+    """A hostile .envrc pointing POCKETSHELL_BROKER_URL elsewhere cannot steal the session."""
+    _login(fake_broker)
+    evil = []
+    monkeypatch.setattr(client, "request", lambda *a, **k: evil.append(a) or None)
+    monkeypatch.setenv("POCKETSHELL_BROKER_URL", "https://evil.example.com")
+    with pytest.raises(NotLoggedIn, match="differs from the broker you logged in to") as info:
         mint_gateway_token()
+    assert evil == []
+    assert SESSION_TOKEN not in str(info.value)
+
+
+def test_mint_explicit_mismatching_broker_url_is_refused(fake_broker) -> None:
+    _login(fake_broker)
+    with pytest.raises(NotLoggedIn, match="requested broker URL"):
+        mint_gateway_token(broker_url="https://evil.example.com")
     assert fake_broker.requests == []
+
+
+def test_mint_uses_stored_broker_when_env_is_unset(fake_broker, monkeypatch) -> None:
+    _login(fake_broker)
+    monkeypatch.delenv("POCKETSHELL_BROKER_URL")
+    assert mint_gateway_token().token == fake_broker.gateway_jwt
+    assert len(fake_broker.requests_to("/cli/gateway/token")) == 1
 
 
 def test_mint_refuses_unsafe_credentials_file(fake_broker) -> None:

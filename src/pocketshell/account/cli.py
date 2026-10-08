@@ -12,7 +12,7 @@ import time
 import click
 
 from pocketshell.account import broker, credentials, device
-from pocketshell.account.config import normalize_or_none, resolve_broker_url
+from pocketshell.account.config import resolve_broker_url, session_broker_url
 from pocketshell.account.errors import AccountError, CredentialsUnsafe, NotLoggedIn
 from pocketshell.account.sanitize import clean_text
 
@@ -66,6 +66,8 @@ def login_command(label: str | None, no_open: bool, force: bool) -> None:
             )
         creds = device.login(base, label=label, open_browser=not no_open, echo=click.echo)
         if previous is not None and previous.access_token != creds.access_token:
+            # The new login may target another broker; the old token still
+            # only ever goes to the broker stored with it.
             _revoke_quietly(previous)
         click.echo(f"Logged in as {clean_text(creds.email)}.")
     except KeyboardInterrupt:
@@ -75,14 +77,17 @@ def login_command(label: str | None, no_open: bool, force: bool) -> None:
         _fail(str(exc))
 
 
-def _revoke_quietly(creds: credentials.Credentials) -> bool:
-    target = normalize_or_none(creds.broker_url)
-    if target is None or creds.expired():
-        return False
+def _revoke_quietly(creds: credentials.Credentials) -> str | None:
+    """Revoke at the STORED broker. ``None`` on success, else why not."""
+    if creds.expired():
+        return None
     try:
-        return broker.logout(target, creds.access_token)
-    except AccountError:
-        return False
+        target = session_broker_url(creds.broker_url)
+        if broker.logout(target, creds.access_token):
+            return None
+        return "the broker did not confirm the revocation"
+    except AccountError as exc:
+        return str(exc)
 
 
 @click.command(
@@ -110,16 +115,16 @@ def logout_command() -> None:
             else:
                 click.echo("Not logged in.")
             return
-        revoked = _revoke_quietly(creds)
+        problem = _revoke_quietly(creds)
         credentials.delete()
     except KeyboardInterrupt:
         raise click.exceptions.Exit(130) from None
     except AccountError as exc:
         _fail(str(exc))
     click.echo("Logged out.")
-    if not revoked and not creds.expired():
+    if problem is not None:
         click.echo(
-            "warning: could not revoke the session on the broker; "
+            f"warning: could not revoke the session on the broker ({problem}); "
             f"it stays valid until {_when(creds.expires_at)}.",
             err=True,
         )
@@ -140,9 +145,11 @@ def whoami_command(as_json: bool) -> None:
     email, label, expires_at = creds.email, creds.label, creds.expires_at
     verified = False
     warnings: list[str] = []
-    target = normalize_or_none(creds.broker_url)
-    if target is None:
-        warnings.append("the stored broker URL is not allowed by the current settings")
+    try:
+        target = session_broker_url(creds.broker_url)
+    except NotLoggedIn as exc:
+        # Never send the session anywhere but its own broker; show local info.
+        warnings.append(f"not verified: {exc}")
     else:
         try:
             info = broker.get_session(target, creds.access_token, timeout=10)
@@ -154,15 +161,6 @@ def whoami_command(as_json: bool) -> None:
         else:
             verified = True
             email, label, expires_at = info.email, info.label, info.expires_at
-    try:
-        active = resolve_broker_url()
-    except AccountError as exc:
-        active = None
-        warnings.append(str(exc))
-    if active is not None and target != active:
-        warnings.append(
-            f"commands currently use broker {active}; run `pocketshell login` for it"
-        )
     if as_json:
         click.echo(
             json.dumps(

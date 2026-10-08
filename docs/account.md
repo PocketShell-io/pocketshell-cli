@@ -46,7 +46,12 @@ session.
 ## Commands that use the login
 
 The session token never leaves this machine except to talk to the broker
-that issued it. Other commands call
+that issued it. That broker's URL is stored with the session at login, and
+`whoami`, `logout` and every token mint use only that stored URL.
+`POCKETSHELL_BROKER_URL` is ignored for an existing session. If it is set to
+a different broker (by accident, or by a hostile `.envrc`), the command
+refuses to send the session anywhere and tells you to unset the variable or
+run `pocketshell login --force` for that broker. Other commands call
 `pocketshell.account.mint_gateway_token()` to exchange it for a broker JWT
 (`POST /cli/gateway/token`). That JWT is valid for at most 5 minutes and is
 the same token `POST /gateway/token` mints for the app. If the broker answers
@@ -65,16 +70,18 @@ shows the local copy and marks it `verified: no`, with a warning on stderr.
 ```
 
 When you're not logged in, `whoami --json` prints `{"logged_in": false}` and
-exits 1. `whoami` also warns when `POCKETSHELL_BROKER_URL` now points to a
-different broker than the one you logged in to. Gateway commands refuse to
-send the session to that other broker.
+exits 1. When `POCKETSHELL_BROKER_URL` points to a different broker than the
+one you logged in to, `whoami` doesn't contact any broker. It shows the local
+copy as `verified: no` and prints a warning.
 
 ## `logout`
 
 `logout` revokes the session on the broker (`POST /cli/logout`, best effort)
 and deletes the credentials file. If the broker can't be reached, the file
 is still deleted, and a warning says how long the session stays valid on
-the server.
+the server. The same happens when `POCKETSHELL_BROKER_URL` names a different
+broker: the session isn't sent there. A `401` from the broker means the
+session is already gone and counts as logged out.
 
 ## Credentials file
 
@@ -122,7 +129,7 @@ the server.
 
 | Variable | Meaning |
 | --- | --- |
-| `POCKETSHELL_BROKER_URL` | Broker base URL (default: the production broker). Must be `https://` with no credentials, query or fragment. |
+| `POCKETSHELL_BROKER_URL` | Broker base URL for `login` (default: the production broker). Must be `https://` with no credentials, query or fragment. An existing session always uses the broker stored with it, and the command refuses to run when this variable names a different one. |
 | `POCKETSHELL_BROKER_INSECURE_DEV=1` | Development and tests only: also allows `http://` when the host is loopback (`127.0.0.0/8`, `::1`, `localhost`). |
 
 ## Exit codes
