@@ -218,6 +218,27 @@ wait_windows_child=tested_helper.wait_windows_child
 """
 
 
+def _console_diagnostic_script():
+    """Stdlib-only console snapshot; observation cannot send an event."""
+    return """
+import ctypes,os,json,pathlib
+from ctypes import wintypes
+k=ctypes.WinDLL('kernel32',use_last_error=True)
+k.GetConsoleWindow.argtypes=[]; k.GetConsoleWindow.restype=wintypes.HWND
+k.GetConsoleProcessList.argtypes=[ctypes.POINTER(wintypes.DWORD),wintypes.DWORD]; k.GetConsoleProcessList.restype=wintypes.DWORD
+def console_snapshot():
+    ctypes.set_last_error(0)
+    hwnd=k.GetConsoleWindow()
+    window_error=ctypes.get_last_error()
+    members=(wintypes.DWORD*16)()
+    ctypes.set_last_error(0)
+    count=k.GetConsoleProcessList(members,len(members))
+    list_error=ctypes.get_last_error()
+    return {'pid':os.getpid(),'hwnd':int(hwnd or 0),'windowError':window_error,
+            'count':count,'members':list(members[:min(count,len(members))]),'listError':list_error}
+"""
+
+
 @NATIVE
 def test_native_console_cancellation_reaps_child(tmp_path):
     import signal
@@ -228,11 +249,13 @@ def test_native_console_cancellation_reaps_child(tmp_path):
     witness = tmp_path / "break-delivered"
     membership_file = tmp_path / "owned-console-membership.json"
     ready_file = tmp_path / "wrapper-ready-pid"
+    wrapper_console_file = tmp_path / "wrapper-console.json"
+    emitter_diagnostic_file = tmp_path / "emitter-diagnostic.json"
     base = _verified_direct_base_python()
     child = f"import os,time,signal,pathlib,json; signal.signal(signal.SIGBREAK,signal.SIG_IGN); p=pathlib.Path({str(pid_file)!r}); q=p.with_suffix('.tmp'); q.write_text(json.dumps({{'pid':os.getpid(),'parentPid':os.getppid()}})); q.replace(p); time.sleep(60)"
     # Observe the production handler's invocation, not just Generate's success.
     # The handler itself still owns the cancellation state and child cleanup.
-    wrapper = _trusted_helper_import_script() + f"""
+    wrapper = _trusted_helper_import_script() + _console_diagnostic_script() + f"""
 import os,signal,pathlib
 original=signal.signal
 def observed(signum,handler):
@@ -243,6 +266,7 @@ def observed(signum,handler):
         return original(signum,delivered)
     return original(signum,handler)
 signal.signal=observed
+pathlib.Path({str(wrapper_console_file)!r}).write_text(json.dumps(console_snapshot()))
 pathlib.Path({str(ready_file)!r}).write_text(str(os.getpid()))
 wait_windows_child([{base!r},'-I','-c',{child!r}])
 """
@@ -266,6 +290,8 @@ wait_windows_child([{base!r},'-I','-c',{child!r}])
             time.sleep(0.01)
         assert pid_file.exists(), "child never reached ready state"
         assert int(ready_file.read_text()) == proc.pid
+        wrapper_console = json.loads(wrapper_console_file.read_text())
+        assert wrapper_console['pid'] == proc.pid
         child_ready = json.loads(pid_file.read_text())
         assert child_ready['parentPid'] == proc.pid
         audit_child_pid = child_ready['pid']
@@ -275,32 +301,90 @@ wait_windows_child([{base!r},'-I','-c',{child!r}])
         # Attach a separate hidden emitter ONLY to this audit-owned console.
         # NEW_PROCESS_GROUP is ignored with NEW_CONSOLE, so use group0 only
         # after verifying ALL console members belong to this private fixture.
-        emitter = f"""
-import ctypes,os,json,pathlib
-from ctypes import wintypes
-k=ctypes.WinDLL('kernel32',use_last_error=True)
-handler_type=ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.DWORD)
-ignore=handler_type(lambda event: True)
+        emitter = _console_diagnostic_script() + f"""
 k.AttachConsole.argtypes=[wintypes.DWORD]; k.AttachConsole.restype=wintypes.BOOL
-k.SetConsoleCtrlHandler.argtypes=[handler_type,wintypes.BOOL]; k.SetConsoleCtrlHandler.restype=wintypes.BOOL
 k.GenerateConsoleCtrlEvent.argtypes=[wintypes.DWORD,wintypes.DWORD]; k.GenerateConsoleCtrlEvent.restype=wintypes.BOOL
 k.GetConsoleProcessList.argtypes=[ctypes.POINTER(wintypes.DWORD),wintypes.DWORD]; k.GetConsoleProcessList.restype=wintypes.DWORD
 k.FreeConsole.argtypes=[]; k.FreeConsole.restype=wintypes.BOOL
-assert k.AttachConsole({proc.pid}), 'AttachConsole failed'
+diagnostic={{'wrapper':{proc.pid},'auditChild':{audit_child_pid},'beforeAttach':console_snapshot()}}
+def save_diagnostic():
+    pathlib.Path({str(emitter_diagnostic_file)!r}).write_text(json.dumps(diagnostic))
+def attach_owned():
+    ctypes.set_last_error(0)
+    ok=k.AttachConsole({proc.pid})
+    error=ctypes.get_last_error()
+    return {{'ok':bool(ok),'error':error,'snapshot':console_snapshot()}}
+diagnostic['firstAttach']=attach_owned()
+save_diagnostic()
+if not diagnostic['firstAttach']['ok'] and diagnostic['firstAttach']['error']==5:
+    # ERROR_ACCESS_DENIED means this emitter already has a console.
+    # Detach ONLY this process; refuse even self-detach from a shared console.
+    before=diagnostic['beforeAttach']
+    assert before['count']==1 and before['members']==[os.getpid()], 'Emitter initial console is not exclusively owned; refusing detach: '+json.dumps(diagnostic)
+    ctypes.set_last_error(0)
+    detached=k.FreeConsole()
+    detach_error=ctypes.get_last_error()
+    diagnostic['selfDetach']={{'ok':bool(detached),'error':detach_error,'snapshot':console_snapshot()}}
+    save_diagnostic()
+    assert detached, 'Emitter-only FreeConsole failed: '+json.dumps(diagnostic)
+    diagnostic['retryAttach']=attach_owned()
+    save_diagnostic()
+attached=diagnostic.get('retryAttach',diagnostic['firstAttach'])
+assert attached['ok'], 'AttachConsole exact owned wrapper failed: '+json.dumps(diagnostic)
 try:
-    assert k.SetConsoleCtrlHandler(ignore,True), 'Emitter handler failed'
+    import threading,time,signal
+    # AttachConsole/FreeConsole reset the handler list. Construct and register
+    # this strongly referenced callback only AFTER the final successful attach.
+    callback_ack=threading.Event()
+    def acknowledge_break(event):
+        if event==1:
+            callback_ack.set()
+        return True
+    handler_type=ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.DWORD)
+    ignore=handler_type(acknowledge_break)
+    k.SetConsoleCtrlHandler.argtypes=[handler_type,wintypes.BOOL]; k.SetConsoleCtrlHandler.restype=wintypes.BOOL
+    ctypes.set_last_error(0)
+    registered=k.SetConsoleCtrlHandler(ignore,True)
+    register_error=ctypes.get_last_error()
+    diagnostic['handlerRegistered']={{'ok':bool(registered),'error':register_error}}
+    save_diagnostic()
+    assert registered, 'Emitter handler failed: '+json.dumps(diagnostic)
     members=(wintypes.DWORD*16)()
     count=k.GetConsoleProcessList(members,len(members))
     expected={{{proc.pid},{audit_child_pid},os.getpid()}}
-    assert count==3 and set(members[:count])==expected, 'Console contains unexpected processes; refusing broadcast'
+    diagnostic['beforeBroadcast']=console_snapshot()
+    save_diagnostic()
+    assert count==3 and set(members[:count])==expected, 'Console contains unexpected processes; refusing broadcast: '+json.dumps(diagnostic)
+    assert diagnostic['beforeBroadcast']['count']==3 and set(diagnostic['beforeBroadcast']['members'])==expected, 'Console membership changed; refusing broadcast: '+json.dumps(diagnostic)
     pathlib.Path({str(membership_file)!r}).write_text(json.dumps({{'wrapper':{proc.pid},'auditChild':{audit_child_pid},'emitter':os.getpid(),'members':sorted(expected)}}))
-    assert k.GenerateConsoleCtrlEvent(1,0), 'Private owned-console CTRL_BREAK generation failed'
+    ctypes.set_last_error(0)
+    generated=k.GenerateConsoleCtrlEvent(1,0)
+    generate_error=ctypes.get_last_error()
+    diagnostic['generated']={{'ok':bool(generated),'error':generate_error}}
+    save_diagnostic()
+    assert generated, 'Private owned-console CTRL_BREAK generation failed: '+json.dumps(diagnostic)
+    # Delivery is asynchronous. Keep the emitter attached and its callback
+    # alive until BOTH actual wrapper delivery and emitter callback acknowledge.
+    deadline=time.monotonic()+5
+    delivered=False
+    while time.monotonic()<deadline:
+        ack_file=pathlib.Path({str(witness)!r})
+        delivered=ack_file.exists() and ack_file.read_text()==str(signal.SIGBREAK)
+        if delivered and callback_ack.is_set():
+            break
+        time.sleep(0.01)
+    diagnostic['deliveryAck']={{'wrapper':delivered,'emitterCallback':callback_ack.is_set()}}
+    save_diagnostic()
+    assert delivered and callback_ack.is_set(), 'CTRL_BREAK delivery acknowledgement missing: '+json.dumps(diagnostic)
+    # Give the acknowledged callback thread time to return before self-detach.
+    time.sleep(0.1)
 finally:
     k.FreeConsole()
 """
         emitted = subprocess.run([base, "-I", "-c", emitter], capture_output=True,
-                                 timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
-        assert emitted.returncode == 0, emitted.stderr
+                                 timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+        diagnostic = emitter_diagnostic_file.read_text() if emitter_diagnostic_file.exists() else "missing emitter diagnostic"
+        assert emitted.returncode == 0, f"wrapperConsole={wrapper_console}; emitter={diagnostic}; stderr={emitted.stderr[:4096]!r}"
         membership = json.loads(membership_file.read_text())
         assert membership['wrapper'] == proc.pid
         assert membership['auditChild'] == audit_child_pid
