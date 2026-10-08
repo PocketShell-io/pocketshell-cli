@@ -53,7 +53,8 @@ def test_default_server_is_production_wss():
     assert DEFAULT_SERVER == "wss://gateway.pocketshell.io"
     assert ep.ws_base == "wss://gateway.pocketshell.io"
     assert ep.http_base == "https://gateway.pocketshell.io"
-    assert ep.is_default
+    assert ep.is_production
+    assert ep.warning == ""
     assert ep.client_ssh_url("home-lab") == (
         "wss://gateway.pocketshell.io/api/v1/hosts/home-lab/ssh"
     )
@@ -69,10 +70,33 @@ def test_default_server_is_production_wss():
         ("wss://[2001:db8::1]:443", "wss://[2001:db8::1]:443"),
     ],
 )
-def test_tls_servers_resolve(server, ws_base):
-    ep = resolve_endpoint(server, False)
+def test_tls_servers_resolve_only_with_explicit_trust(server, ws_base):
+    host = ws_base.split("//")[1].rsplit(":", 1)[0] if "]" not in ws_base else "2001:db8::1"
+    with pytest.raises(EndpointError, match="--trust-gateway"):
+        resolve_endpoint(server, False)
+    with pytest.raises(EndpointError, match="--trust-gateway"):
+        resolve_endpoint(server, False, trust_gateway="other.example")
+    ep = resolve_endpoint(server, False, trust_gateway=host)
     assert ep.ws_base == ws_base
-    assert not ep.is_default
+    assert not ep.is_production
+
+
+def test_trust_gateway_matches_canonically():
+    ep = resolve_endpoint("wss://GW.example.", False, trust_gateway="gw.EXAMPLE")
+    assert ep.host == "gw.example"
+    # a suffix/prefix is not a match
+    with pytest.raises(EndpointError):
+        resolve_endpoint("wss://evil-gw.example", False, trust_gateway="gw.example")
+
+
+def test_production_alias_needs_no_trust_flag():
+    assert resolve_endpoint("wss://relay.pocketshell.io", False).is_production
+    assert resolve_endpoint("https://GATEWAY.pocketshell.io.:443", False).is_production
+
+
+def test_idna_hosts_are_encoded():
+    ep = resolve_endpoint("wss://bücher.example", False, trust_gateway="xn--bcher-kva.example")
+    assert ep.host == "xn--bcher-kva.example"
 
 
 @pytest.mark.parametrize(
@@ -82,13 +106,22 @@ def test_tls_servers_resolve(server, ws_base):
         "http://localhost:8080",
         "ws://[::1]:8080",
         "ws://gateway:8080",  # docker-compose service name
-        "ws://lab.localhost",
     ],
 )
 def test_plain_ws_needs_insecure_dev_and_a_lab_host(server):
+    from pocketshell.gateway.endpoint import canonical_host, normalize_host
+
+    host = normalize_host(canonical_host(server))
     with pytest.raises(EndpointError, match="--insecure-dev"):
-        resolve_endpoint(server, False)
-    assert resolve_endpoint(server, True).ws_base.startswith("ws://")
+        resolve_endpoint(server, False, trust_gateway=host)
+    with pytest.raises(EndpointError, match="--trust-gateway"):
+        resolve_endpoint(server, True)
+    ep = resolve_endpoint(server, True, trust_gateway=host)
+    assert ep.ws_base.startswith("ws://")
+    if host == "gateway":
+        assert "CLEARTEXT" in ep.warning
+    else:
+        assert ep.warning == ""
 
 
 @pytest.mark.parametrize(
@@ -99,11 +132,14 @@ def test_plain_ws_needs_insecure_dev_and_a_lab_host(server):
         "ws://lab.example.com",  # routed DNS name: cleartext token on a network
         "ws://192.168.1.10:8080",
         "ws://10.0.0.1",
+        "ws://lab.localhost",
     ],
 )
 def test_insecure_dev_never_allows_cleartext_to_routed_hosts(server):
-    with pytest.raises(EndpointError):
-        resolve_endpoint(server, True)
+    from pocketshell.gateway.endpoint import canonical_host
+
+    with pytest.raises(EndpointError, match="cleartext"):
+        resolve_endpoint(server, True, trust_gateway=canonical_host(server))
 
 
 @pytest.mark.parametrize(
@@ -125,8 +161,23 @@ def test_insecure_dev_never_allows_cleartext_to_routed_hosts(server):
         "wss://gw .example",
         "wss://gw.example\n",
         "wss://",
+        "wss://gw.example?",
+        "wss://gw.example#",
+        "wss://[fe80::1%25eth0]",
+        "wss://gw_under.example",
+        "wss://gw.example;id",
+        "wss://gw.example|id",
+        "wss://-gw.example",
+        "wss://" + "a" * 64 + ".example",
+        "wss://gw\u202e.example",
     ],
 )
 def test_malformed_or_hostile_servers_are_refused(server):
+    from pocketshell.gateway.endpoint import canonical_host
+
+    try:
+        trust = canonical_host(server)
+    except EndpointError:
+        trust = None
     with pytest.raises(EndpointError):
-        resolve_endpoint(server, True)
+        resolve_endpoint(server, True, trust_gateway=trust)
