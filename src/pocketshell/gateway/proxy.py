@@ -28,6 +28,7 @@ Security posture (the gateway is NOT trusted with the session):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import ssl
 import sys
@@ -179,6 +180,14 @@ def _exit_for_close(exc: BaseException, default: int) -> ProxyExit:
     return ProxyExit(default, f"gateway closed the connection (code {code})")
 
 
+# The websockets library logs connection errors (which can quote peer
+# data) through its logger; with no handler configured Python would fall
+# back to printing them on stderr unsanitized. Route them nowhere.
+_WS_LOGGER = logging.getLogger("pocketshell.gateway.proxy.websockets")
+_WS_LOGGER.addHandler(logging.NullHandler())
+_WS_LOGGER.propagate = False
+
+
 def _ssl_context() -> ssl.SSLContext:
     ctx = ssl.create_default_context()  # CERT_REQUIRED + hostname checking
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -201,6 +210,7 @@ def _connect(url: str, *, secure: bool, timeout: float):
         # Never via an environment-configured proxy: the token goes to the
         # gateway the user named and nowhere else (websockets >= 15).
         proxy=None,
+        logger=_WS_LOGGER,
     )
     return connect(url, **kwargs)
 

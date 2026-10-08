@@ -154,6 +154,9 @@ def _run_helper(argv: Sequence[str], ctx: click.Context) -> None:
     help=(
         "Gateway host agent: enroll this host and hold the reverse tunnel "
         "to the SSH gateway (hosts without inbound SSH).\n\n"
+        "Client side (on the machine you connect from): `devices`, `pin`, "
+        "`unpin`, `ssh` (and `proxy`, its ProxyCommand) reach an enrolled "
+        "host with OpenSSH after `pocketshell login`.\n\n"
         "Wraps the Go `pocketshell-link` helper, which must be installed "
         "separately (build it from the private pocketshell-gateway repo, "
         "https://github.com/PocketShell-io/pocketshell-gateway). "
