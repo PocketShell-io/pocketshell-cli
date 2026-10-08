@@ -106,7 +106,10 @@ else:
         "agent-log", "repos", "github", "env", "hooks", "logs", "prune-attachments",
         "push", "serve", "link", "relay", "workspaces",
     ):
-        cli.add_command(click.Command(_name, callback=click.pass_context(_unsupported_windows)))
+        cli.add_command(click.Command(
+            _name, callback=click.pass_context(_unsupported_windows),
+            context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+        ))
     cli.add_command(gateway_group, name="gateway")
 
 # Account device-flow login (docs/account.md). The stored CLI session only
