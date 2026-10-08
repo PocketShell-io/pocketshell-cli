@@ -122,8 +122,11 @@ def forbid_helper_launch(monkeypatch):
     monkeypatch.setattr(gateway_helper, "resolve_helper", _refuse)
 
 
-# --- client side: a fake `pocketshell.account` (the real one lands on another
-# branch; the gateway client imports it lazily against this exact contract).
+# --- client side: a fake `pocketshell.account` for in-process unit tests of the
+# gateway client's error mapping (the gateway imports it lazily against this
+# exact contract). The end-to-end suites (test_gateway_connect_e2e.py,
+# test_gateway_enroll_login.py) use the real account module against
+# tests/fake_broker.py instead.
 
 FAKE_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJlLWZha2U"
 
