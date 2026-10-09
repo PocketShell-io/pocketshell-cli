@@ -165,3 +165,19 @@ def test_elevated_caller_children_are_refused(layout, tmp_path):
     api = win.WindowsApi()
     with pytest.raises(ServiceError, match="ordinary, same-session token"):  # checked before the job
         api.spawn_hidden([os.environ["POCKETSHELL_TEST_FAKE_LINK"], "version", "--json"], str(tmp_path), None)
+
+
+def test_process_identity_is_tri_state():
+    """absent only when proven; our own process is present with its image."""
+    import subprocess
+    import sys
+
+    api = win.WindowsApi()
+    me = api.process_identity(os.getpid())
+    assert me["state"] == "present" and win._same_path(me["image"], sys.executable)
+    assert me["birth"] == api.process_birth(os.getpid())
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()  # Popen still holds the handle: an exited, unreaped process object
+    assert api.process_identity(child.pid)["state"] == "absent"
+    # the System process (pid 4) exists but its image is not ours to read
+    assert api.process_identity(4)["state"] in ("present", "unknown")

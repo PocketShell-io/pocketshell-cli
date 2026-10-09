@@ -60,9 +60,10 @@ OPERATION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 
 class AgentError(ServiceError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, recovery: Optional[dict] = None):
         super().__init__(message)
         self.code = code
+        self.recovery = recovery
 
 
 # --- private state -----------------------------------------------------------------
@@ -256,45 +257,88 @@ def _guardian_launch() -> Optional[dict]:
     return meta if isinstance(meta, dict) else None
 
 
-def _launch_alive(meta, image, api) -> bool:
-    """True iff the recorded pid still has the recorded birth AND image."""
+ALIVE, GONE, UNKNOWN = "alive", "gone", "unknown"
+
+
+def _identity_state(meta, image, api) -> str:
+    """alive / gone / unknown for a recorded exact identity. GONE only when
+    PROVEN: the pid is absent (or exited), or it now has a DIFFERENT birth
+    (pid reused). Any query failure (access denied, image unreadable, ...) is
+    UNKNOWN and never releases custody."""
     from pocketshell.gateway import service_windows as win
 
     if not meta or type(meta.get("pid")) is not int or not isinstance(meta.get("creationFILETIME"), str):
-        return False
-    return api.process_birth(meta["pid"]) == meta["creationFILETIME"] and \
-        win._same_path(api.process_image(meta["pid"]), image)
+        return GONE  # a malformed record names no process
+    try:
+        ident = api.process_identity(meta["pid"])
+    except Exception:  # noqa: BLE001 - unverifiable
+        return UNKNOWN
+    if ident.get("state") == "absent":
+        return GONE
+    if ident.get("state") != "present" or not isinstance(ident.get("birth"), str):
+        return UNKNOWN
+    if ident["birth"] != meta["creationFILETIME"]:
+        return GONE  # proven pid reuse
+    if not isinstance(ident.get("image"), str) or not win._same_path(ident["image"], image):
+        return UNKNOWN  # same birth but the image cannot be confirmed
+    return ALIVE
+
+
+def _launch_alive(meta, image, api) -> bool:
+    return _identity_state(meta, image, api) == ALIVE
 
 
 def _record_launch(name, meta, image, api) -> None:
-    """Persist custody; if that fails, end the exact child we just started."""
+    """Persist custody. If that fails, end the exact child; if ending it is
+    not PROVEN, keep a recovery identity (alternate private file + the JSON
+    error) and fail honestly."""
     try:
         _write_private(_path(name), json.dumps(meta).encode())
-    except Exception as exc:
+        return
+    except Exception as exc:  # noqa: BLE001
+        cause = exc
+    try:
         api.terminate_exact(meta["pid"], meta["creationFILETIME"], image)
-        raise AgentError("error", f"cannot record the launch of {meta['pid']}; the child was ended: {exc}") from None
+    except Exception:  # noqa: BLE001 - judged by the re-read below
+        pass
+    if _identity_state(meta, image, api) == GONE:
+        raise AgentError("launch-unrecorded", f"cannot record the launch of {meta['pid']} ({cause}); "
+                         "the child was ended (proven absent)") from None
+    recovery = {"pid": meta["pid"], "creationFILETIME": meta["creationFILETIME"], "image": image,
+                "record": name}
+    where = "the recovery identity is only in this error"
+    try:
+        stem = name.rsplit(".", 1)[0]
+        _write_private(_path(f"recovery-{stem}-{meta['pid']}.json"), json.dumps(recovery).encode())
+        where = f"recovery-{stem}-{meta['pid']}.json keeps the identity"
+    except Exception:  # noqa: BLE001
+        pass
+    raise AgentError("launch-unrecorded", f"cannot record the launch of {meta['pid']} ({cause}) and could not "
+                     f"prove it ended; it may still be running; {where}", recovery=recovery) from None
 
 
 def _release_custody(name, meta, image, api, errors, what) -> None:
-    """End the exact recorded process (if alive) and re-read its identity:
-    gone or pid reused => release the record; still alive / unverifiable =>
+    """End the exact recorded process and re-read its identity: PROVEN gone
+    (absent / pid reused) => release the record; alive or unverifiable =>
     keep it and fail."""
     if meta is None:
         return
-    if not (type(meta.get("pid")) is int and isinstance(meta.get("creationFILETIME"), str)):
-        _delete(_path(name))  # malformed: names no process
-        return
-    if _launch_alive(meta, image, api):
-        api.terminate_exact(meta["pid"], meta["creationFILETIME"], image)
     try:
-        still = _launch_alive(meta, image, api)
-    except Exception:  # noqa: BLE001 - inaccessible = unverifiable
-        still = True
-    if still:
-        errors.append(f"the {what} process {meta['pid']} (birth {meta['creationFILETIME']}) is still running; "
-                      "its identity is retained for a retry")
-    else:
+        state = _identity_state(meta, image, api)
+        if state == GONE:
+            _delete(_path(name))
+            return
+        if state == ALIVE:
+            api.terminate_exact(meta["pid"], meta["creationFILETIME"], image)
+        state = _identity_state(meta, image, api)
+    except Exception:  # noqa: BLE001 - unverifiable
+        state = UNKNOWN
+    if state == GONE:
         _delete(_path(name))
+        return
+    detail = "is still running" if state == ALIVE else "cannot be verified (it may still be running)"
+    errors.append(f"the {what} process {meta['pid']} (birth {meta['creationFILETIME']}) {detail}; "
+                  "its identity is retained for a retry")
 
 
 def _launch(meta) -> Optional[dict]:
@@ -355,16 +399,17 @@ def _endpoint_status(m, host_key, api, runner, session: int) -> dict:
     out["launch"] = _launch(meta)
     out["guardianLaunch"] = None if not meta else {
         "pid": meta.get("pid"), "creationFILETIME": meta.get("creationFILETIME"),
-        "running": _launch_alive(meta, m.python, api)}
+        "running": {ALIVE: True, GONE: False}.get(_identity_state(meta, m.python, api))}
     if not ready["ok"] and ready.get("pid") and api.process_birth(ready["pid"]) is None \
             and not api.listener_pids(m.port):
         out["state"] = "stopped"
-    if out["state"] == "stopped" and out["guardianLaunch"] and out["guardianLaunch"]["running"]:
+    if out["state"] == "stopped" and out["guardianLaunch"] and out["guardianLaunch"]["running"] is not False:
         # never infer "no runtime" from an absent CURRENT/READY: our launched
         # guardian is alive
         out["state"] = "not-ready"
-        out["problems"] = [*out["problems"], f"the launched guardian {meta['pid']} is running without a "
-                                            "current READY"]
+        out["problems"] = [*out["problems"], f"the launched guardian {meta['pid']} is "
+                                            + ("running" if out["guardianLaunch"]["running"] else "unverifiable")
+                                            + " without a current READY"]
     return out
 
 
@@ -380,7 +425,9 @@ def _document(operation_id, *, state: str, binding=None, owner=None, endpoint=No
             k: binding[k] for k in ("manifest", "manifestSHA256", "deviceId", "port", "configDir")},
         "endpoint": endpoint,
         "outbound": outbound,
-        "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600)},
+        "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600),
+                                             **({"recovery": error.recovery}
+                                                if getattr(error, "recovery", None) else {})},
     }
 
 
@@ -446,7 +493,13 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
             previous = endpoint.get("generation")
             if api.listener_pids(m.port):
                 raise AgentError("port-busy", f"127.0.0.1:{m.port} is served by another process; not starting")
-            if not _launch_alive(_guardian_launch(), m.python, api):
+            held = _guardian_launch()
+            held_state = _identity_state(held, m.python, api) if held else GONE
+            if held_state == UNKNOWN:
+                raise AgentError("custody-unverifiable",
+                                 f"the launched guardian {held.get('pid')} cannot be verified (it may still be "
+                                 "running); not starting a second one; retry or stop")
+            if held_state != ALIVE:
                 launch = _spawn(api, [m.python, *ep.BOOTSTRAP_FLAGS, m.guardian, "--manifest", m.path],
                                 m.root, dict(m.environment))
                 _record_launch("guardian.json", launch, m.python, api)  # custody BEFORE any wait

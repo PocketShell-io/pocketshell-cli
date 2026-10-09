@@ -661,6 +661,45 @@ class WindowsApi:
         finally:
             k.CloseHandle(handle)
 
+    def process_identity(self, pid: int) -> dict:
+        """Tri-state identity for custody decisions:
+        {"state": "absent"} only when PROVEN (OpenProcess -> ERROR_INVALID_PARAMETER,
+        i.e. no such pid, or the process has exited); {"state": "present", birth,
+        image (None if unreadable)}; {"state": "unknown"} on any other failure
+        (access denied, query failure). Unknown never means gone."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.restype = w.HANDLE
+        k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        k.GetProcessTimes.argtypes = [w.HANDLE] + [c.POINTER(w.FILETIME)] * 4
+        k.GetExitCodeProcess.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
+        k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        unknown = {"state": "unknown", "birth": None, "image": None}
+        handle = k.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            if c.get_last_error() == 87:  # ERROR_INVALID_PARAMETER: no such process
+                return {"state": "absent", "birth": None, "image": None}
+            return unknown
+        try:
+            times = [w.FILETIME() for _ in range(4)]
+            if not k.GetProcessTimes(handle, *[c.byref(t) for t in times]):
+                return unknown
+            birth = str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime)
+            code = w.DWORD()
+            if not k.GetExitCodeProcess(handle, c.byref(code)):
+                return {"state": "unknown", "birth": birth, "image": None}
+            if code.value != 259:  # exited (an unreaped object): the recorded process is gone
+                return {"state": "absent", "birth": birth, "image": None, "exited": True}
+            buf = c.create_unicode_buffer(32768)
+            size = w.DWORD(32768)
+            image = buf.value if k.QueryFullProcessImageNameW(handle, 0, buf, c.byref(size)) else None
+            return {"state": "present", "birth": birth, "image": image}
+        finally:
+            k.CloseHandle(handle)
+
     def current_session(self) -> int:
         """This process's Terminal Services session id (observed, never assumed)."""
         import ctypes as c

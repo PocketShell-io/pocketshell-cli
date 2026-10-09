@@ -82,8 +82,26 @@ class AgentApi(EndpointApi):
         self.images[pid] = argv[0]
         return {"pid": pid, "creationFILETIME": self.births[pid], **job}
 
+    denied_birth = frozenset()   # pids whose birth query is denied (unverifiable)
+    denied_image = frozenset()   # pids whose image query is denied (unverifiable)
+
+    def process_birth(self, pid):
+        return None if pid in self.denied_birth else self.births.get(pid)
+
+    def process_image(self, pid):
+        return None if pid in self.denied_image else self.images.get(pid)
+
+    def process_identity(self, pid):
+        """Tri-state, as WindowsApi.process_identity: absent is PROVEN only."""
+        if pid in self.denied_birth:
+            return {"state": "unknown", "birth": None, "image": None}
+        if pid not in self.births:
+            return {"state": "absent", "birth": None, "image": None}
+        image = None if pid in self.denied_image else self.images.get(pid)
+        return {"state": "present", "birth": self.births[pid], "image": image}
+
     def terminate_exact(self, pid, birth, image):
-        if self.terminate_fails:
+        if self.terminate_fails or pid in self.denied_birth or pid in self.denied_image:
             return False  # e.g. access denied / wait timeout: the process stays alive
         if self.births.get(pid) != birth or not win._same_path(self.images.get(pid), image):
             return False
@@ -430,3 +448,86 @@ def test_start2_restart_reuses_live_launched_guardian(agent):
     assert result.exit_code == 5
     assert [s for s in agent["api"].spawns if s["argv"][0] == PYTHON] == guardians, "no second guardian"
     assert _guardian_launch(agent) == launch
+
+
+# --- root review of 5a50: unverifiable is not absent; record-write failure -------------
+
+
+@pytest.mark.parametrize("denied", ["denied_birth", "denied_image"])
+def test_u1_unverifiable_guardian_is_retained_and_stop_fails(agent, denied):
+    bind()
+    agent["g"].ready_on_run = False
+    run("start", "--json", "--timeout", "0.2")
+    launch = _guardian_launch(agent)
+    setattr(agent["api"], denied, frozenset({launch["pid"]}))
+    result, data = run("stop", "--json")
+    assert result.exit_code == 1 and data["state"] == "failed", data
+    assert str(launch["pid"]) in data["error"]["message"]
+    assert _guardian_launch(agent) == launch, "unverifiable custody must be retained"
+    setattr(agent["api"], denied, frozenset())
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and _guardian_launch(agent) is None
+
+
+@pytest.mark.parametrize("denied", ["denied_birth", "denied_image"])
+def test_u1_unverifiable_link_is_retained_and_stop_fails(agent, denied):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    bind()
+    run("start", "--json")
+    setattr(agent["api"], denied, frozenset({9000}))
+    result, data = run("stop", "--json")
+    assert result.exit_code == 1 and data["state"] == "failed"
+    assert os.path.exists(agent_mod._path("link.json"))
+    setattr(agent["api"], denied, frozenset())
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and not os.path.exists(agent_mod._path("link.json"))
+
+
+def test_u1_unverifiable_launched_guardian_blocks_a_second_spawn(agent):
+    bind()
+    agent["g"].ready_on_run = False
+    run("start", "--json", "--timeout", "0.2")
+    launch = _guardian_launch(agent)
+    agent["api"].denied_birth = frozenset({launch["pid"]})
+    n = len(agent["api"].spawns)
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert result.exit_code == 1 and data["error"]["code"] == "custody-unverifiable"
+    assert len(agent["api"].spawns) == n
+
+
+def test_u2_record_write_and_termination_both_fail_keep_a_recovery_identity(agent, monkeypatch):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    bind()
+    real = agent_mod._write_private
+
+    def failing(path, data):
+        if path.endswith("guardian.json"):
+            raise OSError("disk full")
+        return real(path, data)
+
+    monkeypatch.setattr(agent_mod, "_write_private", failing)
+    agent["api"].terminate_fails = True
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert result.exit_code == 1 and data["error"]["code"] == "launch-unrecorded"
+    rec = data["error"]["recovery"]
+    pid = rec["pid"]
+    assert rec == {"pid": pid, "creationFILETIME": agent["api"].births[pid], "image": PYTHON,
+                   "record": "guardian.json"}
+    assert "was ended" not in data["error"]["message"]
+    saved = json.loads(agent_mod._read_private(agent_mod._path(f"recovery-guardian-{pid}.json")))
+    assert saved == rec
+
+
+def test_u2_record_write_fails_but_termination_proven(agent, monkeypatch):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    bind()
+    real = agent_mod._write_private
+    monkeypatch.setattr(agent_mod, "_write_private",
+                        lambda p, d: (_ for _ in ()).throw(OSError("disk full")) if p.endswith("guardian.json")
+                        else real(p, d))
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert result.exit_code == 1 and data["error"]["code"] == "launch-unrecorded"
+    assert "was ended" in data["error"]["message"] and data["error"].get("recovery") is None
