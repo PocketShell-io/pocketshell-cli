@@ -120,6 +120,7 @@ jobs:
           tests/gateway/test_windows_sshcmd.py
           tests/gateway/test_gateway_proxy.py
           tests/gateway/test_gateway_service.py
+          tests/gateway/test_gateway_service_endpoint.py
 
       # `pocketshell gateway service` against the REAL Task Scheduler of
       # this disposable runner: a fake pocketshell-link.exe (Go, built
@@ -138,6 +139,8 @@ jobs:
         run: |
           go build -o "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" ./tests/gateway/fakelink/main.go
           "POCKETSHELL_TEST_FAKE_LINK=$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" >> $env:GITHUB_ENV
+          go build -o "$env:RUNNER_TEMP\fakeguardian\guardian.exe" ./tests/gateway/fakeguardian/main.go
+          "POCKETSHELL_TEST_FAKE_GUARDIAN=$env:RUNNER_TEMP\fakeguardian\guardian.exe" >> $env:GITHUB_ENV
 
       - name: Windows gateway service (real scheduled task)
         env:

@@ -54,10 +54,22 @@ func main() {
 			fmt.Fprintln(os.Stderr, "fake: not enrolled")
 			os.Exit(1)
 		}
+		// The dummy config.json of the test may name the local sshd and its
+		// pinned host key (as the real enrollment does); defaults otherwise.
+		cfg := struct {
+			SSHHost    string `json:"ssh_host"`
+			SSHHostKey string `json:"ssh_host_key"`
+		}{SSHHost: "127.0.0.1:22"}
+		if data, err := os.ReadFile(filepath.Join(dir, "config.json")); err == nil {
+			_ = json.Unmarshal(data, &cfg)
+		}
 		fmt.Println("server:          wss://gateway.invalid")
 		fmt.Println("device id:       win-service-e2e")
-		fmt.Println("local ssh:       127.0.0.1:22 (loopback only)")
+		fmt.Printf("local ssh:       %s (loopback only)\n", cfg.SSHHost)
 		fmt.Println("device key:      SHA256:fake")
+		if cfg.SSHHostKey != "" {
+			fmt.Printf("pinned ssh host key: %s\n", cfg.SSHHostKey)
+		}
 	case "run":
 		exe, err := os.Executable()
 		if err != nil {

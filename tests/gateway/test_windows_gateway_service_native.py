@@ -36,7 +36,10 @@ pytestmark = pytest.mark.skipif(
 
 from pocketshell.cli import cli  # noqa: E402
 from pocketshell.gateway import service_common as common  # noqa: E402
+from pocketshell.gateway import service_endpoint as ep  # noqa: E402
 from pocketshell.gateway import service_windows as win  # noqa: E402
+
+ENDPOINT_TASK = win.TASK_FOLDER + ep.ENDPOINT_LEAF
 
 CREATE_NO_WINDOW = 0x08000000
 
@@ -46,8 +49,8 @@ def _run(argv):
                           creationflags=CREATE_NO_WINDOW, timeout=60)
 
 
-def _query_xml():
-    proc = _run(win.schtasks("/Query", "/TN", win.TASK_NAME, "/XML"))
+def _query_xml(name=None):
+    proc = _run(win.schtasks("/Query", "/TN", name or win.TASK_NAME, "/XML"))
     return common.decode(proc.stdout) if proc.returncode == 0 else None
 
 
@@ -89,13 +92,16 @@ def layout(tmp_path, monkeypatch):
     # THE test-only seam: the fake build joins the reviewed allow-list
     # for this process only.
     monkeypatch.setattr(win, "ALLOWED_HELPER_SHA256", win.ALLOWED_HELPER_SHA256 | {digest})
-    if _query_xml() is not None:  # leftover from an aborted earlier run
-        _run(win.schtasks("/End", "/TN", win.TASK_NAME))
-        _run(win.schtasks("/Delete", "/TN", win.TASK_NAME, "/F"))
-    yield {"helper": str(helper), "config": str(config), "bin": bin_dir, "sid": sid}
-    if _query_xml() is not None:
-        _run(win.schtasks("/End", "/TN", win.TASK_NAME))
-        _run(win.schtasks("/Delete", "/TN", win.TASK_NAME, "/F"))
+    _cleanup_tasks()  # leftovers from an aborted earlier run
+    yield {"helper": str(helper), "config": str(config), "bin": bin_dir, "sid": sid, "base": base}
+    _cleanup_tasks()
+
+
+def _cleanup_tasks():
+    for name in (win.TASK_NAME, ENDPOINT_TASK):
+        if _query_xml(name) is not None:
+            _run(win.schtasks("/End", "/TN", name))
+            _run(win.schtasks("/Delete", "/TN", name, "/F"))
 
 
 def _markers(bin_dir: Path):
@@ -216,3 +222,128 @@ def test_real_task_round_trip(layout):
     assert idem.exit_code == 0 and "nothing to do" in idem.output
     assert _service("status").exit_code == common.EXIT_NOT_INSTALLED
     assert _snapshot(Path(config)) == before
+
+
+# --- --with-endpoint: a fake guardian as the private loopback endpoint ----------------
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture
+def endpoint(layout, monkeypatch):
+    guardian_src = os.environ.get("POCKETSHELL_TEST_FAKE_GUARDIAN")
+    if not guardian_src:
+        pytest.skip("POCKETSHELL_TEST_FAKE_GUARDIAN not built")
+    from gateway_keyblobs import ED25519_LINE
+    from pocketshell.gateway import pins
+
+    port = _free_port()
+    ep_dir = layout["base"] / "endpoint dir ü"
+    ep_dir.mkdir()
+    guardian = ep_dir / "guardian.exe"
+    shutil.copyfile(guardian_src, guardian)
+    config = Path(layout["config"])
+    # the enrolled local ssh + pinned host key (dummy values, like enroll writes)
+    (config / "config.json").write_text(json.dumps({
+        "device_id": "win-service-e2e", "ssh_host": f"127.0.0.1:{port}", "ssh_host_key": ED25519_LINE,
+    }))
+    doc = {
+        "schema": 1,
+        "name": "fake-guardian-e2e",
+        "guardian": {
+            "command": str(guardian),
+            "sha256": hashlib.sha256(guardian.read_bytes()).hexdigest(),
+            "arguments": ["--listen", f"127.0.0.1:{port}", "--note", "a b ü"],
+            "working_directory": str(ep_dir),
+        },
+        "pinned_files": [],
+        "listen": f"127.0.0.1:{port}",
+        "host_key_fingerprint": pins.parse_host_key(ED25519_LINE).fingerprint,
+    }
+    manifest = layout["base"] / "endpoint-manifest.json"
+    manifest.write_bytes(json.dumps(doc).encode("utf-8"))
+    # THE test-only seam for the endpoint: this manifest joins the reviewed list.
+    monkeypatch.setattr(
+        ep, "ALLOWED_ENDPOINT_MANIFEST_SHA256",
+        frozenset({hashlib.sha256(manifest.read_bytes()).hexdigest()}),
+    )
+    return {"port": port, "dir": ep_dir, "guardian": str(guardian), "manifest": str(manifest),
+            "args": doc["guardian"]["arguments"]}
+
+
+def _snapshot_tree(directory: Path) -> dict:
+    return {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(directory.iterdir())
+        if p.is_file() and not p.name.startswith("guardian-")
+    }
+
+
+def test_endpoint_port_already_served_is_refused(layout, endpoint):
+    import socket
+
+    with socket.socket() as held:  # stands in for the currently held endpoint
+        held.bind(("127.0.0.1", endpoint["port"]))
+        held.listen(1)
+        result = _service("install", "--helper", layout["helper"], "--config-dir", layout["config"],
+                          "--with-endpoint", endpoint["manifest"])
+    assert result.exit_code == 1 and "already served by another process" in result.output
+    assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
+
+
+def test_real_endpoint_and_link_round_trip(layout, endpoint):
+    helper, config = layout["helper"], layout["config"]
+    before_config = _snapshot(Path(config))
+    before_ep = _snapshot_tree(endpoint["dir"])
+    args = ["install", "--helper", helper, "--config-dir", config, "--with-endpoint", endpoint["manifest"]]
+
+    dry = _service(*args, "--dry-run")
+    assert dry.exit_code == 0
+    assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
+
+    result = _service(*args)
+    assert result.exit_code == 0, result.output
+    assert "SSH banner answered" in result.output
+
+    xml = _query_xml(ENDPOINT_TASK)
+    print(xml)
+    fields = win.parse_task_xml(xml)
+    assert fields["command"] == endpoint["guardian"]
+    assert win.parse_arguments(fields["arguments"]) == endpoint["args"]
+    assert fields["working_directory"] == str(endpoint["dir"])
+    assert fields["logon_type"] == "S4U" and fields["run_level"] == "LeastPrivilege"
+    assert fields["exec_count"] == 1 and "cmd.exe" not in xml.lower()
+
+    ok, banner = ep.probe_banner("127.0.0.1", endpoint["port"])
+    assert ok and banner.startswith("SSH-2.0-FakeGuardian")
+    markers = sorted(endpoint["dir"].glob("guardian-*.json"))
+    assert markers
+    marker = json.loads(markers[0].read_text(encoding="utf-8"))
+    print("guardian marker:", marker)
+    assert marker["args"][1:] == endpoint["args"]
+    assert Path(marker["cwd"]).resolve() == endpoint["dir"].resolve()
+
+    status = _service("status", "--json")
+    data = json.loads(status.stdout)
+    assert status.exit_code == common.EXIT_RUNNING, data
+    epst = data["details"]["endpoint"]
+    assert epst["running"] and epst["banner_ok"] and epst["managed"]
+    assert {p["session_id"] for p in epst["processes"]} == {0}
+    assert marker["pid"] in {p["pid"] for p in epst["processes"]}
+
+    gone = _service("uninstall")
+    assert gone.exit_code == 0 and ENDPOINT_TASK in gone.output
+    assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
+    deadline = time.monotonic() + 15
+    while ep.port_in_use("127.0.0.1", endpoint["port"]) and time.monotonic() < deadline:
+        time.sleep(0.5)
+    assert not ep.port_in_use("127.0.0.1", endpoint["port"]), "guardian survived uninstall"
+    assert _snapshot(Path(config)) == before_config
+    assert _snapshot_tree(endpoint["dir"]) == before_ep
+    assert _service("status").exit_code == common.EXIT_NOT_INSTALLED
