@@ -44,6 +44,7 @@ import (
 )
 
 type manifest struct {
+	Owner  string `json:"ownerSID"`
 	State  string `json:"state"`
 	Config string `json:"config"`
 	Port   int    `json:"port"`
@@ -125,13 +126,37 @@ func filetime(h windows.Handle) (string, error) {
 	return strconv.FormatUint(uint64(c.HighDateTime)<<32|uint64(c.LowDateTime), 10), nil
 }
 
+// ownerSID is the manifest owner: every protocol file is created with an
+// explicit owner = ownerSID and a protected owner/SYSTEM/Administrators DACL
+// (agreement §4), whatever the token's default owner is (an S4U token of an
+// administrator defaults to BUILTIN\Administrators).
+var ownerSID string
+
 func writeJSON(path string, value interface{}) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
+	sd, err := windows.SecurityDescriptorFromString(
+		"O:" + ownerSID + "D:P(A;;FA;;;" + ownerSID + ")(A;;FA;;;SY)(A;;FA;;;BA)")
+	if err != nil {
+		return err
+	}
+	sa := windows.SecurityAttributes{SecurityDescriptor: sd}
+	sa.Length = uint32(unsafe.Sizeof(sa))
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	name, err := windows.UTF16PtrFromString(tmp)
+	if err != nil {
+		return err
+	}
+	h, err := windows.CreateFile(name, windows.GENERIC_WRITE, 0, &sa, windows.CREATE_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return err
+	}
+	var written uint32
+	err = windows.WriteFile(h, data, &written, nil)
+	_ = windows.CloseHandle(h)
+	if err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -154,9 +179,10 @@ func guardian(manifestPath string) int {
 	sum := sha256.Sum256(raw)
 	manifestSHA := hex.EncodeToString(sum[:])
 	var m manifest
-	if err := json.Unmarshal(raw, &m); err != nil || m.State == "" || m.Port == 0 {
+	if err := json.Unmarshal(raw, &m); err != nil || m.State == "" || m.Port == 0 || m.Owner == "" {
 		return 11
 	}
+	ownerSID = m.Owner
 	lockName, _ := windows.UTF16PtrFromString(filepath.Join(m.State, ".lock"))
 	lock, err := windows.CreateFile(lockName, windows.GENERIC_WRITE, 0, nil, windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {
