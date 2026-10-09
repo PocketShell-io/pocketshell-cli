@@ -62,7 +62,7 @@ func main() {
 		os.Exit(checkOnly(args[5]))
 	}
 	if bootstrap && len(args) == 6 {
-		os.Exit(guardian(args[5]))
+		os.Exit(guardian(args[5], args[3]))
 	}
 	if len(args) == 3 && args[0] == "-D" && args[1] == "-f" {
 		os.Exit(daemon(args[2]))
@@ -124,6 +124,55 @@ func daemon(config string) int {
 }
 
 // --- guardian -----------------------------------------------------------------------
+
+var (
+	user32                   = windows.NewLazySystemDLL("user32.dll")
+	procGetProcessWinStation = user32.NewProc("GetProcessWindowStation")
+	procGetUserObjectInfo    = user32.NewProc("GetUserObjectInformationW")
+	procCreateDesktopW       = user32.NewProc("CreateDesktopW")
+)
+
+func objectName(h uintptr) string {
+	buf := make([]uint16, 256)
+	var needed uint32
+	r, _, _ := procGetUserObjectInfo.Call(h, 2, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)*2), uintptr(unsafe.Pointer(&needed)))
+	if r == 0 {
+		return ""
+	}
+	return windows.UTF16ToString(buf)
+}
+
+// context reports the ACTUAL token/session/station facts, as the real
+// guardian's token_context() does, and creates a private desktop on the
+// actual station (kept open for the guardian's lifetime).
+func context(ownerSID string) (map[string]interface{}, string, error) {
+	var session uint32
+	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &session); err != nil {
+		return nil, "", err
+	}
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return nil, "", err
+	}
+	station, _, _ := procGetProcessWinStation.Call()
+	name := objectName(station)
+	var flags struct{ Inherit, Reserved, Flags uint32 }
+	var needed uint32
+	procGetUserObjectInfo.Call(station, 1, uintptr(unsafe.Pointer(&flags)), unsafe.Sizeof(flags), uintptr(unsafe.Pointer(&needed)))
+	buf := make([]byte, 16)
+	_, _ = rand.Read(buf)
+	desktopName := "PocketShellPrivate_" + hex.EncodeToString(buf)
+	dn, _ := windows.UTF16PtrFromString(desktopName)
+	desk, _, derr := procCreateDesktopW.Call(uintptr(unsafe.Pointer(dn)), 0, 0, 0, 0x201ff, 0)
+	if desk == 0 {
+		return nil, "", fmt.Errorf("CreateDesktopW on %s: %v", name, derr)
+	}
+	ctx := map[string]interface{}{
+		"ownerSID": user.User.Sid.String(), "session": session, "station": name,
+		"stationVisible": flags.Flags&1 != 0, "desktop": "", "activeConsoleSession": windows.WTSGetActiveConsoleSessionId(),
+	}
+	return ctx, name + "\\" + desktopName, nil
+}
 
 func checkOnly(manifestPath string) int {
 	raw, err := os.ReadFile(manifestPath)
@@ -192,11 +241,17 @@ func listening(port int) bool {
 	return true
 }
 
-func guardian(manifestPath string) int {
+func guardian(manifestPath, script string) int {
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return 10
 	}
+	scriptBytes, err := os.ReadFile(script)
+	if err != nil {
+		return 10
+	}
+	scriptSum := sha256.Sum256(scriptBytes)
+	guardianSHA := hex.EncodeToString(scriptSum[:])
 	sum := sha256.Sum256(raw)
 	manifestSHA := hex.EncodeToString(sum[:])
 	var m manifest
@@ -228,6 +283,11 @@ func guardian(manifestPath string) int {
 	if listening(m.Port) {
 		return closeWith(14, "port occupied")
 	}
+	ctx, privateDesktop, err := context(ownerSID)
+	if err != nil {
+		return closeWith(24, err.Error())
+	}
+	result["context"] = ctx
 
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
@@ -278,7 +338,9 @@ func guardian(manifestPath string) int {
 	ready := map[string]interface{}{
 		"accepted": false, "manifestSHA256": manifestSHA, "cleanupErrors": []string{},
 		"pid": pid, "creationFILETIME": birth, "guardianPID": os.Getpid(),
-		"port": m.Port, "heldProcessHandle": true, "ownedJob": true,
+		"port": m.Port, "heldProcessHandle": true, "ownedJob": true, "context": ctx,
+		"privateDesktop": privateDesktop, "sourceSHA256": guardianSHA,
+		"desktopACL": map[string]interface{}{"fake": "CI fake guardian: default desktop security, not the guardian's checked ACL"},
 	}
 	readyPath := filepath.Join(genDir, "READY.json")
 	if err := writeJSON(readyPath, ready); err != nil {
