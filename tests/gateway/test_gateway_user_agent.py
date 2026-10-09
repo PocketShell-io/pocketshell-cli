@@ -55,21 +55,34 @@ class AgentApi(EndpointApi):
     def current_session(self):
         return self.session
 
+    # job situation of spawned children: None = broke away (no job);
+    # otherwise {"killOnJobClose": bool} for the caller's job they stayed in
+    caller_job = None
+    terminate_fails = False
+
     def spawn_hidden(self, argv, cwd, env):
         self.spawns.append({"argv": list(argv), "cwd": cwd, "env": dict(env) if env is not None else None})
+        if self.caller_job is not None and self.caller_job["killOnJobClose"]:
+            raise win.CallerJobError("the child could not break away from the caller's job, which has "
+                               "KILL_ON_JOB_CLOSE; the suspended child was terminated before resume")
+        job = {"inJob": self.caller_job is not None,
+               "callerJobKillOnClose": bool(self.caller_job and self.caller_job["killOnJobClose"]),
+               "brokeAway": self.caller_job is None, "elevated": False, "session": self.session}
         if argv[0] == PYTHON:
             self.guardian_holder["g"].run("agent")
             ready = json.loads(self.vfs[self.guardian_holder["g"].generation + "\\READY.json"]) \
                 if self.guardian_holder["g"].ready_on_run else None
             pid = ready["guardianPID"] if ready else self.guardian_holder["g"].next_pid - 1
-            return pid, self.births.get(pid, "1")
+            return {"pid": pid, "creationFILETIME": self.births.get(pid, "1"), **job}
         pid = self.next_link_pid
         self.next_link_pid += 1
         self.births[pid] = f"1350{pid}"
         self.images[pid] = argv[0]
-        return pid, self.births[pid]
+        return {"pid": pid, "creationFILETIME": self.births[pid], **job}
 
     def terminate_exact(self, pid, birth, image):
+        if self.terminate_fails:
+            return False  # e.g. access denied / wait timeout: the process stays alive
         if self.births.get(pid) != birth or not win._same_path(self.images.get(pid), image):
             return False
         self.terminated.append((pid, birth, image))
@@ -310,3 +323,57 @@ def test_no_elevation_or_task_scheduler_anywhere(agent):
     for argv in agent["fake"].calls:
         joined = " ".join(map(str, argv)).lower()
         assert "schtasks" not in joined and "registertask" not in joined and "runas" not in joined
+
+
+# --- root review of 28fae5c ------------------------------------------------------------
+
+
+def test_r1_failed_link_termination_keeps_custody_and_fails(agent):
+    bind()
+    run("start", "--json")
+    agent["api"].terminate_fails = True
+    result, data = run("stop", "--json")
+    assert result.exit_code == 1 and data["state"] == "failed"
+    assert data["outbound"]["state"] == "running" and data["outbound"]["pid"] == 9000
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    assert os.path.exists(agent_mod._path("link.json")), "link custody must be retained"
+    agent["api"].terminate_fails = False
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and data["state"] == "stopped"
+    assert agent["api"].terminated == [(9000, "13509000", WIN_HELPER)]
+
+
+def test_r1_link_gone_or_pid_reused_counts_as_stopped(agent):
+    bind()
+    run("start", "--json")
+    agent["api"].terminate_fails = True
+    agent["api"].births[9000] = "424242"  # pid reused by another process
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and data["outbound"]["state"] == "stopped"
+    assert agent["api"].terminated == []
+
+
+def test_r2_children_in_a_kill_on_close_caller_job_are_refused(agent):
+    bind()
+    agent["api"].caller_job = {"killOnJobClose": True}
+    result, data = run("start", "--json")
+    assert result.exit_code == 1 and data["error"]["code"] == "caller-job"
+    assert "KILL_ON_JOB_CLOSE" in data["error"]["message"]
+
+
+def test_r2_job_membership_is_reported_never_claimed(agent):
+    bind()
+    agent["api"].caller_job = {"killOnJobClose": False}
+    result, data = run("start", "--json")
+    assert result.exit_code == 0
+    assert data["endpoint"]["launch"] == {"inJob": True, "callerJobKillOnClose": False, "brokeAway": False,
+                                          "elevated": False, "session": SESSION}
+    assert data["outbound"]["launch"]["inJob"] is True and data["outbound"]["launch"]["brokeAway"] is False
+
+
+def test_r2_broke_away_children(agent):
+    bind()
+    result, data = run("start", "--json")
+    assert data["endpoint"]["launch"]["brokeAway"] is True and data["endpoint"]["launch"]["inJob"] is False
+    assert data["outbound"]["launch"]["brokeAway"] is True

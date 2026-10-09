@@ -225,6 +225,30 @@ def load_binding(*, api, runner, revalidate: bool):
     return b, m, host_key
 
 
+# --- spawning ------------------------------------------------------------------------------
+
+LAUNCH_KEYS = ("inJob", "callerJobKillOnClose", "brokeAway", "elevated", "session")
+
+
+def _spawn(api, argv, cwd, env) -> dict:
+    """Hidden direct spawn; the child's job membership is MEASURED, never
+    assumed (see WindowsApi.spawn_hidden): a child that could not break away
+    from a KILL_ON_JOB_CLOSE caller job is refused."""
+    from pocketshell.gateway import service_windows as win
+
+    try:
+        meta = api.spawn_hidden(argv, cwd, env)
+    except win.CallerJobError as exc:
+        raise AgentError("caller-job", str(exc)) from None
+    if meta.get("elevated") is not False:
+        raise AgentError("error", "the spawned child token is elevated or unknown; refusing")
+    return meta
+
+
+def _launch(meta) -> Optional[dict]:
+    return None if not meta else {k: meta.get(k) for k in LAUNCH_KEYS}
+
+
 # --- state of the link (the guardian's state lives in its protocol files) ----------------
 
 
@@ -248,6 +272,7 @@ def _link_status(b: dict, api) -> dict:
     if not state:
         return out
     pid, birth = state.get("pid"), state.get("creationFILETIME")
+    out["launch"] = _launch(state)
     if type(pid) is int and isinstance(birth, str) and api.process_birth(pid) == birth \
             and win._same_path(api.process_image(pid), b["helper"]):
         out.update(state="running", pid=pid, creationFILETIME=birth)
@@ -272,7 +297,15 @@ def _endpoint_status(m, host_key, api, runner, session: int) -> dict:
         "hostKey": {"proven": bool(ready["ok"]), "fingerprint": host_key.fingerprint,
                     "detail": ready.get("hostKey")},
         "problems": ready["problems"],
+        "launch": None,
     }
+    data = _read_private(_path("guardian.json"))
+    try:
+        meta = json.loads(data.decode("utf-8")) if data else None
+    except ValueError:
+        meta = None
+    if meta and meta.get("pid") == ready.get("guardianPID"):
+        out["launch"] = _launch(meta)
     if not ready["ok"] and ready.get("pid") and api.process_birth(ready["pid"]) is None \
             and not api.listener_pids(m.port):
         out["state"] = "stopped"
@@ -357,8 +390,9 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
             previous = endpoint.get("generation")
             if api.listener_pids(m.port):
                 raise AgentError("port-busy", f"127.0.0.1:{m.port} is served by another process; not starting")
-            api.spawn_hidden([m.python, *ep.BOOTSTRAP_FLAGS, m.guardian, "--manifest", m.path],
-                             m.root, dict(m.environment))
+            launch = _spawn(api, [m.python, *ep.BOOTSTRAP_FLAGS, m.guardian, "--manifest", m.path],
+                            m.root, dict(m.environment))
+            _write_private(_path("guardian.json"), json.dumps(launch).encode())
             while True:
                 ready = wep.readiness(m, host_key, api, runner, not_generation=previous,
                                       mode=MODE, session=owner["session"])
@@ -367,10 +401,9 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
                 time.sleep(wep.POLL_SECONDS)
         link = _link_status(b, api)
         if link["state"] != "running":
-            pid, birth = api.spawn_hidden([b["helper"], "run", "--config-dir", b["configDir"]],
-                                          ntpath.dirname(b["helper"]), None)
-            _write_private(_path("link.json"), json.dumps(
-                {"pid": pid, "creationFILETIME": birth, "helper": b["helper"], "session": owner["session"]}).encode())
+            launch = _spawn(api, [b["helper"], "run", "--config-dir", b["configDir"]],
+                            ntpath.dirname(b["helper"]), None)
+            _write_private(_path("link.json"), json.dumps({**launch, "helper": b["helper"]}).encode())
             settle = min(LINK_SETTLE_SECONDS, max(0.0, deadline - time.monotonic()))
             if settle and sys.platform == "win32" and os.name == "nt":
                 time.sleep(settle)
@@ -420,8 +453,19 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
             wep.STOP_CONFIRM_SECONDS = old
         state = _link_state()
         if state and type(state.get("pid")) is int and isinstance(state.get("creationFILETIME"), str):
-            if api.terminate_exact(state["pid"], state["creationFILETIME"], b["helper"]):
-                pass  # the exact recorded link process, now gone
+            from pocketshell.gateway import service_windows as win
+
+            api.terminate_exact(state["pid"], state["creationFILETIME"], b["helper"])
+            # custody: re-read the exact identity; only absence (or a reused
+            # pid, i.e. a different birth/image) releases the record
+            still = api.process_birth(state["pid"]) == state["creationFILETIME"] and \
+                win._same_path(api.process_image(state["pid"]), b["helper"])
+            if still:
+                errors.append(f"the link process {state['pid']} (birth {state['creationFILETIME']}) is still "
+                              "running; its identity is retained for a retry")
+            else:
+                _delete(_path("link.json"))
+        elif state is not None:
             _delete(_path("link.json"))
         owner, endpoint, outbound, state_name, code = _collect(b, m, host_key, api, runner)
         doc = _document(operation_id, state="stopped", binding=b, owner=owner, endpoint=endpoint, outbound=outbound)

@@ -539,6 +539,10 @@ def resolve_helper(explicit: Optional[str], runner: Optional[Runner] = None) -> 
 # --- native Windows queries (ctypes; imported lazily) ------------------------
 
 
+class CallerJobError(ServiceError):
+    """A spawned child stayed in the caller's KILL_ON_JOB_CLOSE job."""
+
+
 class WindowsApi:
     """SID / owner / process queries. Swapped for a fake in Linux tests."""
 
@@ -661,30 +665,136 @@ class WindowsApi:
             raise ServiceError("cannot read this process's session id")
         return int(session.value)
 
-    def spawn_hidden(self, argv: list, cwd: str, env: Optional[dict]) -> tuple:
-        """Start ``argv`` directly (no shell) with no console window in the
-        caller's session; returns (pid, decimal creation FILETIME)."""
-        import subprocess
+    def spawn_hidden(self, argv: list, cwd: str, env: Optional[dict]) -> dict:
+        """Start ``argv`` directly (no shell, no window) in the caller's session,
+        SUSPENDED, and MEASURE the child before resuming it (the native owner's
+        5844 launcher order): token user = ours, not elevated, session = ours,
+        image = argv[0], creation FILETIME, and job membership.
 
-        flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+        CREATE_BREAKAWAY_FROM_JOB is requested; if the caller's job forbids
+        breakaway the child is created inside it. Independence is then never
+        claimed: if the caller's job has JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE the
+        suspended child is terminated (its exact handle) and CallerJobError is
+        raised; otherwise the membership is reported as measured."""
+        import ctypes as c
+        import subprocess
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        a = c.WinDLL("advapi32", use_last_error=True)
+
+        class SI(c.Structure):
+            _fields_ = [("cb", w.DWORD), ("lpReserved", w.LPWSTR), ("lpDesktop", w.LPWSTR),
+                        ("lpTitle", w.LPWSTR), ("dwX", w.DWORD), ("dwY", w.DWORD), ("dwXSize", w.DWORD),
+                        ("dwYSize", w.DWORD), ("dwXCountChars", w.DWORD), ("dwYCountChars", w.DWORD),
+                        ("dwFillAttribute", w.DWORD), ("dwFlags", w.DWORD), ("wShowWindow", w.WORD),
+                        ("cbReserved2", w.WORD), ("lpReserved2", c.c_void_p), ("hStdInput", w.HANDLE),
+                        ("hStdOutput", w.HANDLE), ("hStdError", w.HANDLE)]
+
+        class PI(c.Structure):
+            _fields_ = [("hProcess", w.HANDLE), ("hThread", w.HANDLE), ("dwProcessId", w.DWORD),
+                        ("dwThreadId", w.DWORD)]
+
+        k.CreateProcessW.argtypes = [w.LPCWSTR, w.LPWSTR, c.c_void_p, c.c_void_p, w.BOOL, w.DWORD,
+                                     c.c_void_p, w.LPCWSTR, c.POINTER(SI), c.POINTER(PI)]
+        k.IsProcessInJob.argtypes = [w.HANDLE, w.HANDLE, c.POINTER(w.BOOL)]
+        k.ResumeThread.argtypes = [w.HANDLE]
+        k.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+        k.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        k.QueryInformationJobObject.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.c_void_p]
+        k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
+        k.GetProcessTimes.argtypes = [w.HANDLE] + [c.POINTER(w.FILETIME)] * 4
+        k.ProcessIdToSessionId.argtypes = [w.DWORD, c.POINTER(w.DWORD)]
+        a.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, c.POINTER(w.HANDLE)]
+        a.GetTokenInformation.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.POINTER(w.DWORD)]
+
+        command = c.create_unicode_buffer(subprocess.list2cmdline([str(x) for x in argv]))
+        block = None
+        if env is not None:
+            block = c.create_unicode_buffer(
+                "\0".join(f"{key}={value}" for key, value in sorted(env.items(), key=lambda kv: kv[0].casefold()))
+                + "\0\0")
+        base = 0x00000004 | 0x08000000 | 0x00000200 | 0x00000400  # SUSPENDED|NO_WINDOW|NEW_GROUP|UNICODE_ENV
+        si = SI()
+        si.cb = c.sizeof(SI)
+        si.dwFlags = 0x1  # STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        si.lpDesktop = "WinSta0\\Default"  # as the native 5844 launcher: the user's Default desktop
+        pi = PI()
+        broke_away = True
+        ok = k.CreateProcessW(argv[0], command, None, None, False, base | 0x01000000,
+                              c.cast(block, c.c_void_p) if block is not None else None, cwd,
+                              c.byref(si), c.byref(pi))
+        if not ok:
+            broke_away = False  # e.g. ERROR_ACCESS_DENIED: the caller's job forbids breakaway
+            ok = k.CreateProcessW(argv[0], command, None, None, False, base,
+                                  c.cast(block, c.c_void_p) if block is not None else None, cwd,
+                                  c.byref(si), c.byref(pi))
+            if not ok:
+                raise ServiceError(f"cannot start {sanitize(str(argv[0]))} (error {c.get_last_error()})")
+        resumed = False
         try:
-            proc = subprocess.Popen(
-                list(argv), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, creationflags=flags | 0x01000000,  # + CREATE_BREAKAWAY_FROM_JOB
-                close_fds=True,
-            )
-        except OSError:
+            in_job = w.BOOL()
+            if not k.IsProcessInJob(pi.hProcess, None, c.byref(in_job)):
+                raise ServiceError("cannot query the child's job membership")
+            kill_on_close = False
+            if in_job.value:
+                # the child is in the CALLER's job (it could not break away):
+                # inspect that job through our own membership (hJob = NULL)
+                info = (c.c_byte * 144)()  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION (x64)
+                if not k.QueryInformationJobObject(None, 9, info, c.sizeof(info), None):
+                    kill_on_close = True  # unknown limits: never claim independence
+                else:
+                    flags = c.c_uint32.from_buffer(info, 16).value  # BasicLimitInformation.LimitFlags
+                    kill_on_close = bool(flags & 0x2000)
+            if in_job.value and kill_on_close:
+                raise CallerJobError(
+                    "the child could not break away from the caller's job, which has "
+                    "KILL_ON_JOB_CLOSE (its lifetime would end with the caller); the suspended "
+                    "child was terminated before resume")
+            # child token: our user, not elevated, our session
+            token = w.HANDLE()
+            if not a.OpenProcessToken(pi.hProcess, 0x0008, c.byref(token)):
+                raise ServiceError("cannot open the child's token")
             try:
-                proc = subprocess.Popen(
-                    list(argv), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True,
-                )
-            except OSError as exc:
-                raise ServiceError(f"cannot start {sanitize(argv[0])}: {sanitize(exc.strerror or '')}") from None
-        birth = self.process_birth(proc.pid)
-        if birth is None:
-            raise ServiceError(f"{sanitize(argv[0])} exited immediately")
-        return proc.pid, birth
+                size = w.DWORD()
+                a.GetTokenInformation(token, 1, None, 0, c.byref(size))
+                buf = c.create_string_buffer(size.value)
+                if not a.GetTokenInformation(token, 1, buf, size.value, c.byref(size)):
+                    raise ServiceError("cannot read the child's token user")
+                child_sid = self._sid_text(c.cast(buf, c.POINTER(c.c_void_p))[0])
+                elevation = w.DWORD()
+                if not a.GetTokenInformation(token, 20, c.byref(elevation), 4, c.byref(size)):
+                    raise ServiceError("cannot read the child's elevation")
+            finally:
+                k.CloseHandle(token)
+            session = w.DWORD()
+            if not k.ProcessIdToSessionId(pi.dwProcessId, c.byref(session)):
+                raise ServiceError("cannot read the child's session")
+            image = c.create_unicode_buffer(32768)
+            n = w.DWORD(32768)
+            if not k.QueryFullProcessImageNameW(pi.hProcess, 0, image, c.byref(n)) or \
+                    not _same_path(image.value, str(argv[0])):
+                raise ServiceError("the child's image is not the requested executable")
+            if child_sid != self.current_sid() or elevation.value or session.value != self.current_session():
+                raise ServiceError("the child token is not this user's ordinary, same-session token")
+            times = [w.FILETIME() for _ in range(4)]
+            if not k.GetProcessTimes(pi.hProcess, *[c.byref(t) for t in times]):
+                raise ServiceError("cannot read the child's creation time")
+            birth = str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime)
+            if k.ResumeThread(pi.hThread) == 0xFFFFFFFF:
+                raise ServiceError("cannot resume the child")
+            resumed = True
+            return {"pid": int(pi.dwProcessId), "creationFILETIME": birth, "inJob": bool(in_job.value),
+                    "callerJobKillOnClose": kill_on_close, "brokeAway": broke_away and not in_job.value,
+                    "elevated": False, "session": int(session.value)}
+        finally:
+            if not resumed:
+                k.TerminateProcess(pi.hProcess, 1)  # the exact, still-suspended child we created
+                k.WaitForSingleObject(pi.hProcess, 5000)
+            k.CloseHandle(pi.hThread)
+            k.CloseHandle(pi.hProcess)
 
     def terminate_exact(self, pid: int, birth: str, image: str) -> bool:
         """Terminate ONLY the process whose pid, creation FILETIME and image all
