@@ -493,30 +493,32 @@ waits briefly for the helper process to exit.
 **Private loopback endpoint (`--with-endpoint MANIFEST`, Windows).** When the
 enrolled local sshd is a private endpoint owned by its own guardian,
 `install --with-endpoint MANIFEST` also registers `\PocketShell\GatewayEndpoint`.
-It runs the manifest's protected `python` with its pinned `guardian.py
---manifest MANIFEST` directly, as your SID (S4U, LeastPrivilege, session 0,
-boot +10 s, a 5-minute watchdog). The contract with the guardian is
-`endpoint-guardian-api-agreement.md`.
+Its action is exactly `<manifest python> -I -S -B <guardian.py> --manifest
+MANIFEST`, as your SID (S4U, LeastPrivilege, session 0, boot +10 s, a
+5-minute watchdog), with no shell. The guardian's interface (INTERFACE.md)
+is authoritative; see `endpoint-guardian-api-agreement.md`.
 
-- **Manifest.** The guardian's own closed schema. Its digest and the
-  `guardian.py` digest must be on the reviewed lists
-  (`service_endpoint.ALLOWED_ENDPOINT_MANIFEST_SHA256` /
-  `ALLOWED_GUARDIAN_SOURCE_SHA256`, both empty until reviewed). Every pin is
-  re-hashed. `ownerSID` must be you. The port must be the enrolled
-  `local ssh`.
-- **Readiness.** `install` confirms it before registering the link, and
-  `status` requires it. CURRENT.json must point to a generation whose
-  READY.json names the held daemon; the daemon pid must be alive with exactly
-  its recorded birth; it must be the only listener; and a real SSH key
-  exchange must **prove the enrolled pinned host key**. A banner is never
-  enough.
-- **Uninstall.** Removes the link first. Then it disables the endpoint task,
-  hands the exact held identity to the guardian through STOP.json, waits for
-  an accepted CLOSED.json and deletes the task. It never kills; on any doubt
-  the task stays registered and disabled.
+- **Manifest.** Version 1 with exactly `ownerSID, root, state, config, port,
+  daemon, python, pins, environment, configBindings`, validated with the
+  guardian's own rules. The config is checked against the guardian's
+  `config_guard`.
+- **Before anything runs.** The manifest digest and the
+  (guardian.py, native_api.py, policy.py) source triple must be on the
+  reviewed lists, which are empty until reviewed. Every pin is re-hashed. The
+  service checks the guardian's protected-ancestor and final-file mutation
+  authority itself.
+- **Readiness.** `CURRENT.json` must point to a `generation-<uuidhex>`
+  generation whose READY.json names the held daemon by pid + creation
+  FILETIME. The guardian must run the manifest interpreter, the daemon must
+  be the only listener, and a real SSH key exchange must prove the enrolled
+  pinned host key.
+- **Uninstall.** Disables the task, hands the exact held identity to the
+  guardian through STOP.json, waits for an accepted CLOSED.json and deletes
+  the task. It never kills.
 - **Qualification.** `--endpoint-only --instance NAME` registers an isolated
-  `GatewayEndpointQ<NAME>` on a non-production port and never touches
-  `GatewayLink`. Use `status --instance NAME` / `uninstall --instance NAME`.
+  `GatewayEndpointQ<NAME>` on a non-production port. `--check-only` (Phase A)
+  runs the guardian's read-only preflight once in a trigger-less task and
+  reports its exit status.
 
 **One agent per device:** a new connection supersedes the old one at the
 gateway. Stop any other `pocketshell-link run` for the same enrolled device
