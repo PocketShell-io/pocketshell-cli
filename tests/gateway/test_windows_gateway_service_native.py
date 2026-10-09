@@ -277,7 +277,8 @@ def _build_endpoint(layout, monkeypatch, *, port: int, enrolled_port: int, name:
         f"Port {port}\nListenAddress 127.0.0.1\nHostKey {hostkey_file}\n"
         "AuthenticationMethods publickey\nPubkeyAuthentication yes\nPasswordAuthentication no\n"
         "KbdInteractiveAuthentication no\nPermitEmptyPasswords no\nDisableForwarding yes\nPermitTTY yes\n"
-        f"AuthorizedKeysFile {root / 'keys' / 'authorized_keys'}\n"
+        f"AuthorizedKeysFile {root / 'keys' / 'authorized_keys'}\n",
+        encoding="utf-8",  # the guardian reads its config as UTF-8 (paths contain ü)
     )
     pins = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in (python, guardian, daemon, config)}
     state = root / "state"
@@ -316,9 +317,9 @@ def _diagnose(endpoint, leaf):
     except Exception as exc:  # noqa: BLE001
         print("task query failed:", exc)
     for path in sorted(endpoint["state"].rglob("*")):
-        print("state:", path.relative_to(endpoint["state"]))
+        print("state:", ascii(str(path.relative_to(endpoint["state"]))))
         if path.suffix in (".json", ".log"):
-            print("   ", path.read_text(encoding="utf-8", errors="replace")[:2000])
+            print("   ", ascii(path.read_text(encoding="utf-8", errors="replace")[:2000]))
 
 
 def _current(endpoint) -> dict:
