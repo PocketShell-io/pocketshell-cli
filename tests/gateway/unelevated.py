@@ -57,6 +57,7 @@ def _lua_token():
     """CreateRestrictedToken(LUA_TOKEN | DISABLE_MAX_PRIVILEGE) with the
     Administrators alias made deny-only: the UAC-style filtered token."""
     k.GetCurrentProcess.restype = w.HANDLE
+    a.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, c.POINTER(w.HANDLE)]
     base = w.HANDLE()
     if not a.OpenProcessToken(k.GetCurrentProcess(), 0x0002 | 0x0008 | 0x0001 | 0x0080 | 0x0100,
                               c.byref(base)):
@@ -67,7 +68,8 @@ def _lua_token():
     token = w.HANDLE()
     a.CreateRestrictedToken.argtypes = [w.HANDLE, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, c.c_void_p, w.DWORD,
                                         c.c_void_p, c.POINTER(w.HANDLE)]
-    if not a.CreateRestrictedToken(base, 0x1 | 0x4, 1, deny, 0, None, 0, None, c.byref(token)):
+    if not a.CreateRestrictedToken(base, 0x1 | 0x4, 1, c.cast(deny, c.c_void_p), 0, None, 0, None,
+                                   c.byref(token)):
         raise c.WinError(c.get_last_error())
     k.CloseHandle(base)
     _medium(token)
