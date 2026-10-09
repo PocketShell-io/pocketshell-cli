@@ -173,6 +173,35 @@ again in a classic **conhost** window:
    window. `python.exe` (the proxy) appears under `ssh.exe`, with no
    `conhost.exe` of its own.
 
+## Host side: durable, hidden agent (`gateway service`)
+
+This page is about the client. On a Windows machine that is itself an
+enrolled **host**, keep its agent running with one per-user scheduled task
+instead of a console window ([gateway.md §4.1](gateway.md#41-durable-start-pocketshell-gateway-service)):
+
+```powershell
+# as the enrolling user, from an elevated prompt (boot trigger + S4U)
+pocketshell gateway service install --helper C:\path\pocketshell-link.exe --config-dir C:\path\keys --dry-run
+pocketshell gateway service install --helper C:\path\pocketshell-link.exe --config-dir C:\path\keys
+pocketshell gateway service status          # exit 0 running / 3 stopped / 4 absent; pid + session id
+pocketshell gateway service uninstall       # removes only the task
+```
+
+The task (`\PocketShell\GatewayLink`) runs as your SID with LogonType S4U and
+RunLevel LeastPrivilege in session 0, started at boot and re-checked every
+5 minutes (`IgnoreNew`), and its single action launches the digest-allow-listed
+`pocketshell-link.exe` **directly** — no `cmd.exe`, shell or redirection.
+Every child process the command starts (`schtasks`, PowerShell for the task
+state, the helper's `version`/`show`) uses `CREATE_NO_WINDOW`. Verified on
+the windows-latest CI runner against the real Task Scheduler with a fake
+helper (`tests/gateway/test_windows_gateway_service_native.py`).
+
+The CLI's own `gateway run/show/enroll` wrappers still pin the historical
+helper digest in the fleet-owned `helper.py`; the service path has its own
+allow-list (`service_windows.ALLOWED_HELPER_SHA256`, today only the qualified
+cd7c6f6 build `f9582de6…dabe1`). Unifying the two is a pending change for
+that file's owner.
+
 ## Pending change in a fleet-owned file
 
 `gateway ssh` currently waits for ssh.exe through
