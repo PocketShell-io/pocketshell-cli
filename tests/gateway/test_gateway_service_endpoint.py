@@ -1035,3 +1035,49 @@ def test_r4_private_desktop_name_is_the_guardian_naming(env, desktop):
     ready["privateDesktop"] = desktop
     env["vfs"][path] = json.dumps(ready).encode()
     assert win.status(api=env["api"]).exit_code == 3
+
+
+# --- root residual on a1be26f: strict types inside CLOSED.desktopACL --------------------
+
+_LOOSE_CLOSED_ACL = {
+    "protected-int": lambda a: {**a, "protectedDACL": 1},
+    "count-float": lambda a: {**a, "ACECount": 3.0},
+    "count-bool": lambda a: {**a, "ACECount": True},
+}
+
+
+@pytest.mark.parametrize("name", sorted(_LOOSE_CLOSED_ACL))
+@pytest.mark.parametrize("existing", [False, True], ids=["new-closed", "existing-closed"])
+def test_r7_closed_desktop_acl_types_are_strict(env, name, existing):
+    def loosen(c):
+        return {**c, "desktopACL": _LOOSE_CLOSED_ACL[name](c["desktopACL"])}
+
+    if existing:
+        _crash_closed(env, accepted=True)
+        gen = env["guardian"].generation
+        env["vfs"][gen + "\\CLOSED.json"] = json.dumps(loosen(json.loads(env["vfs"][gen + "\\CLOSED.json"]))).encode()
+    else:
+        win.apply_install(_plan(env), api=env["api"])
+        g = env["guardian"]
+        original = g.on_stop
+
+        def wrong(path, data):
+            original(path, data)
+            closed = path.replace("STOP.json", "CLOSED.json")
+            env["vfs"][closed] = json.dumps(loosen(json.loads(env["vfs"][closed]))).encode()
+
+        g.on_stop = wrong
+    with pytest.raises(ServiceError, match="desktopACL|left registered and DISABLED"):
+        win.uninstall(api=env["api"])
+    assert "GatewayEndpoint" in env["fake"].tasks
+
+
+@pytest.mark.parametrize("suffix", ["Default", "Foreign_" + "a" * 32, "PocketShellPrivate_" + "A" * 32,
+                                    "PocketShellPrivate_" + "a" * 31, "PocketShellPrivate_" + "a" * 33])
+def test_r4_ready_private_desktop_exact_naming(env, suffix):
+    win.apply_install(_plan(env), api=env["api"])
+    path = env["guardian"].generation + "\\READY.json"
+    ready = json.loads(env["vfs"][path])
+    ready["privateDesktop"] = ready["context"]["station"] + "\\" + suffix
+    env["vfs"][path] = json.dumps(ready).encode()
+    assert win.status(api=env["api"]).exit_code == 3

@@ -455,6 +455,9 @@ def closed_identity_problems(data: bytes, ready: "Ready") -> list:
     decimal creationFILETIME string, manifestSHA256, privateDesktop,
     guardianPID, sourceSHA256 and desktopACL (types included)."""
     closed = _json_object(data, "CLOSED.json")
+    # strict schema/types first (1 is not True, 3.0 is not 3), then exact equality
+    if not desktop_acl_ok(closed.get("desktopACL"), ready.desktop_acl.get("ownerSID")):
+        return ["CLOSED.json desktopACL is not the guardian's exact desktopACL schema (strict types)"]
     expected = {"pid": ready.pid, "creationFILETIME": ready.birth, "manifestSHA256": ready.manifest_sha256,
                 "privateDesktop": ready.private_desktop, "guardianPID": ready.guardian_pid,
                 "sourceSHA256": ready.source_sha256, "desktopACL": ready.desktop_acl}
