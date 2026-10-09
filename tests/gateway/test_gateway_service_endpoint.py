@@ -210,7 +210,7 @@ class Guardian:
                 if task["state"] == "Running":
                     task["state"] = "Disabled"
         self.vfs[path.replace("STOP.json", "CLOSED.json")] = json.dumps({
-            **{k: ready[k] for k in ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID")},
+            **{k: ready[k] for k in ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID", "sourceSHA256", "desktopACL")},
             "accepted": accepted, "requestedOwnedJobStop": accepted, "activeAtClose": 0,
             "cleanupErrors": [],
         }).encode()
@@ -588,7 +588,7 @@ def test_closed_requires_the_final_acceptance_fields(env):
         for task in env["fake"].tasks.values():
             task["state"] = "Disabled"
         env["vfs"][path.replace("STOP.json", "CLOSED.json")] = json.dumps(
-            {**{k: ready[k] for k in ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID")},
+            {**{k: ready[k] for k in ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID", "sourceSHA256", "desktopACL")},
              "accepted": True, "requestedOwnedJobStop": True, "activeAtClose": 1, "cleanupErrors": []}).encode()
 
     g.on_stop = partial_close
@@ -892,7 +892,7 @@ def _crash_closed(env, accepted, listener=False):
     env["fake"].tasks["GatewayEndpoint"]["state"] = "Ready"
     ready = json.loads(env["vfs"][gen + "\\READY.json"])
     env["vfs"][gen + "\\CLOSED.json"] = json.dumps({
-        **{k: ready[k] for k in ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID")},
+        **{k: ready[k] for k in ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID", "sourceSHA256", "desktopACL")},
         "accepted": accepted, "requestedOwnedJobStop": accepted, "activeAtClose": 0,
         "cleanupErrors": [] if accepted else ["Held daemon exited unexpectedly"]}).encode()
 
@@ -936,6 +936,9 @@ _WRONG_IDENTITY = {
     "desktop": lambda c: {**c, "privateDesktop": c["privateDesktop"] + "X"},
     "guardian": lambda c: {**c, "guardianPID": c["guardianPID"] + 7},
     "missing": lambda c: {k: v for k, v in c.items() if k not in ("pid", "creationFILETIME")},
+    "source": lambda c: {**c, "sourceSHA256": "e" * 64},
+    "desktopacl": lambda c: {**c, "desktopACL": {**c["desktopACL"], "ACECount": 4}},
+    "birth-int": lambda c: {**c, "creationFILETIME": int(c["creationFILETIME"])},
 }
 
 
@@ -1021,3 +1024,14 @@ def test_r11_requested_definition_must_itself_be_canonical(env):
     for bad in _TRIGGER_DRIFT.values():
         problems = w.definition_drift(bad(xml), w.parse_task_xml(bad(xml)))
         assert problems, "a non-canonical requested trigger must be reported even when it matches"
+
+
+@pytest.mark.parametrize("desktop", ["Service-0x0-1a2b$\\Default", "Service-0x0-1a2b$\\PocketShellPrivate_xyz",
+                                     "Service-0x0-1a2b$\\PocketShellPrivate_" + "A" * 32])
+def test_r4_private_desktop_name_is_the_guardian_naming(env, desktop):
+    win.apply_install(_plan(env), api=env["api"])
+    path = env["guardian"].generation + "\\READY.json"
+    ready = json.loads(env["vfs"][path])
+    ready["privateDesktop"] = desktop
+    env["vfs"][path] = json.dumps(ready).encode()
+    assert win.status(api=env["api"]).exit_code == 3

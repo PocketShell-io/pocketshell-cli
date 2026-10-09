@@ -420,7 +420,11 @@ func guardian(manifestPath, script string) int {
 		return closeWith(23, "current")
 	}
 	result["pid"], result["creationFILETIME"] = pid, birth
-	result["privateDesktop"], result["guardianPID"] = privateDesktop, os.Getpid()
+	// CLOSED serializes the SAME retained result dictionary as READY (6cf7ae85)
+	for _, key := range []string{"privateDesktop", "guardianPID", "sourceSHA256", "desktopACL", "port",
+		"heldProcessHandle", "ownedJob"} {
+		result[key] = ready[key]
+	}
 
 	stopPath := filepath.Join(genDir, "STOP.json")
 	for {

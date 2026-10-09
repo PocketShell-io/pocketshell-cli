@@ -445,15 +445,19 @@ def desktop_acl_ok(acl, owner_sid: str) -> bool:
     )
 
 
-CLOSED_IDENTITY = ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID")
+CLOSED_IDENTITY = ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID",
+                   "sourceSHA256", "desktopACL")
 
 
 def closed_identity_problems(data: bytes, ready: "Ready") -> list:
-    """CLOSED.json must name exactly the generation's held identity (READY):
-    pid, decimal creationFILETIME, manifestSHA256, privateDesktop, guardianPID."""
+    """CLOSED.json serializes the SAME retained result dictionary as READY,
+    so it must carry exactly the generation's held identity: daemon pid,
+    decimal creationFILETIME string, manifestSHA256, privateDesktop,
+    guardianPID, sourceSHA256 and desktopACL (types included)."""
     closed = _json_object(data, "CLOSED.json")
     expected = {"pid": ready.pid, "creationFILETIME": ready.birth, "manifestSHA256": ready.manifest_sha256,
-                "privateDesktop": ready.private_desktop, "guardianPID": ready.guardian_pid}
+                "privateDesktop": ready.private_desktop, "guardianPID": ready.guardian_pid,
+                "sourceSHA256": ready.source_sha256, "desktopACL": ready.desktop_acl}
     wrong = [k for k in CLOSED_IDENTITY if closed.get(k) != expected[k]
              or type(closed.get(k)) is not type(expected[k])]
     return [f"CLOSED.json {', '.join(wrong)} does not match the READY identity"] if wrong else []
@@ -473,6 +477,7 @@ class Ready:
     source_sha256: str
     station: str
     private_desktop: str
+    desktop_acl: dict = field(default_factory=dict, hash=False, compare=False)
 
 
 def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
@@ -512,14 +517,15 @@ def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
     require(isinstance(station, str) and bool(station) and not any(x in station for x in "\\/\x00\r\n")
             and station.casefold() != "winsta0", "context.station is not an actual non-WinSta0 station")
     desktop = r.get("privateDesktop")
-    require(isinstance(desktop, str) and desktop.startswith(station + "\\") and len(desktop) > len(station) + 1,
-            "privateDesktop is not a desktop on the guardian's own station")
+    require(isinstance(desktop, str) and desktop.startswith(station + "\\")
+            and bool(re.fullmatch(r"PocketShellPrivate_[0-9a-f]{32}", desktop[len(station) + 1:])),
+            "privateDesktop is not <station>\\PocketShellPrivate_<uuid hex> on the guardian's own station")
     require(desktop_acl_ok(r.get("desktopACL"), m.owner_sid),
             "desktopACL is not the guardian's checked private-desktop ACL "
             "{ownerSID: manifest owner, protectedDACL: true, allowTrustees: sorted [own, SYSTEM, "
             "Administrators], ACECount: 3}")
     return Ready(r["pid"], r["creationFILETIME"], r["guardianPID"], r["port"], r["manifestSHA256"],
-                 r["sourceSHA256"], station, desktop)
+                 r["sourceSHA256"], station, desktop, dict(r["desktopACL"]))
 
 
 def stop_request(ready: Ready) -> bytes:
