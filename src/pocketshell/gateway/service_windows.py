@@ -223,6 +223,9 @@ class TaskSpec:
     working_directory: str
     boot_delay: str
     description: str
+    # The endpoint task must not be hard-terminable: its only stop is the
+    # guardian's STOP protocol (Task Scheduler's End would bypass it).
+    allow_hard_terminate: bool = True
 
     @property
     def name(self) -> str:
@@ -306,7 +309,7 @@ def build_spec_xml(
         ("MultipleInstancesPolicy", "IgnoreNew"),
         ("DisallowStartIfOnBatteries", "false"),
         ("StopIfGoingOnBatteries", "false"),
-        ("AllowHardTerminate", "true"),
+        ("AllowHardTerminate", "true" if spec.allow_hard_terminate else "false"),
         ("StartWhenAvailable", "true"),
         ("RunOnlyIfNetworkAvailable", "false"),
     ):
@@ -380,7 +383,66 @@ def parse_task_xml(text: str) -> dict:
         "watchdog_interval": find("t:Triggers/t:TimeTrigger/t:Repetition/t:Interval"),
         "multiple_instances": find("t:Settings/t:MultipleInstancesPolicy") or "IgnoreNew",
         "execution_time_limit": find("t:Settings/t:ExecutionTimeLimit") or "PT72H",
+        "settings": _settings(root, ns),
+        "triggers": _triggers(root, ns),
     }
+
+
+# Task Scheduler schema defaults: an export omits elements at their default,
+# so both the requested and the registered definition are compared with the
+# defaults applied.
+_SETTING_DEFAULTS = {
+    "Enabled": "true", "AllowHardTerminate": "true", "Hidden": "false",
+    "DisallowStartIfOnBatteries": "true", "StopIfGoingOnBatteries": "true",
+    "StartWhenAvailable": "false", "RunOnlyIfNetworkAvailable": "false",
+    "MultipleInstancesPolicy": "IgnoreNew", "ExecutionTimeLimit": "PT72H", "Priority": "7",
+    "AllowStartOnDemand": "true", "WakeToRun": "false", "RunOnlyIfIdle": "false",
+    "IdleSettings/StopOnIdleEnd": "true", "IdleSettings/RestartOnIdle": "false",
+    "RestartOnFailure/Interval": None, "RestartOnFailure/Count": None,
+}
+
+
+def _settings(root, ns) -> dict:
+    out = {}
+    for key, default in _SETTING_DEFAULTS.items():
+        element = root.find("t:Settings/" + "/".join("t:" + part for part in key.split("/")), ns)
+        value = element.text.strip() if element is not None and element.text else None
+        out[key] = value if value is not None else default
+    return out
+
+
+def _triggers(root, ns) -> list:
+    out = []
+    triggers = root.find("t:Triggers", ns)
+    for trigger in list(triggers) if triggers is not None else []:
+        def get(path, default=None, _t=trigger):
+            element = _t.find(path, ns)
+            return element.text.strip() if element is not None and element.text else default
+        out.append({
+            "type": trigger.tag.rsplit("}", 1)[-1],
+            "enabled": get("t:Enabled", "true"),
+            "delay": get("t:Delay"),
+            "interval": get("t:Repetition/t:Interval"),
+            "stopAtDurationEnd": get("t:Repetition/t:StopAtDurationEnd", "false") if trigger.find(
+                "t:Repetition", ns) is not None else None,
+        })
+    return out
+
+
+def definition_drift(requested_xml: str, fields: dict, *, ignore_enabled: bool = False) -> list:
+    """Settings and trigger differences between a requested definition and
+    the registered one (F11): both normalized with the schema defaults."""
+    want = parse_task_xml(requested_xml)
+    problems = []
+    for key, value in want["settings"].items():
+        if ignore_enabled and key == "Enabled":
+            continue
+        have = fields["settings"].get(key)
+        if have != value:
+            problems.append(f"setting {key} is {have!r}, not {value!r}")
+    if want["triggers"] != fields["triggers"]:
+        problems.append(f"triggers {fields['triggers']} are not the requested {want['triggers']}")
+    return problems
 
 
 # --- helper trust ------------------------------------------------------------
@@ -608,6 +670,69 @@ class WindowsApi:
             self._check_acl(str(parent), owner_sid, "ancestor")
         self._check_acl(str(p), owner_sid, "private" if role == "private" else "file",
                         protected=protected, servicing=servicing)
+
+    def read_private_file(self, path: str, owner_sid: str, limit: int) -> Optional[bytes]:
+        """A protocol file, or None if it does not exist (F9).
+
+        The path must pass the same authority as the guardian's private role
+        (no reparse point on it or any ancestor, protected ancestors without
+        foreign mutation authority, owned by ``owner_sid``, no foreign allow
+        ACE, single link). It is then opened with FILE_FLAG_OPEN_REPARSE_POINT
+        and re-validated BY HANDLE (attributes, link count, owner) before the
+        bounded read, so a swap between check and read is refused.
+        """
+        import ctypes as c
+        import os as _os
+        from ctypes import wintypes as w
+
+        if not _os.path.lexists(path):
+            return None
+        self.path_authority(path, owner_sid, role="private")
+        k = c.WinDLL("kernel32", use_last_error=True)
+        a = c.WinDLL("advapi32", use_last_error=True)
+        k.CreateFileW.restype = w.HANDLE
+        k.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
+        k.ReadFile.argtypes = [w.HANDLE, c.c_void_p, w.DWORD, c.POINTER(w.DWORD), c.c_void_p]
+        k.GetFileInformationByHandle.argtypes = [w.HANDLE, c.c_void_p]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        k.LocalFree.argtypes = [c.c_void_p]
+        a.GetSecurityInfo.argtypes = [w.HANDLE, c.c_int, w.DWORD] + [c.POINTER(c.c_void_p)] * 5
+        a.GetSecurityInfo.restype = w.DWORD
+
+        class Info(c.Structure):
+            _fields_ = [("attributes", w.DWORD), ("created", w.FILETIME), ("accessed", w.FILETIME),
+                        ("written", w.FILETIME), ("volume", w.DWORD), ("size_high", w.DWORD),
+                        ("size_low", w.DWORD), ("links", w.DWORD), ("index_high", w.DWORD),
+                        ("index_low", w.DWORD)]
+
+        # GENERIC_READ | READ_CONTROL; share read only; OPEN_EXISTING;
+        # FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN
+        handle = k.CreateFileW(path, 0x80000000 | 0x00020000, 1, None, 3, 0x00200000 | 0x08000000, None)
+        if handle in (None, w.HANDLE(-1).value):
+            raise ServiceError(f"cannot open {sanitize(path)} (error {c.get_last_error()})")
+        try:
+            info = Info()
+            if not k.GetFileInformationByHandle(handle, c.byref(info)):
+                raise ServiceError(f"cannot inspect {sanitize(path)}")
+            if info.attributes & 0x400 or info.attributes & 0x10 or info.links != 1:
+                raise ServiceError(f"{sanitize(path)} is a reparse point, directory or multiply-linked file")
+            owner, sd = c.c_void_p(), c.c_void_p()
+            if a.GetSecurityInfo(handle, 1, 1, c.byref(owner), None, None, None, c.byref(sd)):
+                raise ServiceError(f"cannot read the owner of {sanitize(path)}")
+            try:
+                if self._sid_text(owner) != owner_sid:
+                    raise ServiceError(f"{sanitize(path)} is not owned by {owner_sid}")
+            finally:
+                k.LocalFree(sd)
+            buf = c.create_string_buffer(limit + 1)
+            read = w.DWORD()
+            if not k.ReadFile(handle, buf, limit + 1, c.byref(read), None):
+                raise ServiceError(f"cannot read {sanitize(path)}")
+            if read.value > limit:
+                raise ServiceError(f"{sanitize(path)} is larger than {limit} bytes")
+            return buf.raw[: read.value]
+        finally:
+            k.CloseHandle(handle)
 
     _TRUSTED_INSTALLER = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
 
@@ -1035,7 +1160,8 @@ def readback_problems(fields: dict, plan: "WindowsPlan", api: WindowsApi) -> lis
 
 
 def spec_readback_problems(
-    fields: dict, spec: TaskSpec, user_sid: str, logon_type: str, api: WindowsApi
+    fields: dict, spec: TaskSpec, user_sid: str, logon_type: str, api: WindowsApi,
+    expected_xml: Optional[str] = None, ignore_enabled: bool = False,
 ) -> list:
     """Differences between a REGISTERED task and the requested ``spec``.
 
@@ -1066,6 +1192,8 @@ def spec_readback_problems(
         problems.append(f"logon type {sanitize(str(fields['logon_type']), 40)} is not {logon_type}")
     if fields["run_level"] != "LeastPrivilege":
         problems.append(f"run level {sanitize(str(fields['run_level']), 40)} is not LeastPrivilege")
+    if expected_xml is not None:
+        problems.extend(definition_drift(expected_xml, fields, ignore_enabled=ignore_enabled))
     return problems
 
 
@@ -1099,7 +1227,9 @@ def _register(
     if registered is None:
         raise ServiceError(f"{spec.name} is not visible after registration")
     try:
-        problems = spec_readback_problems(parse_task_xml(registered), spec, user_sid, logon_type, api)
+        problems = spec_readback_problems(
+            parse_task_xml(registered), spec, user_sid, logon_type, api, expected_xml=xml
+        )
     except ServiceError as exc:
         problems = [str(exc)]
     if problems:

@@ -85,6 +85,7 @@ def endpoint_spec(m: ep.GuardianManifest, leaf: str, host_key, qualification: bo
             f"as the enrolling user. Manifest sha256 {m.sha256}. "
             f"Enrolled host key: {host_key.line}. {win.MANAGED_MARKER}."
         ),
+        allow_hard_terminate=check_only,  # the guardian's only stop is STOP.json
     )
 
 
@@ -153,47 +154,39 @@ def plan_endpoint(manifest_path: str, show: str, user_sid: str, *, instance: Opt
     return EndpointPlan(m, leaf, spec, xml, host_key, qualification, check_only)
 
 
-def _owned(api, path: str, m: ep.GuardianManifest, what: str, problems: list) -> bool:
-    owner = api.owner_sid(path)
-    if owner != m.owner_sid:
-        problems.append(f"{what} is owned by {owner}, not {m.owner_sid}")
-        return False
-    return True
+def read_private(api, path: str, m: ep.GuardianManifest, limit: int = ep.MAX_PROTOCOL_BYTES) -> Optional[bytes]:
+    """A protocol file through the guardian's private authority, validated by
+    handle (no reparse, single link, owner, protected ancestors) — F9."""
+    return api.read_private_file(path, m.owner_sid, limit)
 
 
 def readiness(m: ep.GuardianManifest, host_key, api, runner, *, not_generation: Optional[str] = None) -> dict:
     out = {"ok": False, "problems": [], "generation": None, "pid": None, "birth": None,
-           "guardianPID": None, "hostKey": None}
+           "guardianPID": None, "hostKey": None, "guardianIdentity": ep.GUARDIAN_IDENTITY,
+           "stopAuthority": ep.STOP_AUTHORITY}
     problems = out["problems"]
-    data = read_bounded(ep.current_path(m), ep.MAX_PROTOCOL_BYTES)
-    if data is None:
-        problems.append("no CURRENT.json yet (guardian not READY)")
-        return out
-    if not _owned(api, ep.current_path(m), m, "CURRENT.json", problems):
-        return out
     try:
+        data = read_private(api, ep.current_path(m), m)
+        if data is None:
+            problems.append("no CURRENT.json yet (guardian not READY)")
+            return out
         cur = ep.parse_current(data, m)
-    except ServiceError as exc:
-        problems.append(str(exc))
-        return out
-    out["generation"] = cur.generation
-    if not_generation is not None and cur.generation.casefold() == not_generation.casefold():
-        problems.append("CURRENT.json still names the generation from before this start (stale)")
-        return out
-    ready_data = read_bounded(cur.ready, ep.MAX_PROTOCOL_BYTES)
-    if ready_data is None:
-        problems.append("READY.json of the current generation is missing")
-        return out
-    if not _owned(api, cur.ready, m, "READY.json", problems):
-        return out
-    try:
+        out["generation"] = cur.generation
+        if not_generation is not None and cur.generation.casefold() == not_generation.casefold():
+            problems.append("CURRENT.json still names the generation from before this start (stale)")
+            return out
+        ready_data = read_private(api, cur.ready, m)
+        if ready_data is None:
+            problems.append("READY.json of the current generation is missing")
+            return out
         ready = ep.parse_ready(ready_data, m)
+        out.update(pid=ready.pid, birth=ready.birth, guardianPID=ready.guardian_pid,
+                   station=ready.station, privateDesktop=ready.private_desktop)
+        if read_private(api, cur.file("CLOSED.json"), m) is not None:
+            problems.append("the current generation is CLOSED (stale CURRENT is not proof of running)")
+            return out
     except ServiceError as exc:
         problems.append(str(exc))
-        return out
-    out.update(pid=ready.pid, birth=ready.birth, guardianPID=ready.guardian_pid)
-    if read_bounded(cur.file("CLOSED.json"), ep.MAX_PROTOCOL_BYTES) is not None:
-        problems.append("the current generation is CLOSED (stale CURRENT is not proof of running)")
         return out
     if api.process_birth(ready.pid) != ready.birth:
         problems.append(f"the held daemon pid {ready.pid} with birth {ready.birth} is not alive")
@@ -215,18 +208,31 @@ def readiness(m: ep.GuardianManifest, host_key, api, runner, *, not_generation: 
     return out
 
 
-def _previous_generation(m: ep.GuardianManifest) -> Optional[str]:
-    data = read_bounded(ep.current_path(m), ep.MAX_PROTOCOL_BYTES)
-    if data is None:
-        return None
+def _previous_generation(m: ep.GuardianManifest, api) -> Optional[str]:
     try:
-        return ep.parse_current(data, m).generation
+        data = read_private(api, ep.current_path(m), m)
+        return ep.parse_current(data, m).generation if data is not None else None
     except ServiceError:
         return None
 
 
 def start_and_confirm(plan: EndpointPlan, runner, api) -> dict:
-    previous = None if plan.check_only else _previous_generation(plan.manifest)
+    """Start and confirm; when NOT ready, the task is DISABLED (kept for
+    inspection, never killed) so neither the watchdog nor RestartOnFailure
+    keeps relaunching a half-installed endpoint (F10)."""
+    try:
+        return _start_and_confirm(plan, runner, api)
+    except NotStartedError as exc:
+        try:
+            _set_enabled(plan.leaf, False, runner)
+            note = "the task was left registered and DISABLED (nothing was killed; inspect with status)"
+        except ServiceError as disable_error:
+            note = f"the task could NOT be disabled ({disable_error}); disable or uninstall it now"
+        raise NotStartedError(f"{exc}; {note}") from None
+
+
+def _start_and_confirm(plan: EndpointPlan, runner, api) -> dict:
+    previous = None if plan.check_only else _previous_generation(plan.manifest, api)
     result = runner(win.schtasks("/Run", "/TN", plan.name))
     if result.returncode != 0:
         raise NotStartedError(
@@ -300,7 +306,14 @@ def _wait_not_running(leaf: str, runner, seconds: float) -> str:
 
 
 def stop_and_remove(leaf: str, *, force: bool, runner, api) -> Optional[str]:
-    """Disable -> STOP protocol -> delete. None when the task is absent."""
+    """Disable -> STOP protocol -> validated CLOSED -> delete.
+
+    None when the task is absent. Any doubt raises with the task left
+    registered and DISABLED: a NOT accepted CLOSED.json, a daemon still alive,
+    a listener still on the port, or the task still Running (F7). ``force``
+    only allows deleting after a NOT accepted CLOSED.json once the daemon is
+    gone, the port is free and the task is not Running — reported as such.
+    """
     name = win.TASK_FOLDER + leaf
     registered = win.query_task_xml(runner, leaf)
     if registered is None:
@@ -321,10 +334,13 @@ def stop_and_remove(leaf: str, *, force: bool, runner, api) -> Optional[str]:
     if manifest_path:
         try:
             m = load_manifest(manifest_path)
+            if read_private(api, m.path, m, ep.MAX_MANIFEST_BYTES) != read_bounded(m.path, ep.MAX_MANIFEST_BYTES):
+                raise ServiceError("the manifest changed while it was being validated")
         except ServiceError as exc:
             notes.append(f"manifest unreadable ({exc})")
+            m = None
     if m is not None:
-        notes.append(_stop_current_generation(m, leaf, runner, api))
+        notes.append(_stop_current_generation(m, leaf, runner, api, force=force))
     state = _wait_not_running(leaf, runner, 20)
     if state == "Running":
         raise ServiceError(
@@ -344,52 +360,68 @@ def stop_and_remove(leaf: str, *, force: bool, runner, api) -> Optional[str]:
     return "; ".join(n for n in notes if n)
 
 
-def _stop_current_generation(m: ep.GuardianManifest, leaf: str, runner, api) -> str:
+def _left_disabled(message: str) -> ServiceError:
+    return ServiceError(f"{message}; the task is left registered and DISABLED, nothing was killed")
+
+
+def _verify_closed(m, cur, ready, closed: bytes, leaf: str, runner, api, *, force: bool, existing: bool) -> str:
+    """CLOSED.json counts only when accepted AND the held daemon is gone AND
+    the port is free (and, for a pre-existing CLOSED, the task is not
+    Running)."""
+    accepted, detail = ep.closed_accepted(closed)
+    if ready is not None and api.process_birth(ready.pid) == ready.birth:
+        raise _left_disabled(
+            f"CLOSED.json was written but the held daemon {ready.pid} (birth {ready.birth}) is still alive")
+    if api.listener_pids(m.port):
+        raise _left_disabled(f"127.0.0.1:{m.port} is still listening after the guardian closed")
+    prefix = f"generation {cur.generation} " + ("already CLOSED" if existing else "CLOSED")
+    if accepted:
+        return f"{prefix} (accepted)" if existing else \
+            f"generation {cur.generation} stopped by the guardian (CLOSED accepted)"
+    info = win.query_task(runner, leaf)
+    if force and (info is None or info.state != "Running"):
+        return (f"{prefix} but NOT accepted ({detail}); removed anyway because of --force "
+                "(daemon gone, port free, task not running)")
+    raise _left_disabled(f"{prefix} but NOT accepted ({detail})")
+
+
+def _stop_current_generation(m: ep.GuardianManifest, leaf: str, runner, api, *, force: bool = False) -> str:
     deadline = time.monotonic() + 30
-    data = read_bounded(ep.current_path(m), ep.MAX_PROTOCOL_BYTES)
+    data = read_private(api, ep.current_path(m), m)
     while data is None:
         info = win.query_task(runner, leaf)
         if not info or info.state != "Running" or time.monotonic() >= deadline:
             return "no CURRENT.json: no READY generation to stop"
         time.sleep(POLL_SECONDS)
-        data = read_bounded(ep.current_path(m), ep.MAX_PROTOCOL_BYTES)
-    if api.owner_sid(ep.current_path(m)) != m.owner_sid:
-        raise ServiceError("CURRENT.json is not owned by the manifest owner; not acting on it")
+        data = read_private(api, ep.current_path(m), m)
     cur = ep.parse_current(data, m)
-    closed_path = cur.file("CLOSED.json")
-    if read_bounded(closed_path, ep.MAX_PROTOCOL_BYTES) is not None:
-        return f"generation {cur.generation} already CLOSED"
-    ready_data = read_bounded(cur.ready, ep.MAX_PROTOCOL_BYTES)
+    ready_data = read_private(api, cur.ready, m)
     if ready_data is None:
-        raise ServiceError("CURRENT.json names a generation without READY.json; not acting on it")
-    if api.owner_sid(cur.ready) != m.owner_sid:
-        raise ServiceError("READY.json is not owned by the manifest owner; not acting on it")
+        raise _left_disabled("CURRENT.json names a generation without READY.json; not acting on it")
     ready = ep.parse_ready(ready_data, m)
-    if api.process_birth(ready.pid) == ready.birth:
+    closed_path = cur.file("CLOSED.json")
+    closed = read_private(api, closed_path, m)
+    if closed is not None:
+        return _verify_closed(m, cur, ready, closed, leaf, runner, api, force=force, existing=True)
+    if api.process_birth(ready.pid) != ready.birth:
+        info = win.query_task(runner, leaf)
+        if (info is None or info.state != "Running") and not api.listener_pids(m.port):
+            # F8: a crash / power loss skipped CLOSED.json; CURRENT is only a pointer
+            return (f"stale generation {cur.generation} (no CLOSED.json; the held daemon "
+                    f"{ready.pid} is gone, the port is free, the task is not running): nothing to stop")
+    else:
         stop_path = cur.file("STOP.json")
-        if read_bounded(stop_path, ep.MAX_STOP_BYTES) is None:
+        if read_private(api, stop_path, m, ep.MAX_STOP_BYTES) is None:
             api.write_owned_file(stop_path, ep.stop_request(ready), m.owner_sid)
     deadline = time.monotonic() + STOP_CONFIRM_SECONDS
-    closed = read_bounded(closed_path, ep.MAX_PROTOCOL_BYTES)
+    closed = read_private(api, closed_path, m)
     while closed is None and time.monotonic() < deadline:
         time.sleep(POLL_SECONDS)
-        closed = read_bounded(closed_path, ep.MAX_PROTOCOL_BYTES)
+        closed = read_private(api, closed_path, m)
     if closed is None:
-        raise ServiceError(
-            f"the guardian did not write CLOSED.json for {cur.generation} within "
-            f"{STOP_CONFIRM_SECONDS:g}s; the task is left DISABLED, nothing was killed"
-        )
-    accepted, detail = ep.closed_accepted(closed)
-    if api.process_birth(ready.pid) == ready.birth:
-        raise ServiceError(
-            f"CLOSED.json was written but the held daemon {ready.pid} (birth {ready.birth}) is still "
-            "alive; the task is left DISABLED"
-        )
-    if api.listener_pids(m.port):
-        raise ServiceError(f"127.0.0.1:{m.port} is still listening after the guardian closed")
-    if not accepted:
-        return f"generation {cur.generation} CLOSED without acceptance ({detail})"
-    return f"generation {cur.generation} stopped by the guardian (CLOSED accepted)"
+        raise _left_disabled(
+            f"the guardian did not write CLOSED.json for {cur.generation} within {STOP_CONFIRM_SECONDS:g}s")
+    return _verify_closed(m, cur, ready, closed, leaf, runner, api, force=False, existing=False)
 
 
 def endpoint_status(leaf: str, runner, api, user_sid: Optional[str] = None) -> Optional[dict]:
@@ -426,7 +458,18 @@ def endpoint_status(leaf: str, runner, api, user_sid: Optional[str] = None) -> O
     check_only = out["arguments"][-1:] == ["--check-only"]
     spec = endpoint_spec(m, leaf, host_key, leaf != ep.ENDPOINT_LEAF, check_only)
     sid = user_sid or api.current_sid()
-    out["contract"] = win.spec_readback_problems(fields, spec, sid, win.DEFAULT_LOGON_TYPE, api)
+    expected = win.build_spec_xml(
+        spec, sid, triggers=not check_only,
+        execution_time_limit=ep.CHECK_ONLY_TIME_LIMIT if check_only else "PT0S",
+    )
+    out["contract"] = win.spec_readback_problems(
+        fields, spec, sid, win.DEFAULT_LOGON_TYPE, api, expected_xml=expected, ignore_enabled=True)
+    out["enabled"] = fields["settings"]["Enabled"] == "true"
+    try:
+        if read_private(api, m.path, m, ep.MAX_MANIFEST_BYTES) != read_bounded(m.path, ep.MAX_MANIFEST_BYTES):
+            out["contract"].append("the manifest changed while it was being validated")
+    except ServiceError as exc:
+        out["contract"].append(f"manifest authority: {exc}")
     if m.sha256 not in ep.ALLOWED_ENDPOINT_MANIFEST_SHA256:
         out["contract"].append("the manifest is no longer a reviewed manifest")
     if m.source_digests() not in ep.ALLOWED_GUARDIAN_SOURCES:
@@ -438,5 +481,5 @@ def endpoint_status(leaf: str, runner, api, user_sid: Optional[str] = None) -> O
         return out
     ready = readiness(m, host_key, api, runner)
     out["readiness"] = ready
-    out["running"] = info.state == "Running" and not out["contract"] and ready["ok"]
+    out["running"] = info.state == "Running" and out["enabled"] and not out["contract"] and ready["ok"]
     return out

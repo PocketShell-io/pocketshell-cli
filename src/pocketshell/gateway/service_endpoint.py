@@ -429,6 +429,10 @@ def parse_current(data: bytes, m: GuardianManifest) -> Current:
     return Current(generation, ready, c["manifestSHA256"])
 
 
+GUARDIAN_IDENTITY = "pid+image only (READY carries no guardian birth); diagnostic, not stop authority"
+STOP_AUTHORITY = "held daemon pid + creationFILETIME"
+
+
 @dataclass(frozen=True)
 class Ready:
     pid: int
@@ -436,25 +440,53 @@ class Ready:
     guardian_pid: int
     port: int
     manifest_sha256: str
-    source_sha256: Optional[str]
+    source_sha256: str
+    station: str
+    private_desktop: str
 
 
 def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
-    """READY.json metadata: held daemon pid + decimal STRING birth, guardian
-    pid, manifest digest, port (and the guardian source digest)."""
+    """READY.json as the 6cf7ae85 guardian publishes it, with every fact the
+    production (S4U) readiness depends on REQUIRED:
+
+    held daemon pid (int, not bool) + decimal STRING creationFILETIME,
+    guardianPID, manifestSHA256 and port of this manifest, sourceSHA256 of the
+    pinned guardian.py (mandatory), heldProcessHandle and ownedJob true, and
+    the context the guardian validated: ownerSID = manifest owner, session 0,
+    a NON-visible station other than WinSta0, the private desktop created on
+    that station, and its checked desktop ACL. The guardian's interactive
+    (active console WinSta0/Default) branch is a qualification fallback, never
+    readiness of the scheduled task.
+    """
     r = _json_object(data, "READY.json")
-    if type(r.get("pid")) is not int or r["pid"] <= 0 or type(r.get("guardianPID")) is not int or r["guardianPID"] <= 0:
-        raise ServiceError("READY.json: pid and guardianPID must be positive integers")
-    if not isinstance(r.get("creationFILETIME"), str) or not FILETIME_RE.fullmatch(r["creationFILETIME"]):
-        raise ServiceError("READY.json: creationFILETIME must be a decimal STRING")
-    if r.get("manifestSHA256") != m.sha256:
-        raise ServiceError("READY.json belongs to a different manifest")
-    if r.get("port") != m.port:
-        raise ServiceError("READY.json port differs from the manifest")
-    source = r.get("sourceSHA256")
-    if source is not None and source != m.pins[m.guardian]:
-        raise ServiceError("READY.json sourceSHA256 is not the pinned guardian.py")
-    return Ready(r["pid"], r["creationFILETIME"], r["guardianPID"], r["port"], r["manifestSHA256"], source)
+
+    def require(ok: bool, what: str) -> None:
+        if not ok:
+            raise ServiceError(f"READY.json: {what}")
+
+    require(type(r.get("pid")) is int and r["pid"] > 0, "pid must be a positive integer")
+    require(type(r.get("guardianPID")) is int and r["guardianPID"] > 0, "guardianPID must be a positive integer")
+    require(isinstance(r.get("creationFILETIME"), str) and bool(FILETIME_RE.fullmatch(r["creationFILETIME"])),
+            "creationFILETIME must be a decimal STRING")
+    require(r.get("manifestSHA256") == m.sha256, "belongs to a different manifest")
+    require(type(r.get("port")) is int and r["port"] == m.port, "port differs from the manifest")
+    require(r.get("sourceSHA256") == m.pins[m.guardian], "sourceSHA256 is missing or not the pinned guardian.py")
+    require(r.get("heldProcessHandle") is True, "heldProcessHandle is not true")
+    require(r.get("ownedJob") is True, "ownedJob is not true")
+    c = r.get("context")
+    require(isinstance(c, dict), "context is missing")
+    require(c.get("ownerSID") == m.owner_sid, "context.ownerSID is not the manifest owner")
+    require(type(c.get("session")) is int and c["session"] == 0, "context.session is not 0 (not the S4U task)")
+    require(c.get("stationVisible") is False, "context.stationVisible is not false")
+    station = c.get("station")
+    require(isinstance(station, str) and bool(station) and not any(x in station for x in "\\/\x00\r\n")
+            and station.casefold() != "winsta0", "context.station is not an actual non-WinSta0 station")
+    desktop = r.get("privateDesktop")
+    require(isinstance(desktop, str) and desktop.startswith(station + "\\") and len(desktop) > len(station) + 1,
+            "privateDesktop is not a desktop on the guardian's own station")
+    require(bool(r.get("desktopACL")), "desktopACL (the checked private desktop ACL) is missing")
+    return Ready(r["pid"], r["creationFILETIME"], r["guardianPID"], r["port"], r["manifestSHA256"],
+                 r["sourceSHA256"], station, desktop)
 
 
 def stop_request(ready: Ready) -> bytes:
@@ -471,6 +503,7 @@ def stop_request(ready: Ready) -> bytes:
 
 
 def closed_accepted(data: bytes) -> tuple:
+    # (accepted, detail); the caller also verifies identity and listener absence
     """(accepted, detail) from CLOSED.json: accepted AND requestedOwnedJobStop
     AND activeAtClose == 0 AND no cleanupErrors."""
     closed = _json_object(data, "CLOSED.json")

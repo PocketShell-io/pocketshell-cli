@@ -25,6 +25,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -177,10 +178,15 @@ class Guardian:
             return
         self.api.listeners[self.port] = [("127.0.0.1", daemon)]
         ready = {
-            "accepted": False, "manifestSHA256": self.manifest_sha, "context": {"session": 0},
+            "accepted": False, "manifestSHA256": self.manifest_sha,
+            "context": {"ownerSID": USER_SID, "session": 0, "station": "Service-0x0-1a2b$",
+                        "stationVisible": False, "desktop": "Default", "activeConsoleSession": 1,
+                        "authenticationLUID": "123"},
             "cleanupErrors": [], "pid": daemon, "creationFILETIME": self.api.births[daemon],
             "guardianPID": guardian, "sourceSHA256": SHA_G, "port": self.port,
             "heldProcessHandle": True, "ownedJob": True,
+            "privateDesktop": "Service-0x0-1a2b$\\PocketShellPrivate_" + os.urandom(16).hex(),
+            "desktopACL": {"owner": USER_SID, "trustees": [USER_SID, "S-1-5-18", "S-1-5-32-544"]},
         }
         self.vfs[self.generation + "\\READY.json"] = json.dumps(ready).encode()
         self.vfs[STATE + "\\CURRENT.json"] = json.dumps({
@@ -215,6 +221,7 @@ class EndpointApi(FakeApi):
         self.guardian = None
         self.writes, self.authority = [], []
         self.authority_failures = {}
+        self.reparse, self.private_reads = set(), []
 
     def process_birth(self, pid):
         return self.births.get(pid)
@@ -229,6 +236,20 @@ class EndpointApi(FakeApi):
         self.authority.append((path, role, directory, protected, servicing))
         if path in self.authority_failures:
             raise ServiceError(self.authority_failures[path])
+
+    def read_private_file(self, path, owner_sid, limit):
+        """Handle-validated private read (no reparse, single link, owner)."""
+        self.private_reads.append(path)
+        if path in self.reparse:
+            raise ServiceError(f"{path} is a reparse point")
+        if path not in self.vfs:
+            return None
+        if self.owners.get(path, self.sid) != owner_sid:
+            raise ServiceError(f"{path} is not owned by {owner_sid}")
+        data = self.vfs[path]
+        if len(data) > limit:
+            raise ServiceError(f"{path} is larger than {limit} bytes")
+        return data
 
     def write_owned_file(self, path, data, owner_sid):
         assert path not in self.vfs, "STOP.json must never be overwritten"
@@ -567,8 +588,9 @@ def test_closed_requires_the_final_acceptance_fields(env):
             {"accepted": True, "requestedOwnedJobStop": True, "activeAtClose": 1, "cleanupErrors": []}).encode()
 
     g.on_stop = partial_close
-    message = win.uninstall(api=env["api"])
-    assert "without acceptance" in message
+    with pytest.raises(ServiceError, match="NOT accepted"):  # F7: never deleted after a partial close
+        win.uninstall(api=env["api"])
+    assert "GatewayEndpoint" in env["fake"].tasks
 
 
 # --- Phase A check-only and the isolated qualification instance ---------------------------
@@ -702,3 +724,196 @@ def test_probe_argv_disables_every_auth_method_and_pins_strictly():
                 "PasswordAuthentication=no", "KbdInteractiveAuthentication=no",
                 f"UserKnownHostsFile={spelled}", "HostKeyAlgorithms=ssh-ed25519"):
         assert opt in joined
+
+
+# --- independent review 5648459: F4, F5, F7, F8, F9, F10, F11 ------------------------------
+
+
+def _ready_path(env):
+    return env["guardian"].generation + "\\READY.json"
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("heldProcessHandle", False),
+        ("ownedJob", False),
+        ("sourceSHA256", None),
+        ("pid", True),  # a bool is not a pid
+        ("context", {"ownerSID": OTHER_SID, "session": 0, "station": "Service-0x0-1$", "stationVisible": False}),
+        ("context", {"ownerSID": USER_SID, "session": 1, "station": "WinSta0", "stationVisible": True}),
+        ("context", {"ownerSID": USER_SID, "session": 0, "station": "WinSta0", "stationVisible": False}),
+        ("context", {"ownerSID": USER_SID, "session": 0, "station": "Service-0x0-1$", "stationVisible": True}),
+    ],
+)
+def test_f4_ready_must_state_the_owned_session0_facts(env, field, value):
+    win.apply_install(_plan(env), api=env["api"])
+    ready = json.loads(env["vfs"][_ready_path(env)])
+    if value is None:
+        ready.pop(field)
+    else:
+        ready[field] = value
+    env["vfs"][_ready_path(env)] = json.dumps(ready).encode()
+    st = win.status(api=env["api"])
+    assert st.exit_code == 3, (field, value)
+
+
+def test_f4_qualified_interactive_branch_is_not_production_ready(env):
+    """The guardian's interactive WinSta0 branch is a qualification fallback,
+    never readiness of the S4U production task."""
+    win.apply_install(_plan(env), api=env["api"])
+    ready = json.loads(env["vfs"][_ready_path(env)])
+    ready["context"] = {"ownerSID": USER_SID, "session": 1, "station": "WinSta0", "stationVisible": True,
+                        "desktop": "Default", "activeConsoleSession": 1}
+    env["vfs"][_ready_path(env)] = json.dumps(ready).encode()
+    assert win.status(api=env["api"]).exit_code == 3
+
+
+def test_f5_guardian_identity_is_labelled_pid_only_not_stop_authority(env):
+    win.apply_install(_plan(env), api=env["api"])
+    ready = win.status(api=env["api"]).details["endpoint"]["readiness"]
+    assert ready["guardianIdentity"] == "pid+image only (READY carries no guardian birth); diagnostic, not stop authority"
+    assert ready["stopAuthority"] == "held daemon pid + creationFILETIME"
+
+
+def test_f7_non_accepted_closed_keeps_the_task_and_fails(env):
+    win.apply_install(_plan(env), api=env["api"])
+    g = env["guardian"]
+    original = g.on_stop
+
+    def failed_cleanup(path, data):
+        original(path, data)
+        closed = path.replace("STOP.json", "CLOSED.json")
+        env["vfs"][closed] = json.dumps({"accepted": False, "requestedOwnedJobStop": True, "activeAtClose": 0,
+                                         "cleanupErrors": ["Owned Job drain timeout"]}).encode()
+
+    g.on_stop = failed_cleanup
+    env["api"].guardian = g
+    with pytest.raises(ServiceError, match="NOT accepted.*left registered and DISABLED"):
+        win.uninstall(api=env["api"])
+    assert "GatewayEndpoint" in env["fake"].tasks
+    assert env["fake"].tasks["GatewayEndpoint"].get("enabled") is False
+    assert ("/Delete", "GatewayEndpoint") not in _task_verbs(env["fake"])
+
+
+def test_f8_stale_current_without_closed_is_reported_and_removed(env):
+    win.apply_install(_plan(env), api=env["api"])
+    ready = json.loads(env["vfs"][_ready_path(env)])
+    # a hard crash / power loss: no CLOSED.json, guardian and daemon gone, port free
+    env["api"].births.clear()
+    env["api"].listeners.clear()
+    env["fake"].tasks["GatewayEndpoint"]["state"] = "Ready"
+    message = win.uninstall(api=env["api"])
+    assert "stale generation" in message and ready["pid"] is not None
+    assert "GatewayEndpoint" not in env["fake"].tasks
+    assert not [w for w in env["api"].writes if w[0].endswith("STOP.json")]
+
+
+@pytest.mark.parametrize("which", ["CURRENT", "READY"])
+def test_f9_protocol_reads_refuse_reparse_points(env, which):
+    win.apply_install(_plan(env), api=env["api"])
+    target = STATE + "\\CURRENT.json" if which == "CURRENT" else _ready_path(env)
+    env["api"].reparse.add(target)
+    st = win.status(api=env["api"])
+    assert st.exit_code == 3
+    assert any("reparse" in w for w in st.warnings)
+    assert target in env["api"].private_reads
+
+
+def test_f9_closed_and_stop_reads_are_handle_validated(env):
+    win.apply_install(_plan(env), api=env["api"])
+    win.uninstall(api=env["api"])
+    reads = env["api"].private_reads
+    assert any(r.endswith("CLOSED.json") for r in reads)
+    assert any(r.endswith("STOP.json") for r in reads)
+
+
+def test_f10_not_ready_disables_the_endpoint_task(env):
+    env["guardian"].ready_on_run = False
+    with pytest.raises(common.NotStartedError, match="DISABLED"):
+        win.apply_install(_plan(env), api=env["api"])
+    task = env["fake"].tasks["GatewayEndpoint"]
+    assert task.get("enabled") is False
+    assert ("/End", "GatewayEndpoint") not in _task_verbs(env["fake"])
+
+
+_SETTINGS_DRIFT = {
+    "parallel": lambda x: x.replace("<MultipleInstancesPolicy>IgnoreNew", "<MultipleInstancesPolicy>Parallel"),
+    "time-limit": lambda x: x.replace("<ExecutionTimeLimit>PT0S", "<ExecutionTimeLimit>PT72H"),
+    "no-restart": lambda x: re.sub(r"\s*<RestartOnFailure>.*?</RestartOnFailure>", "", x, flags=re.S),
+    "hard-terminate": lambda x: x.replace("<AllowHardTerminate>false", "<AllowHardTerminate>true"),
+    "no-boot": lambda x: re.sub(r"\s*<BootTrigger>.*?</BootTrigger>", "", x, flags=re.S),
+    "boot-delay": lambda x: x.replace("<Delay>PT10S</Delay>", "<Delay>PT1H</Delay>"),
+    "watchdog": lambda x: x.replace("<Interval>PT5M</Interval>", "<Interval>PT1H</Interval>"),
+    "battery": lambda x: x.replace("<StopIfGoingOnBatteries>false", "<StopIfGoingOnBatteries>true"),
+    "disabled": lambda x: re.sub(r"<Enabled>true</Enabled>(\r?\n\s*<Hidden>)", r"<Enabled>false</Enabled>\1", x),
+    "hidden": lambda x: x.replace("<Hidden>false", "<Hidden>true"),
+    "extra-trigger": lambda x: x.replace("</Triggers>", "<LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_SETTINGS_DRIFT))
+def test_f11_settings_and_trigger_drift_refused_before_run(env, name):
+    env["fake"].mutate_on_create = _SETTINGS_DRIFT[name]
+    plan = _plan(env)
+    assert _SETTINGS_DRIFT[name](plan.endpoint.xml) != plan.endpoint.xml, "drift fixture did not apply"
+    with pytest.raises(ServiceError, match="does not match"):
+        win.apply_install(plan, api=env["api"])
+    assert ("/Run", "GatewayEndpoint") not in _task_verbs(env["fake"])
+    assert "GatewayEndpoint" not in env["fake"].tasks
+
+
+def test_f11_endpoint_task_cannot_be_hard_terminated(env):
+    plan = _plan(env)
+    assert "<AllowHardTerminate>false</AllowHardTerminate>" in plan.endpoint.xml
+
+
+def test_f11_status_reports_settings_drift(env):
+    win.apply_install(_plan(env), api=env["api"])
+    task = env["fake"].tasks["GatewayEndpoint"]
+    task["xml"] = task["xml"].replace("<MultipleInstancesPolicy>IgnoreNew", "<MultipleInstancesPolicy>Parallel")
+    st = win.status(api=env["api"])
+    assert st.exit_code == 3
+    assert any("MultipleInstancesPolicy" in w or "multiple_instances" in w for w in st.warnings)
+
+
+def _crash_closed(env, accepted, listener=False):
+    """A generation already CLOSED before uninstall (e.g. a daemon crash)."""
+    win.apply_install(_plan(env), api=env["api"])
+    gen = env["guardian"].generation
+    env["api"].births.clear()
+    if not listener:
+        env["api"].listeners.clear()
+    env["fake"].tasks["GatewayEndpoint"]["state"] = "Ready"
+    env["vfs"][gen + "\\CLOSED.json"] = json.dumps({
+        "accepted": accepted, "requestedOwnedJobStop": accepted, "activeAtClose": 0,
+        "cleanupErrors": [] if accepted else ["Held daemon exited unexpectedly"]}).encode()
+
+
+def test_f7_existing_rejected_closed_raises_and_keeps_task(env):
+    _crash_closed(env, accepted=False)
+    with pytest.raises(ServiceError, match="NOT accepted.*left registered and DISABLED"):
+        win.uninstall(api=env["api"])
+    assert "GatewayEndpoint" in env["fake"].tasks
+    assert env["fake"].tasks["GatewayEndpoint"].get("enabled") is False
+
+
+def test_f7_existing_rejected_closed_force_removes_truthfully(env):
+    _crash_closed(env, accepted=False)
+    message = win.uninstall(api=env["api"], force=True)
+    assert "NOT accepted" in message and "--force" in message
+    assert "GatewayEndpoint" not in env["fake"].tasks
+
+
+def test_f7_existing_accepted_closed_still_requires_listener_absence(env):
+    _crash_closed(env, accepted=True, listener=True)
+    with pytest.raises(ServiceError, match="still listening"):
+        win.uninstall(api=env["api"])
+    assert "GatewayEndpoint" in env["fake"].tasks
+
+
+def test_f7_existing_accepted_closed_is_validated_then_removed(env):
+    _crash_closed(env, accepted=True)
+    message = win.uninstall(api=env["api"])
+    assert "already CLOSED (accepted" in message
+    assert "GatewayEndpoint" not in env["fake"].tasks
