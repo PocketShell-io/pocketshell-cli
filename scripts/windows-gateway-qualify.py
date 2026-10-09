@@ -220,8 +220,9 @@ class Qualifier:
                 return [self.a.remote_cat]
             if win:
                 # A binary-safe stdin->stdout echo needs a real program on a
-                # Windows host (cmd has none, and powershell.exe's host
-                # interferes with redirected stdin): Python on PATH.
+                # Windows host: cmd has none, and a powershell.exe
+                # [Console]::OpenStandardInput().CopyTo(...) echo stalled
+                # under Win32-OpenSSH sshd in CI. Python from the host PATH.
                 return [WINDOWS_REMOTE_CAT]
             return ["cat"]
         if kind == "sleep":
