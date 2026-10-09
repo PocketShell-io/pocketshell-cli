@@ -368,6 +368,10 @@ def _verify_closed(m, cur, ready, closed: bytes, leaf: str, runner, api, *, forc
     """CLOSED.json counts only when accepted AND the held daemon is gone AND
     the port is free (and, for a pre-existing CLOSED, the task is not
     Running)."""
+    if ready is not None:
+        identity = ep.closed_identity_problems(closed, ready)
+        if identity:
+            raise _left_disabled("; ".join(identity))
     accepted, detail = ep.closed_accepted(closed)
     if ready is not None and api.process_birth(ready.pid) == ready.birth:
         raise _left_disabled(

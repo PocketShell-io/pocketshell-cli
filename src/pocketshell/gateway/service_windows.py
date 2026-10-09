@@ -422,7 +422,11 @@ def _triggers(root, ns) -> list:
             "type": trigger.tag.rsplit("}", 1)[-1],
             "enabled": get("t:Enabled", "true"),
             "delay": get("t:Delay"),
+            "startBoundary": get("t:StartBoundary"),
+            "endBoundary": get("t:EndBoundary"),
+            "executionTimeLimit": get("t:ExecutionTimeLimit"),
             "interval": get("t:Repetition/t:Interval"),
+            "duration": get("t:Repetition/t:Duration"),
             "stopAtDurationEnd": get("t:Repetition/t:StopAtDurationEnd", "false") if trigger.find(
                 "t:Repetition", ns) is not None else None,
         })
@@ -442,6 +446,35 @@ def definition_drift(requested_xml: str, fields: dict, *, ignore_enabled: bool =
             problems.append(f"setting {key} is {have!r}, not {value!r}")
     if want["triggers"] != fields["triggers"]:
         problems.append(f"triggers {fields['triggers']} are not the requested {want['triggers']}")
+    for which, triggers in (("requested", want["triggers"]), ("registered", fields["triggers"])):
+        problems.extend(f"{which} {p}" for p in _trigger_canonical_problems(triggers))
+    return problems
+
+
+def _trigger_canonical_problems(triggers: list) -> list:
+    """Canonical supported trigger values: no EndBoundary, no repetition
+    Duration (indefinite), no per-trigger time limit, and a StartBoundary that
+    is not in the future (else the watchdog would not run until then)."""
+    import datetime
+
+    problems = []
+    now = datetime.datetime.now()
+    for t in triggers:
+        if t.get("endBoundary"):
+            problems.append(f"{t['type']} has an EndBoundary {t['endBoundary']}")
+        if t.get("duration"):
+            problems.append(f"{t['type']} repetition has a Duration {t['duration']}")
+        if t.get("executionTimeLimit"):
+            problems.append(f"{t['type']} has a trigger ExecutionTimeLimit {t['executionTimeLimit']}")
+        start = t.get("startBoundary")
+        if start:
+            try:
+                when = datetime.datetime.fromisoformat(start.replace("Z", "+00:00"))
+            except ValueError:
+                problems.append(f"{t['type']} StartBoundary {start} is not ISO 8601")
+                continue
+            if when.astimezone() > now.astimezone():
+                problems.append(f"{t['type']} StartBoundary {start} is in the future")
     return problems
 
 
@@ -716,12 +749,16 @@ class WindowsApi:
                 raise ServiceError(f"cannot inspect {sanitize(path)}")
             if info.attributes & 0x400 or info.attributes & 0x10 or info.links != 1:
                 raise ServiceError(f"{sanitize(path)} is a reparse point, directory or multiply-linked file")
-            owner, sd = c.c_void_p(), c.c_void_p()
-            if a.GetSecurityInfo(handle, 1, 1, c.byref(owner), None, None, None, c.byref(sd)):
-                raise ServiceError(f"cannot read the owner of {sanitize(path)}")
+            # Re-validate the OPENED object (not the path): owner AND the full
+            # DACL under the private role, so a swap after the path check is
+            # refused (OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION).
+            owner, dacl, sd = c.c_void_p(), c.c_void_p(), c.c_void_p()
+            if a.GetSecurityInfo(handle, 1, 1 | 4, c.byref(owner), None, c.byref(dacl), None, c.byref(sd)):
+                raise ServiceError(f"cannot read the security of the opened {sanitize(path)}")
             try:
                 if self._sid_text(owner) != owner_sid:
-                    raise ServiceError(f"{sanitize(path)} is not owned by {owner_sid}")
+                    raise ServiceError(f"the opened {sanitize(path)} is not owned by {owner_sid}")
+                self._validate_security(f"the opened {path}", owner, dacl, sd, owner_sid, "private")
             finally:
                 k.LocalFree(sd)
             buf = c.create_string_buffer(limit + 1)
@@ -754,41 +791,54 @@ class WindowsApi:
         if code:
             raise ServiceError(f"cannot read the security of {sanitize(path)} (error {code})")
         try:
-            trusted = {owner_sid, "S-1-5-18", "S-1-5-32-544", self._TRUSTED_INSTALLER}
-            if servicing:
-                trusted.discard(owner_sid)
-            actual = self._sid_text(owner)
-            if actual not in ({owner_sid} if role == "private" else trusted):
-                raise ServiceError(f"{sanitize(path)} owner {actual} has no {role} authority")
-            ctrl, rev = w.WORD(), w.DWORD()
-            if not a.GetSecurityDescriptorControl(sd, c.byref(ctrl), c.byref(rev)) or (
-                protected and not ctrl.value & 0x1000
-            ):
-                raise ServiceError(f"{sanitize(path)} must have a protected DACL")
-            if not dacl:
-                raise ServiceError(f"{sanitize(path)} has a NULL DACL")
-            count = c.c_ushort.from_address(dacl.value + 4).value
-            mutation = 0x500D0150 if role == "ancestor" else 0x500D0116
-            for i in range(count):
-                ace = c.c_void_p()
-                if not a.GetAce(dacl, i, c.byref(ace)):
-                    raise ServiceError(f"cannot read an ACE of {sanitize(path)}")
-                header = (c.c_ubyte * 4).from_address(ace.value)
-                if header[0] not in (0, 1):
-                    raise ServiceError(f"{sanitize(path)} has an unsupported ACE type")
-                if header[0] != 0 or header[1] & 8:
-                    continue  # deny ACEs never grant; inherit-only does not apply here
-                sid = self._sid_text(c.c_void_p(ace.value + 8))
-                mask = w.DWORD.from_address(ace.value + 4).value
-                if sid in trusted:
-                    continue
-                if role == "private" or mask & mutation:
-                    raise ServiceError(
-                        f"{sanitize(path)}: {sid} holds foreign mutation authority "
-                        f"(role {role}, mask 0x{mask:08X})"
-                    )
+            self._validate_security(path, owner, dacl, sd, owner_sid, role,
+                                    protected=protected, servicing=servicing)
         finally:
             k.LocalFree(sd)
+
+    def _validate_security(self, path: str, owner, dacl, sd, owner_sid: str, role: str, *,
+                           protected: bool = False, servicing: bool = False) -> None:
+        """The guardian's check_acl rules on an already-fetched descriptor
+        (from a path or from an OPEN HANDLE)."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        a = c.WinDLL("advapi32", use_last_error=True)
+        a.GetSecurityDescriptorControl.argtypes = [c.c_void_p, c.POINTER(w.WORD), c.POINTER(w.DWORD)]
+        a.GetAce.argtypes = [c.c_void_p, w.DWORD, c.POINTER(c.c_void_p)]
+        trusted = {owner_sid, "S-1-5-18", "S-1-5-32-544", self._TRUSTED_INSTALLER}
+        if servicing:
+            trusted.discard(owner_sid)
+        actual = self._sid_text(owner)
+        if actual not in ({owner_sid} if role == "private" else trusted):
+            raise ServiceError(f"{sanitize(path)} owner {actual} has no {role} authority")
+        ctrl, rev = w.WORD(), w.DWORD()
+        if not a.GetSecurityDescriptorControl(sd, c.byref(ctrl), c.byref(rev)) or (
+            protected and not ctrl.value & 0x1000
+        ):
+            raise ServiceError(f"{sanitize(path)} must have a protected DACL")
+        if not dacl:
+            raise ServiceError(f"{sanitize(path)} has a NULL DACL")
+        count = c.c_ushort.from_address(dacl.value + 4).value
+        mutation = 0x500D0150 if role == "ancestor" else 0x500D0116
+        for i in range(count):
+            ace = c.c_void_p()
+            if not a.GetAce(dacl, i, c.byref(ace)):
+                raise ServiceError(f"cannot read an ACE of {sanitize(path)}")
+            header = (c.c_ubyte * 4).from_address(ace.value)
+            if header[0] not in (0, 1):
+                raise ServiceError(f"{sanitize(path)} has an unsupported ACE type")
+            if header[0] != 0 or header[1] & 8:
+                continue  # deny ACEs never grant; inherit-only does not apply here
+            sid = self._sid_text(c.c_void_p(ace.value + 8))
+            mask = w.DWORD.from_address(ace.value + 4).value
+            if sid in trusted:
+                continue
+            if role == "private" or mask & mutation:
+                raise ServiceError(
+                    f"{sanitize(path)}: {sid} holds foreign mutation authority "
+                    f"(role {role}, mask 0x{mask:08X})"
+                )
 
     def listener_pids(self, port: int) -> list:
         """[(address, pid)] of IPv4 TCP listeners on ``port``."""

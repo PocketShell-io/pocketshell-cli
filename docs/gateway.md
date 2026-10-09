@@ -631,16 +631,19 @@ enrolled with either one gateway or one legacy relay — never both mixed.
 
 ## 8. Status
 
-The host-side commands wrap the Go agent; the CLI client (§9) reaches
-enrolled hosts with OpenSSH. How the PocketShell phone/desktop app pairs
-and connects through this tunnel is separate, in-progress work elsewhere.
-The production gateway currently runs without its host registry, so
-`/api/v1/hosts/*` (and therefore `gateway ssh`) is not served there yet. The same goes for the enrollment-token flow: the web
-client's **Generate enrollment token** action and its broker exchange are
-being built (web client and token-service integration in progress, not
-deployed/production yet) — until they land, obtain tokens from lab tooling
-as in §6. This wrapper treats the token on stdin as opaque bytes either way;
-it will not change when the issuer UI ships.
+The host-side commands wrap the Go agent, and the CLI client (§9) reaches
+enrolled hosts with OpenSSH. The production gateway (`gateway.pocketshell.io`)
+serves enrollment, the host registry (`/api/v1/hosts/*`, so `gateway devices`
+and `gateway ssh`) and routes to enrolled hosts.
+
+`gateway enroll` mints its scoped enrollment token from your `pocketshell
+login` session. `--token-stdin` remains for tokens obtained elsewhere (for
+example lab tooling, §6); the wrapper treats that token as opaque bytes.
+
+How the PocketShell phone/desktop app pairs and connects through this tunnel
+is separate work elsewhere. The durable Windows endpoint task
+(`service install --with-endpoint`) stays gated on reviewed guardian and
+manifest digests (§4.1).
 
 ## 9. Client side: reach an enrolled host
 

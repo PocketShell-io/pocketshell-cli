@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -125,12 +126,65 @@ func daemon(config string) int {
 
 // --- guardian -----------------------------------------------------------------------
 
+var desktopACL map[string]interface{}
+
 var (
 	user32                   = windows.NewLazySystemDLL("user32.dll")
 	procGetProcessWinStation = user32.NewProc("GetProcessWindowStation")
 	procGetUserObjectInfo    = user32.NewProc("GetUserObjectInformationW")
 	procCreateDesktopW       = user32.NewProc("CreateDesktopW")
+	procGetUserObjectSec     = user32.NewProc("GetUserObjectSecurity")
 )
+
+// verifyDesktopACL mirrors native_api.verify_desktop_acl (cab601e2): it reads
+// the desktop's ACTUAL security and returns its result schema only when the
+// owner, the PROTECTED DACL and exactly three flags-0 allow ACEs
+// (GENERIC_ALL / 0xF01FF) for {SYSTEM, Administrators, owner} hold.
+func verifyDesktopACL(desk uintptr, ownerSID string) (map[string]interface{}, error) {
+	info := uint32(windows.OWNER_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION)
+	var needed uint32
+	procGetUserObjectSec.Call(desk, uintptr(unsafe.Pointer(&info)), 0, 0, uintptr(unsafe.Pointer(&needed)))
+	if needed == 0 {
+		return nil, fmt.Errorf("GetUserObjectSecurity size")
+	}
+	buf := make([]byte, needed)
+	r, _, err := procGetUserObjectSec.Call(desk, uintptr(unsafe.Pointer(&info)), uintptr(unsafe.Pointer(&buf[0])), uintptr(needed), uintptr(unsafe.Pointer(&needed)))
+	if r == 0 {
+		return nil, fmt.Errorf("GetUserObjectSecurity: %v", err)
+	}
+	sd := (*windows.SECURITY_DESCRIPTOR)(unsafe.Pointer(&buf[0]))
+	owner, _, err := sd.Owner()
+	if err != nil || owner.String() != ownerSID {
+		return nil, fmt.Errorf("desktop owner mismatch")
+	}
+	control, _, err := sd.Control()
+	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
+		return nil, fmt.Errorf("desktop DACL is not protected")
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil || dacl.AceCount != 3 {
+		return nil, fmt.Errorf("desktop must have exactly three ACEs")
+	}
+	trustees := map[string]bool{}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return nil, err
+		}
+		if ace.Header.AceType != 0 || ace.Header.AceFlags != 0 || (ace.Mask != 0x10000000 && ace.Mask != 0xf01ff) {
+			return nil, fmt.Errorf("unexpected desktop ACE type/flags/mask")
+		}
+		trustees[(*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()] = true
+	}
+	want := []string{ownerSID, "S-1-5-18", "S-1-5-32-544"}
+	for _, sid := range want {
+		if !trustees[sid] {
+			return nil, fmt.Errorf("desktop trustees mismatch")
+		}
+	}
+	sort.Strings(want)
+	return map[string]interface{}{"ownerSID": owner.String(), "protectedDACL": true, "allowTrustees": want, "ACECount": 3}, nil
+}
 
 func objectName(h uintptr) string {
 	buf := make([]uint16, 256)
@@ -163,10 +217,23 @@ func context(ownerSID string) (map[string]interface{}, string, error) {
 	_, _ = rand.Read(buf)
 	desktopName := "PocketShellPrivate_" + hex.EncodeToString(buf)
 	dn, _ := windows.UTF16PtrFromString(desktopName)
-	desk, _, derr := procCreateDesktopW.Call(uintptr(unsafe.Pointer(dn)), 0, 0, 0, 0x201ff, 0)
+	// the guardian's private desktop descriptor: own owner, protected, SY/BA/own GENERIC_ALL
+	sd, err := windows.SecurityDescriptorFromString(
+		"O:" + ownerSID + "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;" + ownerSID + ")")
+	if err != nil {
+		return nil, "", err
+	}
+	sa := windows.SecurityAttributes{SecurityDescriptor: sd, InheritHandle: 1}
+	sa.Length = uint32(unsafe.Sizeof(sa))
+	desk, _, derr := procCreateDesktopW.Call(uintptr(unsafe.Pointer(dn)), 0, 0, 0, 0x201ff, uintptr(unsafe.Pointer(&sa)))
 	if desk == 0 {
 		return nil, "", fmt.Errorf("CreateDesktopW on %s: %v", name, derr)
 	}
+	acl, err := verifyDesktopACL(desk, ownerSID)
+	if err != nil {
+		return nil, "", err
+	}
+	desktopACL = acl
 	ctx := map[string]interface{}{
 		"ownerSID": user.User.Sid.String(), "session": session, "station": name,
 		"stationVisible": flags.Flags&1 != 0, "desktop": "", "activeConsoleSession": windows.WTSGetActiveConsoleSessionId(),
@@ -340,7 +407,7 @@ func guardian(manifestPath, script string) int {
 		"pid": pid, "creationFILETIME": birth, "guardianPID": os.Getpid(),
 		"port": m.Port, "heldProcessHandle": true, "ownedJob": true, "context": ctx,
 		"privateDesktop": privateDesktop, "sourceSHA256": guardianSHA,
-		"desktopACL": map[string]interface{}{"fake": "CI fake guardian: default desktop security, not the guardian's checked ACL"},
+		"desktopACL": desktopACL,
 	}
 	readyPath := filepath.Join(genDir, "READY.json")
 	if err := writeJSON(readyPath, ready); err != nil {
@@ -353,6 +420,7 @@ func guardian(manifestPath, script string) int {
 		return closeWith(23, "current")
 	}
 	result["pid"], result["creationFILETIME"] = pid, birth
+	result["privateDesktop"], result["guardianPID"] = privateDesktop, os.Getpid()
 
 	stopPath := filepath.Join(genDir, "STOP.json")
 	for {

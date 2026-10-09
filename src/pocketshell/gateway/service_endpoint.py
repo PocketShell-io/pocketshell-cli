@@ -429,6 +429,36 @@ def parse_current(data: bytes, m: GuardianManifest) -> Current:
     return Current(generation, ready, c["manifestSHA256"])
 
 
+def desktop_acl_ok(acl, owner_sid: str) -> bool:
+    """native_api.verify_desktop_acl's result schema, exactly (cab601e2): the
+    guardian returns it only after checking owner, PROTECTED DACL, exactly
+    three type-0 flags-0 ACEs with GENERIC_ALL/0xF01FF masks for exactly
+    {SYSTEM, Administrators, owner}. (The masks are verified by the guardian
+    but not published; see the agreement.)"""
+    return (
+        isinstance(acl, dict)
+        and set(acl) == {"ownerSID", "protectedDACL", "allowTrustees", "ACECount"}
+        and acl["ownerSID"] == owner_sid
+        and acl["protectedDACL"] is True
+        and acl["allowTrustees"] == sorted([owner_sid, "S-1-5-18", "S-1-5-32-544"])
+        and type(acl["ACECount"]) is int and acl["ACECount"] == 3
+    )
+
+
+CLOSED_IDENTITY = ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID")
+
+
+def closed_identity_problems(data: bytes, ready: "Ready") -> list:
+    """CLOSED.json must name exactly the generation's held identity (READY):
+    pid, decimal creationFILETIME, manifestSHA256, privateDesktop, guardianPID."""
+    closed = _json_object(data, "CLOSED.json")
+    expected = {"pid": ready.pid, "creationFILETIME": ready.birth, "manifestSHA256": ready.manifest_sha256,
+                "privateDesktop": ready.private_desktop, "guardianPID": ready.guardian_pid}
+    wrong = [k for k in CLOSED_IDENTITY if closed.get(k) != expected[k]
+             or type(closed.get(k)) is not type(expected[k])]
+    return [f"CLOSED.json {', '.join(wrong)} does not match the READY identity"] if wrong else []
+
+
 GUARDIAN_IDENTITY = "pid+image only (READY carries no guardian birth); diagnostic, not stop authority"
 STOP_AUTHORITY = "held daemon pid + creationFILETIME"
 
@@ -484,7 +514,10 @@ def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
     desktop = r.get("privateDesktop")
     require(isinstance(desktop, str) and desktop.startswith(station + "\\") and len(desktop) > len(station) + 1,
             "privateDesktop is not a desktop on the guardian's own station")
-    require(bool(r.get("desktopACL")), "desktopACL (the checked private desktop ACL) is missing")
+    require(desktop_acl_ok(r.get("desktopACL"), m.owner_sid),
+            "desktopACL is not the guardian's checked private-desktop ACL "
+            "{ownerSID: manifest owner, protectedDACL: true, allowTrustees: sorted [own, SYSTEM, "
+            "Administrators], ACECount: 3}")
     return Ready(r["pid"], r["creationFILETIME"], r["guardianPID"], r["port"], r["manifestSHA256"],
                  r["sourceSHA256"], station, desktop)
 
