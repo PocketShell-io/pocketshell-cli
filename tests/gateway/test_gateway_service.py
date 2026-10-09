@@ -1019,3 +1019,34 @@ def test_windows_uninstall_refuses_a_foreign_same_name_task(fake_windows, monkey
     result = _windows_cli(monkeypatch, "uninstall", "--force")
     assert result.exit_code == 0, result.output
     assert fake_windows.registered is None
+
+
+# --- API-neutral false-success controls (review receipt) ------------------------------
+# These use only interfaces that already existed at 323efbd, so on the original
+# source they fail on the BEHAVIOUR (a false success), not on a missing name.
+
+
+@pytest.mark.parametrize("name", sorted(_BAD_READBACKS))
+def test_control_pr21_4_bad_readback_never_reaches_run(fake_windows, monkeypatch, name):
+    monkeypatch.setattr(win, "WindowsApi", NamedApi)
+    fake_windows.mutate_on_create = _BAD_READBACKS[name]
+    plan = win.plan_install(WIN_HELPER, WIN_CONFIG, force=False, start=True, api=NamedApi())
+    with pytest.raises(ServiceError):
+        win.apply_install(plan)
+    assert "/Run" not in _verbs(fake_windows)
+    assert fake_windows.registered is None
+
+
+def test_control_pr21_2_failed_run_is_not_a_successful_start(fake_windows, monkeypatch):
+    fake_windows.run_rc = 1
+    result = _install_cli(monkeypatch)
+    assert "(started)" not in result.output
+    assert result.exit_code != 0
+
+
+def test_control_pr21_2_unconfirmed_start_is_not_a_successful_start(fake_windows, monkeypatch):
+    fake_windows.run_starts = False
+    monkeypatch.setattr(win, "START_CONFIRM_SECONDS", 0.2, raising=False)
+    result = _install_cli(monkeypatch)
+    assert "(started)" not in result.output
+    assert result.exit_code != 0
