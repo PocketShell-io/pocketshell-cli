@@ -92,3 +92,11 @@ def test_structured_descriptors_from_the_scheduler():
                                          "callback": False}]
     assert acl.task_object_problems(custom, folder, OWN)
     assert acl.task_object_problems({"owner": OWN}, folder, OWN)  # malformed
+
+
+def test_divergence_d1_auto_inherited_protected_folder_only():
+    """D1 (reported): the scheduler-created protected folder carries AI."""
+    ai_folder = _struct(FOLDER, control=0x9404)
+    assert acl.task_object_problems(THREE, ai_folder, OWN) == []
+    assert acl.task_object_problems(THREE, _struct(FOLDER.replace("D:P", "D:"), control=0x8404), OWN)
+    assert acl.task_object_problems(_struct(THREE, control=0x8404), FOLDER, OWN)  # never on the task

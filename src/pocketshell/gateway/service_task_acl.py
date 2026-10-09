@@ -39,6 +39,14 @@ GENERIC_ALL = 0x10000000  # 268435456
 SE_DACL_PRESENT, SE_DACL_AUTO_INHERITED, SE_DACL_PROTECTED, SE_SELF_RELATIVE = 0x4, 0x400, 0x1000, 0x8000
 SE_DACL_AUTO_INHERIT_REQ = 0x100
 ALLOWED_CONTROL = SE_DACL_PRESENT | SE_DACL_PROTECTED | SE_SELF_RELATIVE  # 36868
+# DIVERGENCE D1 from the frozen native function (reported, pending their
+# agreement): on windows-latest, ITaskFolder::CreateFolder with exactly the
+# contract SDDL "O:<own>D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;<own>)" returns a
+# folder with control 0x9404 — SE_DACL_AUTO_INHERITED (0x400) set by the
+# scheduler. On a PROTECTED folder whose ACEs all have flags 0 (no inherited
+# ACE is possible), AI only records how the DACL was computed; it is tolerated
+# for the FOLDER only. The task descriptor stays exactly 36868.
+FOLDER_TOLERATED_CONTROL = SE_DACL_AUTO_INHERITED
 
 _SID_ALIASES = {
     "SY": SYSTEM, "BA": ADMINISTRATORS, "WD": "S-1-1-0", "AU": "S-1-5-11", "BU": "S-1-5-32-545",
@@ -228,7 +236,8 @@ def _object_problems(descriptor, owner_sid: str, *, folder: bool) -> list:
         return [f"{what} security descriptor is malformed"]
     if sd.owner != owner_sid or not sd.control & SE_DACL_PRESENT or sd.dacl is None:
         return [f"{what} object owner/non-null DACL refused (owner {sd.owner})"]
-    if sd.control & ~ALLOWED_CONTROL:
+    allowed = ALLOWED_CONTROL | (FOLDER_TOLERATED_CONTROL if folder and sd.control & SE_DACL_PROTECTED else 0)
+    if sd.control & ~allowed:
         return [f"{what} object unexpected descriptor controls refused (0x{sd.control:X})"]
     if folder and not sd.control & SE_DACL_PROTECTED:
         return [f"{what} DACL is not protected"]
