@@ -18,6 +18,8 @@ from ctypes import wintypes as w
 
 k = c.WinDLL("kernel32", use_last_error=True)
 a = c.WinDLL("advapi32", use_last_error=True)
+a.GetTokenInformation.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.POINTER(w.DWORD)]
+a.SetTokenInformation.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD]
 
 
 class SI(c.Structure):
@@ -72,9 +74,37 @@ def _lua_token(medium=True):
                                    c.byref(token)):
         raise c.WinError(c.get_last_error())
     k.CloseHandle(base)
+    _own_defaults(token)
     if medium:
         _medium(token)
     return token
+
+
+def _own_defaults(token):
+    """With UAC off an administrator's token has default owner Administrators
+    and a default DACL without the user; once Administrators is deny-only the
+    new process could not open its own objects (DLL init 0xc0000142). Make the
+    user the default owner and grant user + SYSTEM in the default DACL."""
+    size = w.DWORD()
+    a.GetTokenInformation(token, 1, None, 0, c.byref(size))
+    buf = c.create_string_buffer(size.value)
+    if not a.GetTokenInformation(token, 1, buf, size.value, c.byref(size)):
+        raise c.WinError(c.get_last_error())
+    user = c.cast(buf, c.POINTER(c.c_void_p))[0]
+    owner = c.c_void_p(user)
+    if not a.SetTokenInformation(token, 4, c.byref(owner), c.sizeof(owner)):  # TokenOwner
+        raise c.WinError(c.get_last_error())
+    text = c.c_wchar_p()
+    a.ConvertSidToStringSidW(c.c_void_p(user), c.byref(text))
+    sd = c.c_void_p()
+    if not a.ConvertStringSecurityDescriptorToSecurityDescriptorW(f"D:(A;;GA;;;{text.value})(A;;GA;;;SY)", 1,
+                                                                   c.byref(sd), None):
+        raise c.WinError(c.get_last_error())
+    present, dacl, defaulted = w.BOOL(), c.c_void_p(), w.BOOL()
+    a.GetSecurityDescriptorDacl(sd, c.byref(present), c.byref(dacl), c.byref(defaulted))
+    default = c.c_void_p(dacl.value)
+    if not a.SetTokenInformation(token, 6, c.byref(default), c.sizeof(default)):  # TokenDefaultDacl
+        raise c.WinError(c.get_last_error())
 
 
 CHOSEN = {}
@@ -113,7 +143,7 @@ DIAGNOSTICS = []
 
 
 def _safer_token():
-    level = w.HANDLE()
+    level = w.HANDLE()  # (kept as a last candidate)
     if not a.SaferCreateLevel(2, 0x20000, 1, c.byref(level), None):  # USER scope, NORMALUSER
         raise c.WinError(c.get_last_error())
     token = w.HANDLE()
