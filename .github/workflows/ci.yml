@@ -155,6 +155,7 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: windows
           GOARCH: amd64
+          GOTOOLCHAIN: go1.26.8  # pinned: the verifier sha is a release anchor input
         run: |
           go -C native/verify test -mod=readonly ./...
           foreach ($d in "a", "b") {

@@ -55,6 +55,7 @@ GUARDIAN_PINS = {  # the reviewed 6cf7ae85 guardian source triple
     "policy.py": "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
 }
 POLICY_VERSION = 1
+GO_TOOLCHAIN = "go1.26.8"
 TOP_FILES = {"python.exe", "python312.dll", "python3.dll", "vcruntime140.dll", "vcruntime140_1.dll", "LICENSE.txt"}
 DLLS = {"_asyncio.pyd", "_bz2.pyd", "_ctypes.pyd", "_decimal.pyd", "_elementtree.pyd", "_hashlib.pyd", "_lzma.pyd",
         "_multiprocessing.pyd", "_overlapped.pyd", "_queue.pyd", "_socket.pyd", "_ssl.pyd", "_uuid.pyd", "_wmi.pyd",
@@ -100,7 +101,15 @@ def compile_many(py: str, jobs: list) -> None:
 
 def deterministic_zip(dest: Path, entries: dict) -> None:
     """entries: archive name -> bytes; sorted, fixed time/permissions."""
+    # explicit directory entries: zipimport (3.12) resolves implicit namespace
+    # packages (e.g. `google`) only through a directory entry in the archive
+    dirs = {name.rsplit("/", i)[0] + "/" for name in entries for i in range(1, name.count("/") + 1)}
     with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for name in sorted(dirs):
+            info = zipfile.ZipInfo(name, ZIP_TIME)
+            info.external_attr = (0o40755 << 16) | 0x10
+            info.create_system = 0
+            z.writestr(info, b"")
         for name in sorted(entries):
             info = zipfile.ZipInfo(name, ZIP_TIME)
             info.compress_type = zipfile.ZIP_DEFLATED
@@ -214,7 +223,9 @@ def build(out: Path, args, py: str, work: Path) -> dict:
         shutil.copyfile(src, release / "guardian" / name)
     (release / "bin").mkdir()
     shutil.copyfile(args.helper, release / "bin" / "pocketshell-link.exe")
-    benv = dict(os.environ, GOOS="windows", GOARCH="amd64", CGO_ENABLED="0")
+    # pinned toolchain: the launcher bytes are the same on every build host
+    benv = dict(os.environ, GOOS="windows", GOARCH="amd64", CGO_ENABLED="0", GOTOOLCHAIN=GO_TOOLCHAIN,
+                GOFLAGS="-mod=readonly")
     run("go", "-C", REPO / "native" / "launcher", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid=",
         "-o", release / "pocketshell.exe", ".", env=benv)
     return {"wheel": wheel.name, "wheelSHA256": sha256(wheel), "requirementsSHA256": sha256(reqs)}
@@ -288,7 +299,8 @@ def main() -> int:
         "inputs": {"pbs": {"url": PBS_URL, "sha256": PBS_SHA256, "version": PBS_VERSION},
                    "guardian": GUARDIAN_PINS, "helper": {"sha256": args.helper_sha256, "version": args.helper_version},
                    "uvLockSHA256": sha256(REPO / "uv.lock"), **builds[0][1]},
-        "tools": {"uv": run("uv", "--version").strip(), "go": run("go", "env", "GOVERSION").strip(),
+        "tools": {"uv": run("uv", "--version").strip(),
+                  "go": run("go", "env", "GOVERSION", env=dict(os.environ, GOTOOLCHAIN=GO_TOOLCHAIN)).strip(),
                   "compiler": run(py, "-c", "import sys;print(sys.version)").strip()},
         "outputs": {"catalogSHA256": hashlib.sha256(data).hexdigest(), "catalogBytes": len(data),
                     "files": len(catalogs[0]["files"]), "release": catalogs[0]["release"],
