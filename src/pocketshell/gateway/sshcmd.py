@@ -148,6 +148,23 @@ class ExtraArgs:
     has_forwards: bool = False
 
 
+def with_identity_agent(argv: list[str], agent_socket: str, public_key_file: str) -> list[str]:
+    """``argv`` (from :func:`build_ssh_argv`) restricted to one agent-held key.
+
+    Used by ``gateway ssh --key`` (:mod:`pocketshell.keys.session`): inserts
+    ``IdentityAgent=<private agent socket>`` and ``IdentityFile=<that key's
+    .pub>`` right after ``-F none``, so with the hardening's
+    ``IdentitiesOnly=yes`` exactly that key is offered, signed by the agent.
+    ``ForwardAgent=no`` is untouched. Both paths are checked like every
+    other path handed to ssh.
+    """
+    if argv[1:3] != ["-F", "none"] or "-i" in argv[: argv.index("--")]:
+        raise SshArgsError("--key cannot be combined with -i")
+    sock = _check_path(agent_socket, "agent socket")
+    pub = _check_path(public_key_file, "public key file")
+    return [*argv[:3], "-o", f"IdentityAgent={sock}", "-o", f"IdentityFile={pub}", *argv[3:]]
+
+
 def parse_extra_args(extra: Sequence[str]) -> ExtraArgs:
     """Split user-supplied ssh arguments into allowlisted flags + command.
 

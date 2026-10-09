@@ -261,12 +261,16 @@ def _exec_ssh(path: str, argv: list[str], env: dict) -> None:
               help="Remote user name (default: your local user name).")
 @click.option("-i", "--identity", default=None, metavar="KEYFILE",
               help="Private key for user authentication (IdentitiesOnly is always on).")
+@click.option("--key", "vault_key", default=None, metavar="NAME",
+              help="Use key NAME from the device-password vault (`pocketshell keys`, "
+              "docs/keys.md) via a private, short-lived ssh-agent. Not with -i.")
 @_server_options
 @click.argument("extra", nargs=-1, type=click.UNPROCESSED, metavar="[-- SSH_ARGS…]")
 def ssh(
     device_id: str,
     login_name: Optional[str],
     identity: Optional[str],
+    vault_key: Optional[str],
     server: Optional[str],
     insecure_dev: bool,
     trust_gateway: Optional[str],
@@ -286,6 +290,8 @@ def ssh(
     """
     from pocketshell.gateway import sshcmd as gateway_sshcmd
 
+    if vault_key is not None and identity is not None:
+        raise click.UsageError("--key and -i are mutually exclusive")
     try:
         gateway_endpoint.validate_device_id(device_id)
     except gateway_endpoint.EndpointError as exc:
@@ -318,6 +324,10 @@ def ssh(
         raise _NotLoggedIn(str(exc)) from None
     except gateway_tokens.GatewayTokenError as exc:
         raise click.ClickException(str(exc)) from None
+    if vault_key is not None:
+        from pocketshell.keys.session import run_vault_key_ssh
+
+        raise SystemExit(run_vault_key_ssh(vault_key, argv, gateway_sshcmd.ssh_environment()))
     _exec_ssh(ssh_path, argv, gateway_sshcmd.ssh_environment())
 
 
