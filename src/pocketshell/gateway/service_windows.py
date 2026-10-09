@@ -759,8 +759,12 @@ class WindowsApi:
             if not k.QueryFullProcessImageNameW(pi.hProcess, 0, image, c.byref(n)) or \
                     not _same_path(image.value, str(argv[0])):
                 raise ServiceError("the child's image is not the requested executable")
-            if child_sid != self.current_sid() or elevation.value or session.value != self.current_session():
-                raise ServiceError("the child token is not this user's ordinary, same-session token")
+            mine = (self.current_sid(), self.current_session())
+            if child_sid != mine[0] or elevation.value or session.value != mine[1]:
+                raise ServiceError(
+                    "the child token is not this user's ordinary, same-session token "
+                    f"(user {'ok' if child_sid == mine[0] else 'differs'}, elevated {bool(elevation.value)}, "
+                    f"session {session.value} vs {mine[1]})")
             in_job = w.BOOL()
             if not k.IsProcessInJob(pi.hProcess, None, c.byref(in_job)):
                 raise ServiceError("cannot query the child's job membership")
