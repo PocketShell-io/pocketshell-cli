@@ -161,7 +161,10 @@ def install(
 @click.option(
     "--force",
     is_flag=True,
-    help="Linux: also remove a pocketshell-gateway.service unit this command did not write.",
+    help=(
+        "Also remove a pocketshell-gateway.service unit / \\PocketShell\\GatewayLink "
+        "task this command did not write (no 'Managed by' marker)."
+    ),
 )
 @_guard
 def uninstall(force: bool) -> None:
@@ -173,7 +176,7 @@ def uninstall(force: bool) -> None:
     else:
         from pocketshell.gateway import service_windows as backend
 
-        click.echo(backend.uninstall())
+        click.echo(backend.uninstall(force=force))
 
 
 @service_group.command("status")

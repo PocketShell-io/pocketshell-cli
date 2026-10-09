@@ -1004,3 +1004,18 @@ def test_linux_failed_start_is_enabled_not_started(pin_helper, enrolled, monkeyp
     assert "NOT started" in result.stderr and "started)" not in result.stdout
     assert _unit_file().exists()
     assert ["systemctl", "--user", "enable", linux.UNIT_NAME] in fake.calls
+
+
+# --- review designAssessment: a same-name task we did not write ----------------------
+
+
+def test_windows_uninstall_refuses_a_foreign_same_name_task(fake_windows, monkeypatch):
+    fake_windows.registered = _xml().replace(win.MANAGED_MARKER, "hand made")
+    with pytest.raises(ServiceError, match="not written by"):
+        win.uninstall(api=FakeApi())
+    assert "/Delete" not in _verbs(fake_windows) and "/End" not in _verbs(fake_windows)
+    result = _windows_cli(monkeypatch, "uninstall")
+    assert result.exit_code == 1 and "--force" in result.stderr
+    result = _windows_cli(monkeypatch, "uninstall", "--force")
+    assert result.exit_code == 0, result.output
+    assert fake_windows.registered is None

@@ -834,15 +834,23 @@ def _start_and_confirm(runner: Runner) -> None:
     )
 
 
-def uninstall(*, runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) -> str:
+def uninstall(
+    *, force: bool = False, runner: Optional[Runner] = None, api: Optional[WindowsApi] = None
+) -> str:
     runner = runner or run_child
     registered = query_task_xml(runner)
     if registered is None:
         return f"not installed ({TASK_NAME} does not exist); nothing to do"
     try:
-        helper = parse_task_xml(registered).get("command")
+        fields = parse_task_xml(registered)
     except ServiceError:
-        helper = None
+        fields = {"description": "", "command": None}
+    if MANAGED_MARKER not in fields["description"] and not force:
+        raise ServiceError(
+            f"{TASK_NAME} was not written by `pocketshell gateway service install`; "
+            "refusing to stop or delete a task this command does not own (pass --force)"
+        )
+    helper = fields.get("command")
     runner(schtasks("/End", "/TN", TASK_NAME))
     result = runner(schtasks("/Delete", "/TN", TASK_NAME, "/F"))
     if result.returncode != 0:
