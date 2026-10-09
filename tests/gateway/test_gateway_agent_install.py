@@ -331,7 +331,7 @@ def test_verify_v2_refuses_large_documents_owner_and_root_problems():
 
 # --- path syntax guards (code AND schema, the same expressions) ----------------------------
 
-BAD_ABS = ["C:\\a\\..\\b", "C:\\a\\.\\b", "C:\\a:stream", "C:\\a\\b.", "C:\\a\\b ", "\\\\server\\share\\x",
+BAD_ABS = ["C:\\", "C:/", "C:\\a\\..\\b", "C:\\a\\.\\b", "C:\\a:stream", "C:\\a\\b.", "C:\\a\\b ", "\\\\server\\share\\x",
            "\\\\?\\C:\\x", "C:\\a\\CON", "C:\\a\\nul.txt", "C:\\a\\\\b", "a\\b", "C:a\\b", "C:\\a\\b*"]
 GOOD_ABS = ["C:\\Users\\owner\\AppData\\Roaming\\PocketShell", "D:/a/b.json", "C:\\a\\con2\\x.json"]
 BAD_REL = ["../x", "a/../b", "./a", "a/./b", "a/CON", "a/nul.txt", "a.", "a/b.", "a:b", "a//b", "/a", "a\\b"]
