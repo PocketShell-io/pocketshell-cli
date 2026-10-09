@@ -560,12 +560,15 @@ def test_hostkey_probe_without_a_server_is_not_ready(tmp_path):
 
 
 def test_probe_argv_disables_every_auth_method_and_pins_strictly():
-    argv = hostkey.probe_argv("/usr/bin/ssh", 22024, "/tmp/kh", "ssh-ed25519")
+    import sys
+
+    known, spelled = ("C:\\t\\kh", "C:/t/kh") if sys.platform == "win32" else ("/tmp/kh", "/tmp/kh")
+    argv = hostkey.probe_argv("ssh", 22024, known, "ssh-ed25519")
     joined = " ".join(argv)
     for opt in ("StrictHostKeyChecking=yes", "BatchMode=yes", "PubkeyAuthentication=no",
                 "PasswordAuthentication=no", "KbdInteractiveAuthentication=no",
                 "GSSAPIAuthentication=no", "HostbasedAuthentication=no",
-                "UserKnownHostsFile=/tmp/kh", "GlobalKnownHostsFile=/tmp/kh",
+                f"UserKnownHostsFile={spelled}", f"GlobalKnownHostsFile={spelled}",
                 "HostKeyAlgorithms=ssh-ed25519"):
         assert opt in joined
     assert argv[argv.index("-l") + 1] == hostkey.PROBE_USER
