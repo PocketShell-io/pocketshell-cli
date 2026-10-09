@@ -226,7 +226,9 @@ def build(out: Path, args, py: str, work: Path) -> dict:
     # pinned toolchain: the launcher bytes are the same on every build host
     benv = dict(os.environ, GOOS="windows", GOARCH="amd64", CGO_ENABLED="0", GOTOOLCHAIN=GO_TOOLCHAIN,
                 GOFLAGS="-mod=readonly")
-    run("go", "-C", REPO / "native" / "launcher", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid=",
+    # -H=windowsgui: a GUI-subsystem launcher, so no console window is ever allocated for it
+    run("go", "-C", REPO / "native" / "launcher", "build", "-trimpath", "-buildvcs=false",
+        "-ldflags=-s -w -buildid= -H=windowsgui",
         "-o", release / "pocketshell.exe", ".", env=benv)
     return {"wheel": wheel.name, "wheelSHA256": sha256(wheel), "requirementsSHA256": sha256(reqs)}
 

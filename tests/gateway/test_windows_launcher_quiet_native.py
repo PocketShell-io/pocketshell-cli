@@ -57,8 +57,11 @@ def test_launcher_is_a_gui_subsystem_binary(layout):
 
 
 def test_python_child_has_no_console_window(layout):
+    """Spawned like the Desktop (a GUI process): the launcher gets NO console
+    (DETACHED_PROCESS), so a console-subsystem child started without
+    CREATE_NO_WINDOW would get a NEW, visible console; with it, none."""
     p = subprocess.run([str(layout / "pocketshell.exe"), "gateway", "agent", "status", "--json"],
-                       capture_output=True, timeout=60)
+                       capture_output=True, timeout=60, creationflags=0x00000008)  # DETACHED_PROCESS
     print(p.returncode, p.stdout, p.stderr[-500:])
     out = json.loads(p.stdout.decode().strip().splitlines()[-1])
     assert p.returncode == 0
