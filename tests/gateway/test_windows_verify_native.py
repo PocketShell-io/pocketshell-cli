@@ -143,8 +143,11 @@ def test_hold_spawned_identity_and_release(tree):
         finally:
             other.kill()
             other.wait()
-        ev = _send(proc, {"op": "release", "operationId": "op-1"})
-        assert ev["event"] == "released"
+        # release, then end-of-input (N3: only EOF is accepted after release)
+        proc.stdin.write((json.dumps({"op": "release", "operationId": "op-1"}) + "\n").encode())
+        proc.stdin.close()
+        ev = json.loads(proc.stdout.readline())
+        assert ev["event"] == "released", ev
         assert proc.wait(timeout=10) == 0
     finally:
         if proc.poll() is None:
@@ -216,3 +219,11 @@ def test_n1_object_and_callback_aces_are_refused(tree, extra):
     code, reply = verify(tree, [("document", tree["authority"])])
     print(reply)
     assert code == 1 and "ACE" in reply["results"][0]["problem"], reply
+
+
+def test_n3_data_after_release_is_refused(tree):
+    proc = _hold(tree)
+    proc.stdin.write(b'{"op":"release","operationId":"op-1"}\n{"op":"release","operationId":"op-1"}\n')
+    proc.stdin.close()
+    ev = json.loads(proc.stdout.readline())
+    assert ev["event"] == "refused" and proc.wait(timeout=10) == 2, ev

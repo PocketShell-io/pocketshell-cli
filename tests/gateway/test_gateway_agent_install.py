@@ -436,3 +436,10 @@ def test_cli_verify_paths_keeps_interleaved_request_order(monkeypatch):
                                       "--request", "binary=" + PRIV + "\\c.exe", "--json"])
     assert result.exit_code == 0, result.output
     assert [k for k, _p in seen["requests"]] == ["binary", "document", "binary"]
+
+
+def test_schema_launch_matches_the_producer_launch_keys():
+    from pocketshell.gateway import service_user_agent as ua
+
+    launch = SCHEMA["$defs"]["launch"]
+    assert sorted(launch["required"]) == sorted(launch["properties"]) == sorted(ua.LAUNCH_KEYS)

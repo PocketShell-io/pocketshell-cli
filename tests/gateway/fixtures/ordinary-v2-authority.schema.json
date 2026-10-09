@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "pocketshell:ordinary-v2-authority:v3.2-proposed",
-  "title": "PocketShell ordinary-v2 installed-runtime authority (user-background-api-agreement v3.2, PROPOSED)",
+  "$id": "pocketshell:ordinary-v2-authority:v3.3-proposed",
+  "title": "PocketShell ordinary-v2 installed-runtime authority (user-background-api-agreement v3.3, PROPOSED)",
   "$defs": {
     "sha256": {
       "type": "string",
@@ -396,7 +396,8 @@
         "elevated",
         "inJob",
         "callerJobKillOnClose",
-        "brokeAway"
+        "brokeAway",
+        "callerInJob"
       ],
       "properties": {
         "session": {
@@ -410,15 +411,22 @@
           "const": false
         },
         "callerJobKillOnClose": {
-          "type": "boolean"
+          "type": "boolean",
+          "$comment": "Diagnostic only: the NEAREST caller job's KILL_ON_JOB_CLOSE flag (true when unknown). It proves nothing about ancestor jobs."
         },
         "brokeAway": {
-          "type": "boolean"
+          "const": true,
+          "$comment": "A live target was created with CREATE_BREAKAWAY_FROM_JOB."
+        },
+        "callerInJob": {
+          "type": "boolean",
+          "$comment": "Diagnostic only: the CALLER (CLI/Desktop/Explorer) may be in a job."
         }
-      }
+      },
+      "$comment": "The TARGET (guardian/link) is measured outside ANY job before resume; otherwise start refuses with target-job (v3.3 \u00a713.2)."
     },
     "attestation": {
-      "$comment": "Additive to the JSON-v1 agent document. Live (ready/starting) requirements; session must equal owner.session; outbound.helperSHA256 must equal the catalog helper sha256. PROPOSED fragment (open).",
+      "$comment": "Live (ready) components: absenceVerified false, launch measured, guardianLaunch running. Open, additive fragment.",
       "type": "object",
       "required": [
         "endpoint",
@@ -491,7 +499,7 @@
       }
     },
     "stoppedAttestation": {
-      "$comment": "PROPOSED, not emitted until the agreement is accepted. An accepted stopped document needs both absenceVerified true. That requires a successful protected enumeration of every custody record (primary and recovery), every recorded identity proven gone, and the listener proven absent.",
+      "$comment": "Emitted since v3.3. Both absenceVerified are true only for a measured stopped document (status exit 4 / stop exit 0).",
       "type": "object",
       "required": [
         "endpoint",
