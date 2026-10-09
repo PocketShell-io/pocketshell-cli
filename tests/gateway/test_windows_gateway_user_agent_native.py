@@ -226,3 +226,27 @@ def test_held_image_refuses_writers_renames_and_a_wrong_digest(tmp_path):
     finally:
         c.WinDLL("kernel32").CloseHandle(c.c_void_p(handle))
     os.replace(image, tmp_path / "moved.exe")  # released: allowed again
+
+
+def test_r3_refused_cleanup_keeps_the_suspended_child_identity(tmp_path, monkeypatch):
+    """dd792b5 R3: the elevated runner's child is refused (token); if its
+    termination is refused too, the exact live identity is returned as recovery
+    custody and its handles are not released silently."""
+    import ctypes as c
+
+    from pocketshell.gateway.service_common import ServiceError
+
+    if not c.windll.shell32.IsUserAnAdmin():
+        pytest.skip("runner not elevated")
+    api = win.WindowsApi()
+    monkeypatch.setattr(win.WindowsApi, "_terminate_suspended", lambda self, k, handle: False, raising=False)
+    image = os.path.join(os.environ["SystemRoot"], "System32", "PING.EXE")
+    with pytest.raises(ServiceError) as info:
+        api.spawn_hidden([image, "-n", "1", "127.0.0.1"], str(tmp_path), None)
+    err = info.value
+    assert isinstance(err, win.SpawnCleanupError), err
+    rec = err.recovery
+    print("recovery custody:", rec)
+    assert api.process_birth(rec["pid"]) == rec["creationFILETIME"]  # still alive (suspended)
+    assert win._same_path(rec["image"], image)
+    assert api.terminate_exact(rec["pid"], rec["creationFILETIME"], image)  # test cleanup, exact identity

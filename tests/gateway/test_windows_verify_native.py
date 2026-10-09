@@ -227,3 +227,12 @@ def test_n3_data_after_release_is_refused(tree):
     proc.stdin.close()
     ev = json.loads(proc.stdout.readline())
     assert ev["event"] == "refused" and proc.wait(timeout=10) == 2, ev
+
+
+def test_r1_oversized_line_after_release_is_refused(tree):
+    """dd792b5 R1: a scanner error after release is not end-of-input."""
+    proc = _hold(tree)
+    proc.stdin.write(b'{"op":"release","operationId":"op-1"}\n' + b"x" * 5000 + b"\n")
+    proc.stdin.close()
+    ev = json.loads(proc.stdout.readline())
+    assert ev["event"] == "refused" and proc.wait(timeout=10) == 2, ev
