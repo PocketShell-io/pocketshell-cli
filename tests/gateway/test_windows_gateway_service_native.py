@@ -40,6 +40,8 @@ from pocketshell.gateway import service_endpoint as ep  # noqa: E402
 from pocketshell.gateway import service_windows as win  # noqa: E402
 
 ENDPOINT_TASK = win.TASK_FOLDER + ep.ENDPOINT_LEAF
+INSTANCE = "CI1"
+QUALIFICATION_TASK = win.TASK_FOLDER + ep.leaf_for(INSTANCE)
 
 CREATE_NO_WINDOW = 0x08000000
 
@@ -98,7 +100,7 @@ def layout(tmp_path, monkeypatch):
 
 
 def _cleanup_tasks():
-    for name in (win.TASK_NAME, ENDPOINT_TASK):
+    for name in (win.TASK_NAME, ENDPOINT_TASK, QUALIFICATION_TASK):
         if _query_xml(name) is not None:
             _run(win.schtasks("/End", "/TN", name))
             _run(win.schtasks("/Delete", "/TN", name, "/F"))
@@ -224,7 +226,13 @@ def test_real_task_round_trip(layout):
     assert _snapshot(Path(config)) == before
 
 
-# --- --with-endpoint: a fake guardian as the private loopback endpoint ----------------
+# --- --with-endpoint: a fake guardian speaking the agreed protocol -------------------
+#
+# tests/gateway/fakeguardian is ONE binary playing both the protected
+# interpreter (python.exe <guardian.py> --manifest M: lock, generation, Job,
+# READY then CURRENT, STOP/CLOSED) and the daemon (sshd.exe -D -f CONFIG: a
+# real SSH server holding the test's host key). The manifest and guardian
+# digests join the reviewed lists ONLY through monkeypatch.
 
 
 def _free_port() -> int:
@@ -235,61 +243,118 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-@pytest.fixture
-def endpoint(layout, monkeypatch):
-    guardian_src = os.environ.get("POCKETSHELL_TEST_FAKE_GUARDIAN")
-    if not guardian_src:
+def _host_key():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = Ed25519PrivateKey.generate()
+    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                                serialization.NoEncryption())
+    public = key.public_key().public_bytes(serialization.Encoding.OpenSSH,
+                                           serialization.PublicFormat.OpenSSH).decode()
+    return private, public
+
+
+def _build_endpoint(layout, monkeypatch, *, port: int, enrolled_port: int, name: str):
+    fake = os.environ.get("POCKETSHELL_TEST_FAKE_GUARDIAN")
+    if not fake:
         pytest.skip("POCKETSHELL_TEST_FAKE_GUARDIAN not built")
-    from gateway_keyblobs import ED25519_LINE
-    from pocketshell.gateway import pins
-
-    port = _free_port()
-    ep_dir = layout["base"] / "endpoint dir ü"
-    ep_dir.mkdir()
-    guardian = ep_dir / "guardian.exe"
-    shutil.copyfile(guardian_src, guardian)
-    config = Path(layout["config"])
-    # the enrolled local ssh + pinned host key (dummy values, like enroll writes)
-    (config / "config.json").write_text(json.dumps({
-        "device_id": "win-service-e2e", "ssh_host": f"127.0.0.1:{port}", "ssh_host_key": ED25519_LINE,
-    }))
-    doc = {
-        "schema": 1,
-        "name": "fake-guardian-e2e",
-        "guardian": {
-            "command": str(guardian),
-            "sha256": hashlib.sha256(guardian.read_bytes()).hexdigest(),
-            "arguments": ["--listen", f"127.0.0.1:{port}", "--note", "a b ü"],
-            "working_directory": str(ep_dir),
-        },
-        "pinned_files": [],
-        "listen": f"127.0.0.1:{port}",
-        "host_key_fingerprint": pins.parse_host_key(ED25519_LINE).fingerprint,
-    }
-    manifest = layout["base"] / "endpoint-manifest.json"
-    manifest.write_bytes(json.dumps(doc).encode("utf-8"))
-    # THE test-only seam for the endpoint: this manifest joins the reviewed list.
-    monkeypatch.setattr(
-        ep, "ALLOWED_ENDPOINT_MANIFEST_SHA256",
-        frozenset({hashlib.sha256(manifest.read_bytes()).hexdigest()}),
+    sid = layout["sid"]
+    root = layout["base"] / f"endpoint {name} ü"
+    for sub in ("py", "guardian", "bin", "state", "state/tmp", "keys"):
+        (root / sub).mkdir(parents=True, exist_ok=True)
+    python = root / "py" / "python.exe"
+    daemon = root / "bin" / "sshd.exe"
+    shutil.copyfile(fake, python)
+    shutil.copyfile(fake, daemon)
+    guardian = root / "guardian" / "guardian.py"
+    guardian.write_text("# stand-in for the reviewed guardian source (CI fake)\n")
+    private, public = _host_key()
+    hostkey_file = root / "keys" / "host_ed25519"
+    hostkey_file.write_bytes(private)
+    config = root / f"sshd-{port}.conf"
+    config.write_text(
+        f"Port {port}\nListenAddress 127.0.0.1\nHostKey {hostkey_file}\n"
+        "AuthenticationMethods publickey\nPubkeyAuthentication yes\nPasswordAuthentication no\n"
+        "KbdInteractiveAuthentication no\nPermitEmptyPasswords no\nDisableForwarding yes\nPermitTTY yes\n"
+        f"AuthorizedKeysFile {root / 'keys' / 'authorized_keys'}\n"
     )
-    return {"port": port, "dir": ep_dir, "guardian": str(guardian), "manifest": str(manifest),
-            "args": doc["guardian"]["arguments"]}
-
-
-def _snapshot_tree(directory: Path) -> dict:
-    return {
-        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in sorted(directory.iterdir())
-        if p.is_file() and not p.name.startswith("guardian-")
+    pins = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in (python, guardian, daemon, config)}
+    state = root / "state"
+    doc = {
+        "version": 1, "ownerSID": sid, "root": str(root), "state": str(state), "config": str(config),
+        "port": port, "daemon": str(daemon), "python": str(python), "pins": pins,
+        "environment": {
+            "SystemRoot": "C:/Windows", "WINDIR": "C:/Windows", "SystemDrive": "C:",
+            "ProgramData": "C:/ProgramData", "USERPROFILE": os.environ["USERPROFILE"],
+            "HOME": os.environ["USERPROFILE"], "TEMP": str(state / "tmp"), "TMP": str(state / "tmp"),
+        },
     }
+    manifest = root / "manifest.json"
+    manifest.write_bytes(json.dumps(doc, indent=1).encode("utf-8"))
+    for path in (root, state, manifest, config):
+        _set_owner(path, sid)  # an elevated mkdir stamps Administrators; the guardian requires its owner
+    config_json = Path(layout["config"]) / "config.json"
+    config_json.write_text(json.dumps({
+        "device_id": "win-service-e2e", "ssh_host": f"127.0.0.1:{enrolled_port}",
+        "ssh_host_key": " ".join(public.split()[:2]),
+    }))
+    # THE test-only seams: this manifest and this guardian source are "reviewed".
+    monkeypatch.setattr(ep, "ALLOWED_ENDPOINT_MANIFEST_SHA256",
+                        ep.ALLOWED_ENDPOINT_MANIFEST_SHA256 | {hashlib.sha256(manifest.read_bytes()).hexdigest()})
+    monkeypatch.setattr(ep, "ALLOWED_GUARDIAN_SOURCE_SHA256",
+                        ep.ALLOWED_GUARDIAN_SOURCE_SHA256 | {pins[str(guardian)]})
+    return {"root": root, "state": state, "manifest": str(manifest), "port": port, "python": str(python),
+            "guardian": str(guardian), "public": public}
 
 
-def test_endpoint_port_already_served_is_refused(layout, endpoint):
+def _current(endpoint) -> dict:
+    return json.loads((endpoint["state"] / "CURRENT.json").read_text(encoding="utf-8"))
+
+
+def _wait(predicate, seconds, step=2.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(step)
+    return predicate()
+
+
+def _parent_pid(pid: int):
+    import ctypes as c
+    from ctypes import wintypes as w
+
+    class Entry(c.Structure):
+        _fields_ = [("dwSize", w.DWORD), ("cntUsage", w.DWORD), ("th32ProcessID", w.DWORD),
+                    ("th32DefaultHeapID", c.c_size_t), ("th32ModuleID", w.DWORD), ("cntThreads", w.DWORD),
+                    ("th32ParentProcessID", w.DWORD), ("pcPriClassBase", w.LONG), ("dwFlags", w.DWORD),
+                    ("szExeFile", w.WCHAR * 260)]
+
+    k = c.WinDLL("kernel32")
+    k.CreateToolhelp32Snapshot.restype = w.HANDLE
+    snap = k.CreateToolhelp32Snapshot(2, 0)
+    entry = Entry()
+    entry.dwSize = c.sizeof(Entry)
+    ok = k.Process32FirstW(snap, c.byref(entry))
+    try:
+        while ok:
+            if entry.th32ProcessID == pid:
+                return entry.th32ParentProcessID
+            ok = k.Process32NextW(snap, c.byref(entry))
+    finally:
+        k.CloseHandle(snap)
+    return None
+
+
+def test_endpoint_port_already_served_is_refused(layout, monkeypatch):
     import socket
 
+    port = _free_port()
+    endpoint = _build_endpoint(layout, monkeypatch, port=port, enrolled_port=port, name="held")
     with socket.socket() as held:  # stands in for the currently held endpoint
-        held.bind(("127.0.0.1", endpoint["port"]))
+        held.bind(("127.0.0.1", port))
         held.listen(1)
         result = _service("install", "--helper", layout["helper"], "--config-dir", layout["config"],
                           "--with-endpoint", endpoint["manifest"])
@@ -297,53 +362,100 @@ def test_endpoint_port_already_served_is_refused(layout, endpoint):
     assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
 
 
-def test_real_endpoint_and_link_round_trip(layout, endpoint):
-    helper, config = layout["helper"], layout["config"]
-    before_config = _snapshot(Path(config))
-    before_ep = _snapshot_tree(endpoint["dir"])
-    args = ["install", "--helper", helper, "--config-dir", config, "--with-endpoint", endpoint["manifest"]]
+def test_real_endpoint_and_link_lifecycle(layout, monkeypatch):
+    port = _free_port()
+    endpoint = _build_endpoint(layout, monkeypatch, port=port, enrolled_port=port, name="prod")
+    config_before = _snapshot(Path(layout["config"]))
+    manifest_before = Path(endpoint["manifest"]).read_bytes()
+    args = ["install", "--helper", layout["helper"], "--config-dir", layout["config"],
+            "--with-endpoint", endpoint["manifest"]]
 
-    dry = _service(*args, "--dry-run")
-    assert dry.exit_code == 0
+    assert _service(*args, "--dry-run").exit_code == 0
     assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
 
     result = _service(*args)
     assert result.exit_code == 0, result.output
-    assert "SSH banner answered" in result.output
+    assert "enrolled host key proven" in result.output
 
     xml = _query_xml(ENDPOINT_TASK)
     print(xml)
     fields = win.parse_task_xml(xml)
-    assert fields["command"] == endpoint["guardian"]
-    assert win.parse_arguments(fields["arguments"]) == endpoint["args"]
-    assert fields["working_directory"] == str(endpoint["dir"])
+    assert fields["command"] == endpoint["python"]
+    assert win.parse_arguments(fields["arguments"]) == [endpoint["guardian"], "--manifest", endpoint["manifest"]]
+    assert fields["working_directory"] == str(endpoint["root"])
     assert fields["logon_type"] == "S4U" and fields["run_level"] == "LeastPrivilege"
     assert fields["exec_count"] == 1 and "cmd.exe" not in xml.lower()
 
-    ok, banner = ep.probe_banner("127.0.0.1", endpoint["port"])
-    assert ok and banner.startswith("SSH-2.0-FakeGuardian")
-    markers = sorted(endpoint["dir"].glob("guardian-*.json"))
-    assert markers
-    marker = json.loads(markers[0].read_text(encoding="utf-8"))
-    print("guardian marker:", marker)
-    assert marker["args"][1:] == endpoint["args"]
-    assert Path(marker["cwd"]).resolve() == endpoint["dir"].resolve()
-
+    first = _current(endpoint)
+    print("CURRENT:", first)
     status = _service("status", "--json")
     data = json.loads(status.stdout)
     assert status.exit_code == common.EXIT_RUNNING, data
     epst = data["details"]["endpoint"]
-    assert epst["running"] and epst["banner_ok"] and epst["managed"]
-    assert {p["session_id"] for p in epst["processes"]} == {0}
-    assert marker["pid"] in {p["pid"] for p in epst["processes"]}
+    assert epst["running"] and epst["readiness"]["ok"] and not epst["contract"]
+    assert epst["readiness"]["generation"] == first["generation"]
+    assert "proved the enrolled host key" in epst["readiness"]["hostKey"]
+    api = win.WindowsApi()
+    sessions = {p["session_id"] for p in api.processes("python.exe") if p["pid"] == first["guardianPID"]}
+    assert sessions == {0}, sessions
+    # coordinator independence: the guardian's parent is the scheduler, not this test
+    parent = _parent_pid(first["guardianPID"])
+    print("guardian parent pid:", parent, "test pid:", os.getpid())
+    assert parent not in (None, os.getpid())
 
+    # scheduler-owned restart: fault-inject a daemon crash (CI fake only); the
+    # guardian closes its generation and exits 1; Task Scheduler (RestartOnFailure
+    # or the 5-minute watchdog) starts a NEW generation without any coordinator.
+    started = time.monotonic()
+    subprocess.run(["taskkill", "/F", "/PID", str(first["pid"])], capture_output=True,
+                   creationflags=CREATE_NO_WINDOW, timeout=30)
+    closed = endpoint["state"] / "generations" / first["generation"] / "CLOSED.json"
+    assert _wait(closed.exists, 30), "guardian did not close the crashed generation"
+    assert json.loads(closed.read_text(encoding="utf-8"))["accepted"] is False
+    restarted = _wait(lambda: (endpoint["state"] / "CURRENT.json").exists()
+                      and _current(endpoint)["generation"] != first["generation"], 420, step=5)
+    elapsed = time.monotonic() - started
+    print(f"scheduler-owned restart after {elapsed:.0f}s")
+    assert restarted, "Task Scheduler did not restart the guardian"
+    second = _current(endpoint)
+    assert second["pid"] != first["pid"]
+    assert _wait(lambda: _service("status").exit_code == common.EXIT_RUNNING, 60, step=3)
+
+    # uninstall: link first, then the endpoint through the STOP protocol
     gone = _service("uninstall")
-    assert gone.exit_code == 0 and ENDPOINT_TASK in gone.output
+    assert gone.exit_code == 0, gone.output
+    assert "CLOSED accepted" in gone.output
+    stop = json.loads((endpoint["state"] / "generations" / second["generation"] / "STOP.json").read_text())
+    assert stop == {"pid": second["pid"], "creationFILETIME": second["creationFILETIME"],
+                    "manifestSHA256": hashlib.sha256(manifest_before).hexdigest(), "stopOwnedJob": True}
     assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
-    deadline = time.monotonic() + 15
-    while ep.port_in_use("127.0.0.1", endpoint["port"]) and time.monotonic() < deadline:
-        time.sleep(0.5)
-    assert not ep.port_in_use("127.0.0.1", endpoint["port"]), "guardian survived uninstall"
-    assert _snapshot(Path(config)) == before_config
-    assert _snapshot_tree(endpoint["dir"]) == before_ep
+    assert not _wait(lambda: listening(port), 1)
+    assert _snapshot(Path(layout["config"])) == config_before
+    assert Path(endpoint["manifest"]).read_bytes() == manifest_before
     assert _service("status").exit_code == common.EXIT_NOT_INSTALLED
+
+
+def listening(port):
+    import socket
+
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+        return True
+    except OSError:
+        return False
+
+
+def test_isolated_qualification_instance(layout, monkeypatch):
+    enrolled = _free_port()
+    port = _free_port()
+    endpoint = _build_endpoint(layout, monkeypatch, port=port, enrolled_port=enrolled, name="qual")
+    result = _service("install", "--helper", layout["helper"], "--config-dir", layout["config"],
+                      "--with-endpoint", endpoint["manifest"], "--endpoint-only", "--instance", INSTANCE)
+    assert result.exit_code == 0, result.output
+    assert _query_xml() is None, "a qualification install must never register GatewayLink"
+    assert _query_xml(QUALIFICATION_TASK) is not None
+    status = _service("status", "--instance", INSTANCE, "--json")
+    assert status.exit_code == common.EXIT_RUNNING, status.output
+    gone = _service("uninstall", "--instance", INSTANCE)
+    assert gone.exit_code == 0 and "CLOSED accepted" in gone.output
+    assert _query_xml(QUALIFICATION_TASK) is None and not listening(port)

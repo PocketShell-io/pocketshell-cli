@@ -91,7 +91,7 @@ jobs:
   windows-gateway:
     name: Windows gateway client
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -131,7 +131,7 @@ jobs:
       - name: Set up Go (fake helper for the service test)
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: "1.26.x"
           cache: false
 
       - name: Build the fake pocketshell-link.exe
@@ -139,8 +139,8 @@ jobs:
         run: |
           go build -o "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" ./tests/gateway/fakelink/main.go
           "POCKETSHELL_TEST_FAKE_LINK=$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" >> $env:GITHUB_ENV
-          go build -o "$env:RUNNER_TEMP\fakeguardian\guardian.exe" ./tests/gateway/fakeguardian/main.go
-          "POCKETSHELL_TEST_FAKE_GUARDIAN=$env:RUNNER_TEMP\fakeguardian\guardian.exe" >> $env:GITHUB_ENV
+          go -C tests/gateway/fakeguardian build -mod=readonly -o "$env:RUNNER_TEMP\fakeguardian\fakeguardian.exe" .
+          "POCKETSHELL_TEST_FAKE_GUARDIAN=$env:RUNNER_TEMP\fakeguardian\fakeguardian.exe" >> $env:GITHUB_ENV
 
       - name: Windows gateway service (real scheduled task)
         env:

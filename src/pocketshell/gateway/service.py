@@ -295,6 +295,18 @@ def status(as_json: bool, instance: Optional[str]) -> None:
             rows.append(("processes", procs or "none"))
             for name, value in rows:
                 click.echo(f"  {name + ':':<16}{value if value is not None else '-'}")
+            endpoint = st.details.get("endpoint")
+            if endpoint:
+                ready = endpoint.get("readiness") or {}
+                click.echo(f"  endpoint task:  {endpoint['task']} [{endpoint['state']}] "
+                           + ("ready" if endpoint.get("running") else "NOT ready"))
+                if ready.get("generation"):
+                    click.echo(f"  generation:     {ready['generation']} (daemon pid {ready['pid']}, "
+                               f"birth {ready['birth']})")
+                for problem in list(endpoint.get("contract") or []) + list(ready.get("problems") or []):
+                    click.echo(f"  endpoint:       {problem}")
+                if ready.get("hostKey"):
+                    click.echo(f"  host key:       {ready['hostKey']}")
             if st.show:
                 click.echo("  enrolled state (helper show):")
                 for line in st.show.splitlines():
