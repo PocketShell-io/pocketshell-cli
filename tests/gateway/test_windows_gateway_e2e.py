@@ -223,7 +223,8 @@ def test_verbose_reports_native_ssh(client):
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
     err = proc.stderr.decode(errors="replace")
     native = os.path.join(os.environ["SystemRoot"], "System32", "OpenSSH", "ssh.exe")
-    assert f"pocketshell: ssh executable {native} (OpenSSH_for_Windows" in err, err[:2000]
+    line = next(ln for ln in err.splitlines() if ln.startswith("pocketshell: ssh executable "))
+    assert line.lower().startswith(f"pocketshell: ssh executable {native} (openssh_for_windows".lower()), line
 
 
 def test_interpreter_config_and_key_paths_with_spaces_and_non_ascii(tmp_path, sshd, gateway, fake_broker):
@@ -434,15 +435,24 @@ def test_fleet_qualifier_passes_against_this_host(tmp_path, client, sshd, gatewa
     laptops — must itself pass here, end to end, non-interactively."""
     script = Path(__file__).resolve().parents[2] / "scripts" / "windows-gateway-qualify.py"
     receipt = tmp_path / "receipt.json"
-    proc = subprocess.run(
-        [sys.executable, str(script), "--device-id", DEVICE, "--pinned-key", sshd["host_pub"],
-         "--user", sshd["user"], "--identity", sshd["key"],
-         "--server", f"ws://127.0.0.1:{gateway.port}", "--trust-gateway", "127.0.0.1", "--insecure-dev",
-         "--remote-os", "windows", "--json", str(receipt)],
-        capture_output=True, env=client.env(), cwd=client.cwd, timeout=600,
-    )
-    out = proc.stdout.decode(errors="replace")
-    assert proc.returncode == 0, out + proc.stderr.decode(errors="replace")[-3000:]
+    log = tmp_path / "qualify.log"
+    with open(log, "wb") as sink:
+        proc = subprocess.Popen(
+            [sys.executable, str(script), "--device-id", DEVICE, "--pinned-key", sshd["host_pub"],
+             "--user", sshd["user"], "--identity", sshd["key"],
+             "--server", f"ws://127.0.0.1:{gateway.port}", "--trust-gateway", "127.0.0.1", "--insecure-dev",
+             "--remote-os", "windows", "--json", str(receipt)],
+            stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT,
+            env=client.env(), cwd=client.cwd,
+        )
+        try:
+            proc.wait(600)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+            proc.wait()
+    out = log.read_text(encoding="utf-8", errors="replace")
+    print(out)
+    assert proc.returncode == 0, out[-5000:]
     assert out.rstrip().splitlines()[-1].startswith("RESULT: PASS")
     doc = json.loads(receipt.read_text(encoding="utf-8"))
     assert doc["result"] == "PASS"

@@ -123,6 +123,26 @@ def visible_window_pids() -> list[int]:
     return pids
 
 
+def kill_tree(pid: int) -> None:
+    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                   creationflags=CREATE_NO_WINDOW)
+
+
+def _first_line(proc, timeout: float) -> str:
+    """First stdout line of ``proc`` or "" after ``timeout`` (then the
+    whole process tree is killed so nothing is left behind)."""
+    import threading
+
+    box: list = []
+    t = threading.Thread(target=lambda: box.append(proc.stdout.readline()), daemon=True)
+    t.start()
+    t.join(timeout)
+    if not box:
+        kill_tree(proc.pid)
+        return ""
+    return box[0].decode(errors="replace").strip()
+
+
 def hidden_console_kwargs() -> dict:
     si = subprocess.STARTUPINFO()
     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -170,7 +190,8 @@ class Qualifier:
             argv += ["-i", self.a.identity]
         return argv + self.server_args() + ["--", *extra, *remote]
 
-    def run(self, argv, stdin: bytes = b"", timeout: float = 120):
+    def run(self, argv, stdin: bytes = b"", timeout: float = 0):
+        timeout = timeout or self.a.timeout
         return subprocess.run(argv, input=stdin, capture_output=True, env=self.env, timeout=timeout)
 
     def remote(self, kind: str, *arg: str) -> list[str]:
@@ -251,7 +272,7 @@ class Qualifier:
 
     def check_binary(self) -> bool:
         data = bytes(range(256)) * 4096 + os.urandom(3 * 1024 * 1024) + b"\r\n\x1a\x00\x1b[8;50;132t"
-        p = self.run(self.ssh_argv(*self.remote("cat")), stdin=data, timeout=300)
+        p = self.run(self.ssh_argv(*self.remote("cat")), stdin=data, timeout=self.a.timeout)
         ok = p.returncode == 0 and p.stdout == data
         detail = (f"{len(data)} bytes round trip sha256 {hashlib.sha256(data).hexdigest()[:16]} "
                   f"got {len(p.stdout)} bytes exit {p.returncode}")
@@ -287,7 +308,7 @@ class Qualifier:
     def _start_session(self, seconds: int, **popen):
         proc = subprocess.Popen(self.ssh_argv(*self.remote("sleep", str(seconds))), env=self.env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen)
-        first = proc.stdout.readline().decode(errors="replace").strip()
+        first = _first_line(proc, self.a.timeout)
         return proc, first
 
     def check_console(self) -> bool:
@@ -299,7 +320,11 @@ class Qualifier:
         tree = descendants(proc.pid)
         cons = set(console_pids())
         visible = set(visible_window_pids())
-        out, err = proc.communicate(timeout=120)
+        try:
+            out, err = proc.communicate(timeout=self.a.timeout)
+        except subprocess.TimeoutExpired:
+            kill_tree(proc.pid)
+            out, err = proc.communicate()
         exes = [t[2].lower() for t in tree]
         ssh_pids = [t[0] for t in tree if t[2].lower() == "ssh.exe"]
         proxies = [t for t in tree if t[1] in ssh_pids]
@@ -333,13 +358,12 @@ class Qualifier:
                 return self.record("transport-loss", False, "no ProxyCommand process")
             t0 = time.monotonic()
             for pid in proxies:  # the transport dies (as on a gateway/network drop)
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                               creationflags=CREATE_NO_WINDOW)
+                kill_tree(pid)
             code = proc.wait(30)
             elapsed = time.monotonic() - t0
         finally:
             if proc.poll() is None:
-                proc.kill()
+                kill_tree(proc.pid)
                 proc.wait()
         return self.record("transport-loss", code == 255 and elapsed < 15,
                            f"ssh ended with {code} {elapsed:.1f}s after the transport died")
@@ -358,7 +382,11 @@ class Qualifier:
                 json.dump(cfg, f)
             p = subprocess.Popen([self.python, os.path.abspath(__file__), "--_ctrl-c-harness", cfg_path],
                                  **hidden_console_kwargs())
-            p.wait(180)
+            try:
+                p.wait(self.a.timeout + 90)
+            except subprocess.TimeoutExpired:
+                kill_tree(p.pid)
+                p.wait()
             try:
                 with open(cfg["result"], encoding="utf-8") as f:
                     res = json.load(f)
@@ -407,7 +435,7 @@ def _ctrl_c_harness(cfg_path: str) -> int:
     res: dict = {}
     proc = subprocess.Popen(cfg["argv"], env=cfg["env"], stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    res["first"] = proc.stdout.readline().decode(errors="replace").strip()
+    res["first"] = _first_line(proc, 90)
     time.sleep(1.0)
     tree = descendants(proc.pid)
     t0 = time.monotonic()
@@ -451,6 +479,7 @@ def main(argv=None) -> int:
     ap.add_argument("--remote-os", choices=("posix", "windows"), default="posix")
     ap.add_argument("--python", help="interpreter running pocketshell (default: this one)")
     ap.add_argument("--json", help="also write the receipt as JSON here")
+    ap.add_argument("--timeout", type=float, default=90, help="per-session timeout in seconds (default 90)")
     args = ap.parse_args(argv)
     if sys.platform != "win32":
         print("FAIL platform: this qualifier is for native Windows clients", flush=True)
