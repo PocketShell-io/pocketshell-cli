@@ -625,6 +625,17 @@ class FakeWindows:
         raise AssertionError(f"unexpected child {argv}")
 
 
+def _verbs(fake):
+    """schtasks verbs, plus QUERY for each Task Scheduler COM read."""
+    out = []
+    for c in fake.calls:
+        if c[0].lower().endswith("schtasks.exe"):
+            out.append(c[1])
+        elif c[0].lower().endswith("powershell.exe") and "Schedule.Service" in c[-1]:
+            out.append("QUERY")
+    return out
+
+
 @pytest.fixture
 def fake_windows(monkeypatch):
     fake = FakeWindows()
@@ -668,8 +679,8 @@ def test_windows_install_registers_one_direct_task(fake_windows):
     plan = win.plan_install(WIN_HELPER, WIN_CONFIG, force=False, start=True, api=FakeApi())
     warnings = win.apply_install(plan)
     assert warnings == []
-    verbs = [c[1] for c in fake_windows.calls if c[0].lower().endswith("schtasks.exe")]
-    assert verbs == ["/Query", "/Create", "/Query", "/Run"]
+    verbs = _verbs(fake_windows)
+    assert verbs[:3] == ["QUERY", "/Create", "QUERY"] and verbs[3] == "/Run"
     create = next(c for c in fake_windows.calls if c[1:2] == ["/Create"])
     assert create[1:5] == ["/Create", "/TN", "\\PocketShell\\GatewayLink", "/XML"]
     assert "/F" not in create and "/RU" not in create and "/RP" not in create
@@ -719,8 +730,8 @@ def test_windows_install_refuses_existing_without_force(fake_windows):
     plan = win.plan_install(WIN_HELPER, WIN_CONFIG, force=True, start=False, api=FakeApi())
     assert "<Enabled>false</Enabled>" in plan.xml
     win.apply_install(plan)
-    verbs = [c[1] for c in fake_windows.calls if c[0].lower().endswith("schtasks.exe")]
-    assert verbs[-3:] == ["/End", "/Create", "/Query"]
+    verbs = _verbs(fake_windows)
+    assert verbs[-3:] == ["/End", "/Create", "QUERY"]
     assert next(c for c in fake_windows.calls if c[1:2] == ["/Create"])[-1] == "/F"
 
 
@@ -743,15 +754,14 @@ def test_windows_dry_run_cli_writes_nothing(fake_windows, monkeypatch):
     assert f"<UserId>{USER_SID}</UserId>" in result.stdout
     assert json.dumps([WIN_HELPER, "run", "--config-dir", WIN_CONFIG]) in result.stdout
     assert fake_windows.xml_path is None
-    assert [c[1] for c in fake_windows.calls if c[0].lower().endswith("schtasks.exe")] == ["/Query"]
+    assert _verbs(fake_windows) == ["QUERY"]
 
 
 def test_windows_uninstall_only_deletes_the_task(fake_windows):
     fake_windows.registered = _xml()
     message = win.uninstall(api=FakeApi())
     assert "removed" in message and "untouched" in message
-    sch = [c for c in fake_windows.calls if c[0].lower().endswith("schtasks.exe")]
-    assert [c[1] for c in sch] == ["/Query", "/End", "/Delete", "/Query"]
+    assert _verbs(fake_windows) == ["QUERY", "/End", "/Delete", "QUERY"]
     for argv in fake_windows.calls:
         assert WIN_CONFIG not in argv
     assert "nothing to do" in win.uninstall(api=FakeApi())
@@ -822,3 +832,42 @@ def test_decode_handles_schtasks_encodings():
     assert common.decode("<Task/>".encode("utf-16")) == "<Task/>"
     assert common.decode("<Task/>".encode("utf-16-le")) == "<Task/>"
     assert common.decode(b"<Task/>") == "<Task/>"
+
+
+# --- review PR21-3: a failed query is not "absent" -------------------------------------
+
+
+def test_windows_status_query_failure_is_an_error_not_absent(fake_windows, monkeypatch):
+    fake_windows.registered = _xml()
+    fake_windows.query_error = True
+    result = _windows_cli(monkeypatch, "status")
+    assert result.exit_code == 1, result.output
+    assert "not installed" not in result.output
+    assert "0x80070005" in result.stderr or "Access is denied" in result.stderr
+    assert "\x1b" not in result.output
+
+
+def test_windows_uninstall_query_failure_never_claims_success(fake_windows):
+    fake_windows.registered = _xml()
+    fake_windows.query_error = True
+    with pytest.raises(ServiceError):
+        win.uninstall(api=FakeApi())
+    assert not any(c[1:2] == ["/Delete"] for c in fake_windows.calls)
+
+
+def test_windows_uninstall_unverifiable_deletion_is_an_error(fake_windows):
+    fake_windows.registered = _xml()
+    fake_windows.query_error_after_delete = True
+    with pytest.raises(ServiceError, match="verify|query"):
+        win.uninstall(api=FakeApi())
+
+
+def test_windows_confirmed_not_found_stays_idempotent(fake_windows, monkeypatch):
+    assert "nothing to do" in win.uninstall(api=FakeApi())
+    assert _windows_cli(monkeypatch, "status").exit_code == 4
+
+
+def test_windows_install_existence_query_failure_refuses(fake_windows):
+    fake_windows.query_error = True
+    with pytest.raises(ServiceError):
+        win.plan_install(WIN_HELPER, WIN_CONFIG, force=False, start=True, api=FakeApi())

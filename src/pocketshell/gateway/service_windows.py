@@ -25,6 +25,7 @@ modified (only their owner SID and existence are inspected).
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import ntpath
@@ -521,43 +522,84 @@ def schtasks(*args: str) -> list:
     return [_system32("schtasks.exe"), *args]
 
 
-def query_task_xml(runner: Optional[Runner] = None) -> Optional[str]:
-    """The registered definition, or None when the task does not exist."""
-    runner = runner or run_child
-    result = runner(schtasks("/Query", "/TN", TASK_NAME, "/XML"))
-    if result.returncode != 0:
-        return None
-    text = decode(result.stdout)
-    return text if "<Task" in text else None
+# IRegisteredTask.State
+TASK_STATES = {0: "Unknown", 1: "Disabled", 2: "Queued", 3: "Ready", 4: "Running"}
+# Confirmed absence: the task (ERROR_FILE_NOT_FOUND) or its \PocketShell
+# folder (ERROR_PATH_NOT_FOUND) does not exist. Every other failure — access
+# denied, the service unavailable, PowerShell itself failing — is UNKNOWN and
+# must never be reported as "not installed" or as a successful deletion.
+_NOT_FOUND_HRESULTS = {"0x80070002", "0x80070003"}
+
+_QUERY_SCRIPT = (
+    "$ErrorActionPreference='Stop';"
+    "try{"
+    "$s=New-Object -ComObject Schedule.Service;$s.Connect();"
+    f"$t=$s.GetFolder('{TASK_FOLDER.rstrip(chr(92))}').GetTask('{TASK_LEAF}');"
+    "$o=[ordered]@{found=$true;state=[int]$t.State;last_result=[int64]$t.LastTaskResult;"
+    "xml=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t.Xml))}"
+    "}catch{"
+    "$e=$_.Exception;while($e.InnerException){$e=$e.InnerException};"
+    "$o=[ordered]@{found=$false;hresult=('0x{0:X8}' -f $e.HResult);message=[string]$e.Message}"
+    "};"
+    "$o|ConvertTo-Json -Compress"
+)
 
 
-def task_state(runner: Optional[Runner] = None) -> dict:
-    """Task state via the ScheduledTasks module (best effort, never fatal)."""
-    runner = runner or run_child
-    script = (
-        "$ErrorActionPreference='Stop';"
-        f"$t=Get-ScheduledTask -TaskPath '{TASK_FOLDER}' -TaskName '{TASK_LEAF}';"
-        "$i=$t|Get-ScheduledTaskInfo;"
-        "[pscustomobject]@{State=[string]$t.State;LastTaskResult=$i.LastTaskResult;"
-        "LastRunTime=[string]$i.LastRunTime}|ConvertTo-Json -Compress"
-    )
-    argv = [
+@dataclass
+class TaskInfo:
+    xml: str
+    state: str
+    last_result: Optional[int]
+
+
+def _powershell(script: str) -> list:
+    return [
         _system32("WindowsPowerShell", "v1.0", "powershell.exe"),
         "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script,
     ]
-    try:
-        result = runner(argv)
-    except ServiceError as exc:
-        return {"error": str(exc)}
-    if result.returncode != 0:
-        return {"error": sanitize(decode(result.stderr), 300) or f"exit {result.returncode}"}
+
+
+def query_task(runner: Optional[Runner] = None) -> Optional[TaskInfo]:
+    """The registered task, ``None`` ONLY when its absence is confirmed.
+
+    Reads through the Task Scheduler COM API (locale-independent HRESULTs,
+    numeric state, the definition base64-encoded so no console code page
+    can mangle non-ASCII paths). Any query failure raises
+    :class:`ServiceError` with a sanitized message.
+    """
+    runner = runner or run_child
+    result = runner(_powershell(_QUERY_SCRIPT))
     try:
         data = json.loads(decode(result.stdout).strip() or "null")
     except ValueError:
-        return {"error": "unparseable task state"}
-    if not isinstance(data, dict):
-        return {"error": "unparseable task state"}
-    return {k: sanitize(str(v), 100) for k, v in data.items()}
+        data = None
+    if result.returncode != 0 or not isinstance(data, dict):
+        detail = sanitize(decode(result.stderr or result.stdout), 300)
+        raise ServiceError(
+            f"could not query the scheduled task {TASK_NAME} (exit {result.returncode})"
+            + (f": {detail}" if detail else "")
+        )
+    if not data.get("found"):
+        hresult = str(data.get("hresult", "")).upper().replace("0X", "0x")
+        if hresult in _NOT_FOUND_HRESULTS:
+            return None
+        raise ServiceError(
+            f"could not query the scheduled task {TASK_NAME} (HRESULT {sanitize(hresult, 20)}: "
+            f"{sanitize(str(data.get('message', '')), 300)})"
+        )
+    try:
+        xml = base64.b64decode(str(data.get("xml", "")), validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise ServiceError(f"the definition of {TASK_NAME} could not be decoded") from None
+    state = TASK_STATES.get(data.get("state"), "Unknown")
+    last = data.get("last_result")
+    return TaskInfo(xml, state, last if isinstance(last, int) else None)
+
+
+def query_task_xml(runner: Optional[Runner] = None) -> Optional[str]:
+    """The registered definition; ``None`` only on confirmed absence."""
+    info = query_task(runner)
+    return info.xml if info is not None else None
 
 
 ELEVATION_HINT = (
@@ -711,7 +753,13 @@ def uninstall(*, runner: Optional[Runner] = None, api: Optional[WindowsApi] = No
     result = runner(schtasks("/Delete", "/TN", TASK_NAME, "/F"))
     if result.returncode != 0:
         raise _fail(result, f"deleting {TASK_NAME}", ELEVATION_HINT)
-    if query_task_xml(runner) is not None:
+    try:
+        still_there = query_task(runner) is not None
+    except ServiceError as exc:
+        raise ServiceError(
+            f"deleted {TASK_NAME} but could not verify its removal: {exc}"
+        ) from None
+    if still_there:
         raise ServiceError(f"{TASK_NAME} still exists after deletion")
     message = f"removed the scheduled task {TASK_NAME} (enrollment and config dir untouched)"
     if helper:
@@ -753,9 +801,10 @@ def _matching(api: WindowsApi, helper: str) -> list:
 def status(runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) -> ServiceStatus:
     runner = runner or run_child
     st = ServiceStatus(platform="windows", name=TASK_NAME, installed=False)
-    registered = query_task_xml(runner)
-    if registered is None:
+    info = query_task(runner)
+    if info is None:
         return st
+    registered = info.xml
     st.installed = True
     st.definition_path = TASK_NAME
     try:
@@ -780,9 +829,8 @@ def status(runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) ->
         and "cmd.exe" not in (st.helper or "").lower()
         and args[:1] == ["run"]
     )
-    state = task_state(runner)
-    st.details["task"] = state
-    st.state = state.get("State", "unknown")
+    st.state = info.state
+    st.details["last_task_result"] = info.last_result
     api = api or WindowsApi()
     if st.helper:
         st.processes = _matching(api, st.helper)
