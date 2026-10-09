@@ -490,6 +490,30 @@ supervisor's agent) is reported, but the result is still "not running"
 (exit 3). `uninstall` ends and deletes the task, verifies it is gone, then
 waits briefly for the helper process to exit.
 
+**Private loopback endpoint (`--with-endpoint MANIFEST`, Windows).** When the
+enrolled local sshd is a private endpoint with its own guardian (rather than a
+system service), `install --with-endpoint MANIFEST` also registers
+`\PocketShell\GatewayEndpoint`. It uses the same rules as the link task (your SID,
+S4U, LeastPrivilege, session 0, boot +10 s and a 5-minute watchdog), and its
+single action launches the guardian exe directly with the manifest's argv and
+working directory.
+
+- **Trust.** The manifest file's sha256 must be on the reviewed
+  `service_endpoint.ALLOWED_ENDPOINT_MANIFEST_SHA256` list, which is empty until a
+  manifest is reviewed. The guardian and every pinned file are re-hashed against
+  it.
+- **Identity.** Its `listen` must be `127.0.0.1:<port>` and equal the enrolled
+  `local ssh`, and its `host_key_fingerprint` must equal the enrolled pin.
+- **Held endpoint.** A port that is already served (for example, by a currently
+  held endpoint) is refused; the command never stops it.
+- **Install order.** The endpoint is registered, read back, started and
+  confirmed first: task Running plus an `SSH-2.0-` banner on `listen`. Only then
+  is the link registered. If the endpoint does not come up, `install` exits 5
+  and does not register the link.
+- **Status.** Reports both tasks; running requires both plus the banner.
+- **Uninstall.** Removes the link first, then the endpoint, and never touches the
+  endpoint's files.
+
 **One agent per device:** a new connection supersedes the old one at the
 gateway. Stop any other `pocketshell-link run` for the same enrolled device
 before starting the task (`install --no-start` registers it disabled;
