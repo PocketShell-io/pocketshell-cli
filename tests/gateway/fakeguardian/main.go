@@ -1,20 +1,22 @@
 // Fake endpoint guardian + fake daemon for the windows-latest CI test ONLY.
 //
-// It implements the AGREED guardian file protocol (endpoint-guardian-api-
-// agreement.md, schema 1) so `pocketshell gateway service` can be exercised
-// against the real Task Scheduler without the real guardian. Never shipped.
+// It implements the FINAL guardian ABI (INTERFACE.md, guardian 6cf7ae85) so
+// `pocketshell gateway service` can be exercised against the real Task
+// Scheduler without the real guardian. Never shipped; not native proof.
 //
-// As "python.exe <guardian.py> --manifest M" (guardian mode):
-//   - reads the guardian's closed manifest (state, port, config, daemon),
-//   - holds <state>\.lock exclusively for its lifetime,
-//   - allocates a fresh generation (32 hex), <state>\generations\<gen>,
-//   - starts the daemon (<daemon> -D -f <config>) with CREATE_NO_WINDOW in a
-//     KILL_ON_JOB_CLOSE Job, records its pid + decimal creation FILETIME,
-//   - waits for the loopback listener, writes READY.json, THEN CURRENT.json
-//     (temp + rename),
+// As "python.exe -I -S -B <guardian.py> --manifest M [--check-only]":
+//   - --check-only: reads the manifest, prints a preflight line, exits 0
+//     without any state, generation, Job or daemon;
+//   - otherwise holds <state>\INSTANCE.lock exclusively, allocates
+//     <state>\generation-<uuidhex> (never reused), starts the daemon
+//     (<daemon> -D -f <config>) CREATE_NO_WINDOW in a KILL_ON_JOB_CLOSE Job,
+//     records its pid + decimal creation FILETIME, waits for the loopback
+//     listener, writes READY.json, THEN atomically replaces
+//     <state>\CURRENT.json = {version:1, generation, ready, manifestSHA256};
 //   - polls STOP.json: exactly {pid, creationFILETIME, manifestSHA256,
-//     stopOwnedJob:true} => terminates its Job, CLOSED.json accepted=true,
-//     exit 0; anything else (or the daemon dying) => Job terminated,
+//     stopOwnedJob:true} => terminates its Job, CLOSED.json {accepted,
+//     requestedOwnedJobStop, activeAtClose:0, cleanupErrors:[]}, exit 0;
+//     anything else (or the daemon dying) => Job terminated,
 //     CLOSED.json accepted=false, exit 1 (the scheduler restarts it).
 //
 // As "<daemon> -D -f <config>" (daemon mode): a real SSH server (key
@@ -54,8 +56,13 @@ type manifest struct {
 
 func main() {
 	args := os.Args[1:]
-	if len(args) == 3 && strings.HasSuffix(strings.ToLower(args[0]), ".py") && args[1] == "--manifest" {
-		os.Exit(guardian(args[2]))
+	bootstrap := len(args) >= 6 && args[0] == "-I" && args[1] == "-S" && args[2] == "-B" &&
+		strings.HasSuffix(strings.ToLower(args[3]), ".py") && args[4] == "--manifest"
+	if bootstrap && len(args) == 7 && args[6] == "--check-only" {
+		os.Exit(checkOnly(args[5]))
+	}
+	if bootstrap && len(args) == 6 {
+		os.Exit(guardian(args[5]))
 	}
 	if len(args) == 3 && args[0] == "-D" && args[1] == "-f" {
 		os.Exit(daemon(args[2]))
@@ -117,6 +124,20 @@ func daemon(config string) int {
 }
 
 // --- guardian -----------------------------------------------------------------------
+
+func checkOnly(manifestPath string) int {
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return 10
+	}
+	var m manifest
+	if err := json.Unmarshal(raw, &m); err != nil || m.State == "" || m.Port == 0 {
+		return 11
+	}
+	sum := sha256.Sum256(raw)
+	fmt.Printf("{\"phase\":\"preflight-only\",\"manifestSHA256\":\"%s\",\"daemonSpawned\":false,\"stateAllocated\":false}\n", hex.EncodeToString(sum[:]))
+	return 0
+}
 
 func filetime(h windows.Handle) (string, error) {
 	var c, e, k, u windows.Filetime
@@ -183,7 +204,7 @@ func guardian(manifestPath string) int {
 		return 11
 	}
 	ownerSID = m.Owner
-	lockName, _ := windows.UTF16PtrFromString(filepath.Join(m.State, ".lock"))
+	lockName, _ := windows.UTF16PtrFromString(filepath.Join(m.State, "INSTANCE.lock"))
 	lock, err := windows.CreateFile(lockName, windows.GENERIC_WRITE, 0, nil, windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {
 		return 12 // another guardian holds the state
@@ -192,12 +213,11 @@ func guardian(manifestPath string) int {
 
 	buf := make([]byte, 16)
 	_, _ = rand.Read(buf)
-	generation := hex.EncodeToString(buf)
-	genDir := filepath.Join(m.State, "generations", generation)
-	if err := os.MkdirAll(genDir, 0o700); err != nil {
-		return 13
+	genDir := filepath.Join(m.State, "generation-"+hex.EncodeToString(buf))
+	if err := os.Mkdir(genDir, 0o700); err != nil {
+		return 13 // a fresh generation only; never reuse one
 	}
-	result := map[string]interface{}{"generation": generation, "manifestSHA256": manifestSHA, "accepted": false, "cleanupErrors": []string{}}
+	result := map[string]interface{}{"manifestSHA256": manifestSHA, "accepted": false, "cleanupErrors": []string{}}
 	closeWith := func(code int, failure string) int {
 		if failure != "" {
 			result["failure"] = failure
@@ -254,18 +274,18 @@ func guardian(manifestPath string) int {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	_ = guardianBirth
 	ready := map[string]interface{}{
-		"generation": generation, "pid": pid, "creationFILETIME": birth,
-		"guardianPID": os.Getpid(), "manifestSHA256": manifestSHA, "port": m.Port,
+		"accepted": false, "manifestSHA256": manifestSHA, "cleanupErrors": []string{},
+		"pid": pid, "creationFILETIME": birth, "guardianPID": os.Getpid(),
+		"port": m.Port, "heldProcessHandle": true, "ownedJob": true,
 	}
-	if err := writeJSON(filepath.Join(genDir, "READY.json"), ready); err != nil {
+	readyPath := filepath.Join(genDir, "READY.json")
+	if err := writeJSON(readyPath, ready); err != nil {
 		return closeWith(22, "ready")
 	}
 	current := map[string]interface{}{
-		"schema": 1, "generation": generation, "manifestSHA256": manifestSHA,
-		"pid": pid, "creationFILETIME": birth, "guardianPID": os.Getpid(),
-		"guardianCreationFILETIME": guardianBirth, "port": m.Port,
-		"readyAt": time.Now().UTC().Format(time.RFC3339),
+		"version": 1, "generation": genDir, "ready": readyPath, "manifestSHA256": manifestSHA,
 	}
 	if err := writeJSON(filepath.Join(m.State, "CURRENT.json"), current); err != nil {
 		return closeWith(23, "current")
@@ -298,5 +318,6 @@ func guardian(manifestPath string) int {
 		result["activeAtClose"] = 0
 		result["accepted"] = true
 		return closeWith(0, "")
+		// (an invalid STOP keeps requestedOwnedJobStop absent, accepted false)
 	}
 }

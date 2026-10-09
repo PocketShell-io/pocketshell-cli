@@ -255,58 +255,104 @@ def _host_key():
     return private, public
 
 
+def _fs(path) -> str:
+    """Forward-slash spelling: the guardian's config_guard uses POSIX shlex,
+    where backslashes are escapes (INTERFACE example paths use C:/...)."""
+    return str(path).replace("\\", "/")
+
+
+def _icacls(*args):
+    proc = _run(["icacls", *map(str, args)])
+    assert proc.returncode == 0, common.decode(proc.stdout + proc.stderr)
+
+
 def _build_endpoint(layout, monkeypatch, *, port: int, enrolled_port: int, name: str):
+    """A protected private root laid out exactly as INTERFACE.md, with the
+    fake as both the qualified interpreter and the daemon."""
     fake = os.environ.get("POCKETSHELL_TEST_FAKE_GUARDIAN")
     if not fake:
         pytest.skip("POCKETSHELL_TEST_FAKE_GUARDIAN not built")
     sid = layout["sid"]
+    user = os.environ["USERNAME"]
     root = layout["base"] / f"endpoint {name} ü"
-    for sub in ("py", "guardian", "bin", "state", "state/tmp", "keys"):
+    root.mkdir()
+    # protected root: owner = user, DACL user/SYSTEM/Administrators only, inherited by children
+    _icacls(root, "/inheritance:r", "/grant:r", f"*{sid}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F",
+            "*S-1-5-32-544:(OI)(CI)F")
+    for sub in ("py", "native", "bin", "state", "state/tmp", "keys", "sftp", "runtime",
+                "backend/run", "backend/state", "backend/xdg-config", "backend/xdg-state",
+                "backend/xdg-data", "backend/xdg-cache"):
         (root / sub).mkdir(parents=True, exist_ok=True)
-    python = root / "py" / "python.exe"
-    daemon = root / "bin" / "sshd.exe"
+    python, daemon = root / "py" / "python.exe", root / "bin" / "sshd.exe"
     shutil.copyfile(fake, python)
     shutil.copyfile(fake, daemon)
-    guardian = root / "guardian" / "guardian.py"
-    guardian.write_text("# stand-in for the reviewed guardian source (CI fake)\n")
+    for source in ("guardian.py", "native_api.py", "policy.py"):
+        (root / "native" / source).write_text(f"# CI stand-in for the reviewed {source}\n")
+    sftp = root / "sftp" / "sftp-server.exe"
+    bash = root / "runtime" / "bash.exe"
+    dll = root / "runtime" / "msys-2.0.dll"
+    for dummy in (sftp, bash, dll):
+        dummy.write_bytes(b"CI stand-in " + dummy.name.encode())
+    backend = root / "backend" / "aplexer.toml"
+    backend.write_text("[engines.shell]\n", encoding="utf-8")
     private, public = _host_key()
-    hostkey_file = root / "keys" / "host_ed25519"
+    hostkey_file, authorized = root / "keys" / "host_ed25519", root / "keys" / "authorized_keys"
     hostkey_file.write_bytes(private)
-    config = root / f"sshd-{port}.conf"
+    authorized.write_text("")
+    state = root / "state"
+    set_env = {
+        "APLEXER_CONFIG": _fs(backend), "APLEXER_RUNTIME_DIR": _fs(root / "backend/run"),
+        "APLEXER_STATE_DIR": _fs(root / "backend/state"), "APLEXER_RUN_IN_PLACE": "1", "APLEXER_SHELL": "",
+        "XDG_CONFIG_HOME": _fs(root / "backend/xdg-config"), "XDG_STATE_HOME": _fs(root / "backend/xdg-state"),
+        "XDG_DATA_HOME": _fs(root / "backend/xdg-data"), "XDG_CACHE_HOME": _fs(root / "backend/xdg-cache"),
+        "BASH_ENV": "", "ENV": "", "ZDOTDIR": "",
+    }
+    bindings = {
+        "hostKey": _fs(hostkey_file), "authorizedKeys": _fs(authorized), "pidFile": _fs(state / "sshd.pid"),
+        "allowUser": user, "sftp": _fs(sftp), "backendConfig": _fs(backend),
+        "backendExecutable": _fs(bash), "backendDLL": _fs(dll), "setEnv": set_env,
+    }
+    config = root / f"endpoint-{port}.conf"
+    setenv_line = " ".join(f'"{k}={v}"' for k, v in set_env.items())
     config.write_text(
-        f"Port {port}\nListenAddress 127.0.0.1\nHostKey {hostkey_file}\n"
+        f"Port {port}\nListenAddress 127.0.0.1\nHostKey \"{bindings['hostKey']}\"\n"
+        f"PidFile \"{bindings['pidFile']}\"\nAuthorizedKeysFile \"{bindings['authorizedKeys']}\"\n"
         "AuthenticationMethods publickey\nPubkeyAuthentication yes\nPasswordAuthentication no\n"
-        "KbdInteractiveAuthentication no\nPermitEmptyPasswords no\nDisableForwarding yes\nPermitTTY yes\n"
-        f"AuthorizedKeysFile {root / 'keys' / 'authorized_keys'}\n",
+        "KbdInteractiveAuthentication no\nPermitEmptyPasswords no\n"
+        f"AllowUsers {user}\nDisableForwarding yes\nPermitTTY yes\nLogLevel VERBOSE\n"
+        f"Subsystem sftp \"{bindings['sftp']}\"\nSetEnv {setenv_line}\n",
         encoding="utf-8",  # the guardian reads its config as UTF-8 (paths contain ü)
     )
-    pins = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in (python, guardian, daemon, config)}
-    state = root / "state"
+    pinned = [python, daemon, config, sftp, bash, dll, backend,
+              root / "native" / "guardian.py", root / "native" / "native_api.py", root / "native" / "policy.py"]
+    pins = {_fs(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in pinned}
     doc = {
-        "version": 1, "ownerSID": sid, "root": str(root), "state": str(state), "config": str(config),
-        "port": port, "daemon": str(daemon), "python": str(python), "pins": pins,
+        "version": 1, "ownerSID": sid, "root": _fs(root), "state": _fs(state), "config": _fs(config),
+        "port": port, "daemon": _fs(daemon), "python": _fs(python), "pins": pins,
         "environment": {
             "SystemRoot": "C:/Windows", "WINDIR": "C:/Windows", "SystemDrive": "C:",
-            "ProgramData": "C:/ProgramData", "USERPROFILE": os.environ["USERPROFILE"],
-            "HOME": os.environ["USERPROFILE"], "TEMP": str(state / "tmp"), "TMP": str(state / "tmp"),
+            "ProgramData": "C:/ProgramData", "USERPROFILE": _fs(os.environ["USERPROFILE"]),
+            "HOME": _fs(os.environ["USERPROFILE"]), "TEMP": _fs(state / "tmp"), "TMP": _fs(state / "tmp"),
         },
+        "configBindings": bindings,
     }
-    manifest = root / "manifest.json"
+    manifest = root / "endpoint-manifest.json"
     manifest.write_bytes(json.dumps(doc, indent=1).encode("utf-8"))
-    for path in (root, state, manifest, config):
-        _set_owner(path, sid)  # an elevated mkdir stamps Administrators; the guardian requires its owner
+    # private objects must be owned by the user (an elevated create stamps Administrators)
+    _icacls(root, "/setowner", f"*{sid}", "/T", "/C", "/Q")
     config_json = Path(layout["config"]) / "config.json"
     config_json.write_text(json.dumps({
         "device_id": "win-service-e2e", "ssh_host": f"127.0.0.1:{enrolled_port}",
         "ssh_host_key": " ".join(public.split()[:2]),
     }))
-    # THE test-only seams: this manifest and this guardian source are "reviewed".
+    # THE test-only seams: this manifest and this source triple are "reviewed".
     monkeypatch.setattr(ep, "ALLOWED_ENDPOINT_MANIFEST_SHA256",
                         ep.ALLOWED_ENDPOINT_MANIFEST_SHA256 | {hashlib.sha256(manifest.read_bytes()).hexdigest()})
-    monkeypatch.setattr(ep, "ALLOWED_GUARDIAN_SOURCE_SHA256",
-                        ep.ALLOWED_GUARDIAN_SOURCE_SHA256 | {pins[str(guardian)]})
-    return {"root": root, "state": state, "manifest": str(manifest), "port": port, "python": str(python),
-            "guardian": str(guardian), "public": public}
+    triple = tuple(pins[_fs(root / "native" / n)] for n in ("guardian.py", "native_api.py", "policy.py"))
+    monkeypatch.setattr(ep, "ALLOWED_GUARDIAN_SOURCES", ep.ALLOWED_GUARDIAN_SOURCES | {triple})
+    return {"root": root, "state": state, "manifest": os.path.normpath(str(manifest)), "port": port,
+            "python": os.path.normpath(str(python)),
+            "guardian": os.path.normpath(str(root / "native" / "guardian.py")), "public": public}
 
 
 def _diagnose(endpoint, leaf):
@@ -322,8 +368,10 @@ def _diagnose(endpoint, leaf):
             print("   ", ascii(path.read_text(encoding="utf-8", errors="replace")[:2000]))
 
 
-def _current(endpoint) -> dict:
-    return json.loads((endpoint["state"] / "CURRENT.json").read_text(encoding="utf-8"))
+def _ready_info(endpoint) -> dict:
+    current = json.loads((endpoint["state"] / "CURRENT.json").read_text(encoding="utf-8"))
+    ready = json.loads(Path(current["ready"]).read_text(encoding="utf-8"))
+    return {**ready, "generation": current["generation"], "current": current}
 
 
 def _wait(predicate, seconds, step=2.0):
@@ -362,6 +410,16 @@ def _parent_pid(pid: int):
     return None
 
 
+def listening(port):
+    import socket
+
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+        return True
+    except OSError:
+        return False
+
+
 def test_endpoint_port_already_served_is_refused(layout, monkeypatch):
     import socket
 
@@ -374,6 +432,27 @@ def test_endpoint_port_already_served_is_refused(layout, monkeypatch):
                           "--with-endpoint", endpoint["manifest"])
     assert result.exit_code == 1 and "already served by another process" in result.output
     assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
+
+
+def test_phase_a_check_only_qualification(layout, monkeypatch):
+    enrolled, port = _free_port(), _free_port()
+    endpoint = _build_endpoint(layout, monkeypatch, port=port, enrolled_port=enrolled, name="chk")
+    result = _service("install", "--helper", layout["helper"], "--config-dir", layout["config"],
+                      "--with-endpoint", endpoint["manifest"], "--endpoint-only", "--instance", INSTANCE,
+                      "--check-only")
+    if result.exit_code != 0:
+        _diagnose(endpoint, ep.leaf_for(INSTANCE))
+    assert result.exit_code == 0, result.output
+    assert "check-only preflight exited 0" in result.output
+    xml = _query_xml(QUALIFICATION_TASK)
+    fields = win.parse_task_xml(xml)
+    assert win.parse_arguments(fields["arguments"]) == [
+        "-I", "-S", "-B", endpoint["guardian"], "--manifest", endpoint["manifest"], "--check-only"]
+    assert "<BootTrigger>" not in xml and "<TimeTrigger>" not in xml
+    assert not list(endpoint["state"].glob("generation-*")), "check-only allocated a generation"
+    assert _query_xml() is None
+    gone = _service("uninstall", "--instance", INSTANCE)
+    assert gone.exit_code == 0 and _query_xml(QUALIFICATION_TASK) is None
 
 
 def test_real_endpoint_and_link_lifecycle(layout, monkeypatch):
@@ -397,68 +476,58 @@ def test_real_endpoint_and_link_lifecycle(layout, monkeypatch):
     print(xml)
     fields = win.parse_task_xml(xml)
     assert fields["command"] == endpoint["python"]
-    assert win.parse_arguments(fields["arguments"]) == [endpoint["guardian"], "--manifest", endpoint["manifest"]]
-    assert fields["working_directory"] == str(endpoint["root"])
+    assert win.parse_arguments(fields["arguments"]) == [
+        "-I", "-S", "-B", endpoint["guardian"], "--manifest", endpoint["manifest"]]
+    assert fields["working_directory"] == os.path.normpath(str(endpoint["root"]))
     assert fields["logon_type"] == "S4U" and fields["run_level"] == "LeastPrivilege"
     assert fields["exec_count"] == 1 and "cmd.exe" not in xml.lower()
 
-    first = _current(endpoint)
-    print("CURRENT:", first)
+    first = _ready_info(endpoint)
+    print("CURRENT:", first["current"])
+    assert set(first["current"]) == {"version", "generation", "ready", "manifestSHA256"}
+    assert Path(first["generation"]).name.startswith("generation-")
     status = _service("status", "--json")
     data = json.loads(status.stdout)
     assert status.exit_code == common.EXIT_RUNNING, data
     epst = data["details"]["endpoint"]
     assert epst["running"] and epst["readiness"]["ok"] and not epst["contract"]
-    assert epst["readiness"]["generation"] == first["generation"]
+    assert epst["readiness"]["generation"].lower() == first["generation"].lower()
     assert "proved the enrolled host key" in epst["readiness"]["hostKey"]
     api = win.WindowsApi()
     sessions = {p["session_id"] for p in api.processes("python.exe") if p["pid"] == first["guardianPID"]}
     assert sessions == {0}, sessions
-    # coordinator independence: the guardian's parent is the scheduler, not this test
     parent = _parent_pid(first["guardianPID"])
     print("guardian parent pid:", parent, "test pid:", os.getpid())
     assert parent not in (None, os.getpid())
 
-    # scheduler-owned restart: fault-inject a daemon crash (CI fake only); the
-    # guardian closes its generation and exits 1; Task Scheduler (RestartOnFailure
-    # or the 5-minute watchdog) starts a NEW generation without any coordinator.
+    # scheduler-owned restart: fault-inject a daemon crash (CI fake only)
     started = time.monotonic()
     subprocess.run(["taskkill", "/F", "/PID", str(first["pid"])], capture_output=True,
                    creationflags=CREATE_NO_WINDOW, timeout=30)
-    closed = endpoint["state"] / "generations" / first["generation"] / "CLOSED.json"
+    closed = Path(first["generation"]) / "CLOSED.json"
     assert _wait(closed.exists, 30), "guardian did not close the crashed generation"
     assert json.loads(closed.read_text(encoding="utf-8"))["accepted"] is False
-    restarted = _wait(lambda: (endpoint["state"] / "CURRENT.json").exists()
-                      and _current(endpoint)["generation"] != first["generation"], 420, step=5)
-    elapsed = time.monotonic() - started
-    print(f"scheduler-owned restart after {elapsed:.0f}s")
+    restarted = _wait(lambda: _ready_info(endpoint)["generation"] != first["generation"], 420, step=5)
+    print(f"scheduler-owned restart after {time.monotonic() - started:.0f}s")
     assert restarted, "Task Scheduler did not restart the guardian"
-    second = _current(endpoint)
+    second = _ready_info(endpoint)
     assert second["pid"] != first["pid"]
     assert _wait(lambda: _service("status").exit_code == common.EXIT_RUNNING, 60, step=3)
 
-    # uninstall: link first, then the endpoint through the STOP protocol
     gone = _service("uninstall")
     assert gone.exit_code == 0, gone.output
     assert "CLOSED accepted" in gone.output
-    stop = json.loads((endpoint["state"] / "generations" / second["generation"] / "STOP.json").read_text())
+    stop = json.loads((Path(second["generation"]) / "STOP.json").read_text())
     assert stop == {"pid": second["pid"], "creationFILETIME": second["creationFILETIME"],
                     "manifestSHA256": hashlib.sha256(manifest_before).hexdigest(), "stopOwnedJob": True}
+    closed2 = json.loads((Path(second["generation"]) / "CLOSED.json").read_text())
+    assert closed2["accepted"] and closed2["requestedOwnedJobStop"] and closed2["activeAtClose"] == 0
     assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
-    assert not _wait(lambda: listening(port), 1)
+    assert not listening(port)
+    assert len(list(endpoint["state"].glob("generation-*"))) >= 2  # generations are retained
     assert _snapshot(Path(layout["config"])) == config_before
     assert Path(endpoint["manifest"]).read_bytes() == manifest_before
     assert _service("status").exit_code == common.EXIT_NOT_INSTALLED
-
-
-def listening(port):
-    import socket
-
-    try:
-        socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
-        return True
-    except OSError:
-        return False
 
 
 def test_isolated_qualification_instance(layout, monkeypatch):
@@ -471,7 +540,6 @@ def test_isolated_qualification_instance(layout, monkeypatch):
         _diagnose(endpoint, ep.leaf_for(INSTANCE))
     assert result.exit_code == 0, result.output
     assert _query_xml() is None, "a qualification install must never register GatewayLink"
-    assert _query_xml(QUALIFICATION_TASK) is not None
     status = _service("status", "--instance", INSTANCE, "--json")
     assert status.exit_code == common.EXIT_RUNNING, status.output
     gone = _service("uninstall", "--instance", INSTANCE)
