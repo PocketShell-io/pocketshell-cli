@@ -174,7 +174,9 @@ def test_process_identity_is_tri_state():
 
     api = win.WindowsApi()
     me = api.process_identity(os.getpid())
-    assert me["state"] == "present" and win._same_path(me["image"], sys.executable)
+    # a venv's Scripts\python.exe re-launches the base interpreter
+    assert me["state"] == "present" and any(win._same_path(me["image"], x) for x in
+                                            (sys.executable, getattr(sys, "_base_executable", "")))
     assert me["birth"] == api.process_birth(os.getpid())
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     child.wait()  # Popen still holds the handle: an exited, unreaped process object
