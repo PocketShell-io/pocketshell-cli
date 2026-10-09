@@ -70,7 +70,7 @@ def test_parity_with_the_reference_oracle(tree):
     code, reply = verify(tree, reqs)
     print(json.dumps(reply, indent=1)[:3000])
     assert code == 0 and reply["ok"], reply
-    ocode, oreply = oracle(tree, reqs)
+    oreply, ocode = oracle(tree, reqs)
     assert ocode == 0
     for got, want in zip(reply["results"], oreply["results"]):
         want = dict(want)
