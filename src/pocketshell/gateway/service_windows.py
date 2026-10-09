@@ -119,11 +119,16 @@ def validate_path(value: str, what: str) -> str:
     if not value:
         raise ServiceError(f"the {what} is empty")
     check_chars(value)
+
+    def check_drive(candidate: str) -> None:
+        drive, rest = ntpath.splitdrive(candidate)
+        if len(drive) != 2 or drive[1] != ":" or not drive[0].isalpha() or not rest.startswith(("\\", "/")):
+            raise ServiceError(f"the {what} must be an absolute local drive path (C:\\...)")
+
+    check_drive(value)  # as given: no relative, drive-relative, UNC or \\?\ forms
     if sys.platform == "win32":
         value = final_path(value)
-    drive, rest = ntpath.splitdrive(value)
-    if len(drive) != 2 or drive[1] != ":" or not drive[0].isalpha() or not rest.startswith(("\\", "/")):
-        raise ServiceError(f"the {what} must be an absolute local drive path (C:\\...)")
+        check_drive(value)
     value = ntpath.normpath(value)
     check_chars(value)
     if any(":" in part for part in value[2:].split("\\")):
