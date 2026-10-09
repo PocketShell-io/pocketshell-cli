@@ -186,7 +186,9 @@ class Guardian:
             "guardianPID": guardian, "sourceSHA256": SHA_G, "port": self.port,
             "heldProcessHandle": True, "ownedJob": True,
             "privateDesktop": "Service-0x0-1a2b$\\PocketShellPrivate_" + os.urandom(16).hex(),
-            "desktopACL": {"owner": USER_SID, "trustees": [USER_SID, "S-1-5-18", "S-1-5-32-544"]},
+            # native_api.verify_desktop_acl (cab601e2) schema
+            "desktopACL": {"ownerSID": USER_SID, "protectedDACL": True,
+                           "allowTrustees": sorted([USER_SID, "S-1-5-18", "S-1-5-32-544"]), "ACECount": 3},
         }
         self.vfs[self.generation + "\\READY.json"] = json.dumps(ready).encode()
         self.vfs[STATE + "\\CURRENT.json"] = json.dumps({
@@ -208,6 +210,7 @@ class Guardian:
                 if task["state"] == "Running":
                     task["state"] = "Disabled"
         self.vfs[path.replace("STOP.json", "CLOSED.json")] = json.dumps({
+            **{k: ready[k] for k in ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID")},
             "accepted": accepted, "requestedOwnedJobStop": accepted, "activeAtClose": 0,
             "cleanupErrors": [],
         }).encode()
@@ -585,7 +588,8 @@ def test_closed_requires_the_final_acceptance_fields(env):
         for task in env["fake"].tasks.values():
             task["state"] = "Disabled"
         env["vfs"][path.replace("STOP.json", "CLOSED.json")] = json.dumps(
-            {"accepted": True, "requestedOwnedJobStop": True, "activeAtClose": 1, "cleanupErrors": []}).encode()
+            {**{k: ready[k] for k in ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID")},
+             "accepted": True, "requestedOwnedJobStop": True, "activeAtClose": 1, "cleanupErrors": []}).encode()
 
     g.on_stop = partial_close
     with pytest.raises(ServiceError, match="NOT accepted"):  # F7: never deleted after a partial close
@@ -784,8 +788,9 @@ def test_f7_non_accepted_closed_keeps_the_task_and_fails(env):
     def failed_cleanup(path, data):
         original(path, data)
         closed = path.replace("STOP.json", "CLOSED.json")
-        env["vfs"][closed] = json.dumps({"accepted": False, "requestedOwnedJobStop": True, "activeAtClose": 0,
-                                         "cleanupErrors": ["Owned Job drain timeout"]}).encode()
+        prior = json.loads(env["vfs"][closed])
+        env["vfs"][closed] = json.dumps({**prior, "accepted": False, "requestedOwnedJobStop": True,
+                                         "activeAtClose": 0, "cleanupErrors": ["Owned Job drain timeout"]}).encode()
 
     g.on_stop = failed_cleanup
     env["api"].guardian = g
@@ -885,7 +890,9 @@ def _crash_closed(env, accepted, listener=False):
     if not listener:
         env["api"].listeners.clear()
     env["fake"].tasks["GatewayEndpoint"]["state"] = "Ready"
+    ready = json.loads(env["vfs"][gen + "\\READY.json"])
     env["vfs"][gen + "\\CLOSED.json"] = json.dumps({
+        **{k: ready[k] for k in ("pid", "creationFILETIME", "manifestSHA256", "privateDesktop", "guardianPID")},
         "accepted": accepted, "requestedOwnedJobStop": accepted, "activeAtClose": 0,
         "cleanupErrors": [] if accepted else ["Held daemon exited unexpectedly"]}).encode()
 
@@ -917,3 +924,100 @@ def test_f7_existing_accepted_closed_is_validated_then_removed(env):
     message = win.uninstall(api=env["api"])
     assert "already CLOSED (accepted" in message
     assert "GatewayEndpoint" not in env["fake"].tasks
+
+
+# --- root review of 214ccda: CLOSED identity binding (F7), desktopACL schema (F4), ---------
+# --- TimeTrigger boundaries (F11) --------------------------------------------------------
+
+_WRONG_IDENTITY = {
+    "pid": lambda c: {**c, "pid": c["pid"] + 1},
+    "birth": lambda c: {**c, "creationFILETIME": "1"},
+    "manifest": lambda c: {**c, "manifestSHA256": "d" * 64},
+    "desktop": lambda c: {**c, "privateDesktop": c["privateDesktop"] + "X"},
+    "guardian": lambda c: {**c, "guardianPID": c["guardianPID"] + 7},
+    "missing": lambda c: {k: v for k, v in c.items() if k not in ("pid", "creationFILETIME")},
+}
+
+
+@pytest.mark.parametrize("name", sorted(_WRONG_IDENTITY))
+def test_r7_accepted_closed_with_wrong_identity_is_refused(env, name):
+    win.apply_install(_plan(env), api=env["api"])
+    g = env["guardian"]
+    original = g.on_stop
+
+    def wrong(path, data):
+        original(path, data)
+        closed = path.replace("STOP.json", "CLOSED.json")
+        env["vfs"][closed] = json.dumps(_WRONG_IDENTITY[name](json.loads(env["vfs"][closed]))).encode()
+
+    g.on_stop = wrong
+    with pytest.raises(ServiceError, match="CLOSED.json .*does not match|left registered and DISABLED"):
+        win.uninstall(api=env["api"])
+    assert "GatewayEndpoint" in env["fake"].tasks
+
+
+@pytest.mark.parametrize("name", sorted(_WRONG_IDENTITY))
+def test_r7_existing_accepted_closed_with_wrong_identity_is_refused(env, name):
+    _crash_closed(env, accepted=True)
+    gen = env["guardian"].generation
+    closed = json.loads(env["vfs"][gen + "\\CLOSED.json"])
+    env["vfs"][gen + "\\CLOSED.json"] = json.dumps(_WRONG_IDENTITY[name](closed)).encode()
+    with pytest.raises(ServiceError, match="does not match|left registered and DISABLED"):
+        win.uninstall(api=env["api"])
+    assert "GatewayEndpoint" in env["fake"].tasks
+
+
+_BAD_DESKTOP_ACL = {
+    "wrong-owner": lambda a: {**a, "ownerSID": OTHER_SID},
+    "unprotected": lambda a: {**a, "protectedDACL": False},
+    "foreign-trustee": lambda a: {**a, "allowTrustees": sorted([USER_SID, "S-1-5-18", "S-1-1-0"])},
+    "extra-trustee": lambda a: {**a, "allowTrustees": sorted([USER_SID, "S-1-5-18", "S-1-5-32-544", "S-1-1-0"]),
+                                "ACECount": 4},
+    "missing-trustee": lambda a: {**a, "allowTrustees": sorted([USER_SID, "S-1-5-18"]), "ACECount": 2},
+    "count": lambda a: {**a, "ACECount": 4},
+    "malformed": lambda a: "protected",
+    "extra-key": lambda a: {**a, "note": "x"},
+    "unsorted-dup": lambda a: {**a, "allowTrustees": [USER_SID, USER_SID, "S-1-5-18"]},
+}
+
+
+@pytest.mark.parametrize("name", sorted(_BAD_DESKTOP_ACL))
+def test_r4_desktop_acl_must_be_the_guardian_schema(env, name):
+    win.apply_install(_plan(env), api=env["api"])
+    path = env["guardian"].generation + "\\READY.json"
+    ready = json.loads(env["vfs"][path])
+    ready["desktopACL"] = _BAD_DESKTOP_ACL[name](ready["desktopACL"])
+    env["vfs"][path] = json.dumps(ready).encode()
+    st = win.status(api=env["api"])
+    assert st.exit_code == 3, name
+    assert any("desktopACL" in w for w in st.warnings)
+
+
+_TRIGGER_DRIFT = {
+    "future-start": lambda x: x.replace("<StartBoundary>2026-01-01T00:00:00</StartBoundary>",
+                                        "<StartBoundary>2099-01-01T00:00:00</StartBoundary>"),
+    "past-end": lambda x: x.replace("<StartBoundary>2026-01-01T00:00:00</StartBoundary>",
+                                    "<StartBoundary>2026-01-01T00:00:00</StartBoundary><EndBoundary>2026-02-01T00:00:00</EndBoundary>"),
+    "duration": lambda x: x.replace("<Interval>PT5M</Interval>", "<Interval>PT5M</Interval><Duration>PT1H</Duration>"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_TRIGGER_DRIFT))
+def test_r11_time_trigger_boundaries_refused_before_run(env, name):
+    env["fake"].mutate_on_create = _TRIGGER_DRIFT[name]
+    plan = _plan(env)
+    assert _TRIGGER_DRIFT[name](plan.endpoint.xml) != plan.endpoint.xml
+    with pytest.raises(ServiceError, match="does not match"):
+        win.apply_install(plan, api=env["api"])
+    assert ("/Run", "GatewayEndpoint") not in _task_verbs(env["fake"])
+
+
+def test_r11_requested_definition_must_itself_be_canonical(env):
+    """A requested definition with a future start, an end or a duration is a
+    programming error the service refuses (canonical supported values)."""
+    from pocketshell.gateway import service_windows as w
+
+    xml = _plan(env).endpoint.xml
+    for bad in _TRIGGER_DRIFT.values():
+        problems = w.definition_drift(bad(xml), w.parse_task_xml(bad(xml)))
+        assert problems, "a non-canonical requested trigger must be reported even when it matches"
