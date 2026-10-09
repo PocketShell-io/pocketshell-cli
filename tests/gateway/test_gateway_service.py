@@ -428,6 +428,18 @@ def test_no_start_registers_the_task_disabled():
     assert root.find("t:Settings/t:Enabled", NS).text == "true"
 
 
+def test_parse_applies_schema_defaults_omitted_by_export():
+    """Task Scheduler's export drops default values (seen on windows-latest:
+    no <RunLevel> for LeastPrivilege)."""
+    text = _xml().replace("<RunLevel>LeastPrivilege</RunLevel>", "")
+    text = text.replace("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>", "")
+    fields = win.parse_task_xml(text)
+    assert fields["run_level"] == "LeastPrivilege"
+    assert fields["execution_time_limit"] == "PT72H"
+    high = win.parse_task_xml(_xml().replace("LeastPrivilege", "HighestAvailable"))
+    assert high["run_level"] == "HighestAvailable"
+
+
 def test_task_xml_escapes_values():
     config = r"C:\Users\a b\keys & <stuff> 'x'"
     text = _xml(config=config)

@@ -316,7 +316,9 @@ def parse_task_xml(text: str) -> dict:
         "description": find("t:RegistrationInfo/t:Description") or "",
         "user_id": find("t:Principals/t:Principal/t:UserId"),
         "logon_type": find("t:Principals/t:Principal/t:LogonType"),
-        "run_level": find("t:Principals/t:Principal/t:RunLevel"),
+        # Task Scheduler omits schema-default values when it exports a
+        # registered task, so absent elements mean their documented default.
+        "run_level": find("t:Principals/t:Principal/t:RunLevel") or "LeastPrivilege",
         "command": find("t:Actions/t:Exec/t:Command"),
         "arguments": find("t:Actions/t:Exec/t:Arguments") or "",
         "working_directory": find("t:Actions/t:Exec/t:WorkingDirectory"),
@@ -324,8 +326,8 @@ def parse_task_xml(text: str) -> dict:
         "action_count": len(list(actions)) if actions is not None else 0,
         "boot_trigger": root.find("t:Triggers/t:BootTrigger", ns) is not None,
         "watchdog_interval": find("t:Triggers/t:TimeTrigger/t:Repetition/t:Interval"),
-        "multiple_instances": find("t:Settings/t:MultipleInstancesPolicy"),
-        "execution_time_limit": find("t:Settings/t:ExecutionTimeLimit"),
+        "multiple_instances": find("t:Settings/t:MultipleInstancesPolicy") or "IgnoreNew",
+        "execution_time_limit": find("t:Settings/t:ExecutionTimeLimit") or "PT72H",
     }
 
 
