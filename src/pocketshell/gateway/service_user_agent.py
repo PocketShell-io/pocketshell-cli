@@ -246,15 +246,49 @@ def _spawn(api, argv, cwd, env) -> dict:
     return meta
 
 
-def _guardian_launch() -> Optional[dict]:
-    """The exact launch identity of the guardian this CLI started (custody,
-    independent of CURRENT/READY)."""
-    data = _read_private(_path("guardian.json"))
-    try:
-        meta = json.loads(data.decode("utf-8")) if data else None
-    except ValueError:
+MALFORMED = {"malformed": True}  # sentinel: a record exists but names no verifiable identity
+RECOVERY_RE = re.compile(r"^recovery-(guardian|link)-([0-9]{1,10})\.json$")
+
+
+def _read_record(name: str):
+    """None (no record), a well-formed identity dict, or MALFORMED. An
+    unusable record cannot prove absence: it is never treated as 'none'."""
+    data = _read_private(_path(name))
+    if data is None:
         return None
-    return meta if isinstance(meta, dict) else None
+    try:
+        meta = json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return MALFORMED
+    if not isinstance(meta, dict) or type(meta.get("pid")) is not int or meta["pid"] <= 0 \
+            or not isinstance(meta.get("creationFILETIME"), str) or not meta["creationFILETIME"].isdigit():
+        return MALFORMED
+    return meta
+
+
+def _guardian_launch():
+    """The exact launch identity of the guardian this CLI started (custody,
+    independent of CURRENT/READY): None, a dict, or MALFORMED."""
+    return _read_record("guardian.json")
+
+
+def _recovery_records(stem: str) -> list:
+    """[(name, record)] of validated private recovery-<stem>-<pid>.json files
+    (written when a primary custody record could not be). Each is custody."""
+    try:
+        names = sorted(os.listdir(agent_dir()))
+    except FileNotFoundError:
+        return []
+    out = []
+    for name in names:
+        match = RECOVERY_RE.match(name)
+        if match and match.group(1) == stem:
+            meta = _read_record(name)
+            if meta is not MALFORMED and meta is not None and meta.get("pid") != int(match.group(2)):
+                meta = MALFORMED
+            if meta is not None:
+                out.append((name, meta))
+    return out
 
 
 ALIVE, GONE, UNKNOWN = "alive", "gone", "unknown"
@@ -267,8 +301,10 @@ def _identity_state(meta, image, api) -> str:
     UNKNOWN and never releases custody."""
     from pocketshell.gateway import service_windows as win
 
-    if not meta or type(meta.get("pid")) is not int or not isinstance(meta.get("creationFILETIME"), str):
-        return GONE  # a malformed record names no process
+    if meta is None:
+        return GONE  # no record at all
+    if meta is MALFORMED or type(meta.get("pid")) is not int or not isinstance(meta.get("creationFILETIME"), str):
+        return UNKNOWN  # an unusable record cannot prove absence
     try:
         ident = api.process_identity(meta["pid"])
     except Exception:  # noqa: BLE001 - unverifiable
@@ -323,6 +359,9 @@ def _release_custody(name, meta, image, api, errors, what) -> None:
     keep it and fail."""
     if meta is None:
         return
+    if meta is MALFORMED:
+        errors.append(f"the {what} custody record {name} is malformed; it cannot prove absence and is retained")
+        return
     try:
         state = _identity_state(meta, image, api)
         if state == GONE:
@@ -348,30 +387,34 @@ def _launch(meta) -> Optional[dict]:
 # --- state of the link (the guardian's state lives in its protocol files) ----------------
 
 
-def _link_state() -> Optional[dict]:
-    data = _read_private(_path("link.json"))
-    if not data:
-        return None
-    try:
-        state = json.loads(data.decode("utf-8"))
-        return state if isinstance(state, dict) else None
-    except ValueError:
-        return None
+def _link_state():
+    return _read_record("link.json")
 
 
 def _link_status(b: dict, api) -> dict:
-    from pocketshell.gateway import service_windows as win
-
+    """running / stopped / unknown from the exact recorded identity
+    (tri-state process_identity): unknown, malformed or recovery custody is
+    never 'stopped'."""
     state = _link_state()
     out = {"state": "stopped", "pid": None, "creationFILETIME": None, "helperSHA256": b["helperSHA256"],
-           "note": "the gateway connection itself is not observable locally; this is the exact link process"}
-    if not state:
-        return out
-    pid, birth = state.get("pid"), state.get("creationFILETIME")
-    out["launch"] = _launch(state)
-    if type(pid) is int and isinstance(birth, str) and api.process_birth(pid) == birth \
-            and win._same_path(api.process_image(pid), b["helper"]):
-        out.update(state="running", pid=pid, creationFILETIME=birth)
+           "note": "the gateway connection itself is not observable locally; this is the exact link process",
+           "problems": []}
+    if state is MALFORMED:
+        out["state"] = "unknown"
+        out["problems"].append("the link custody record link.json is malformed")
+    elif state:
+        out["launch"] = _launch(state)
+        verdict = _identity_state(state, b["helper"], api)
+        if verdict == ALIVE:
+            out.update(state="running", pid=state["pid"], creationFILETIME=state["creationFILETIME"])
+        elif verdict == UNKNOWN:
+            out.update(state="unknown", pid=state["pid"], creationFILETIME=state["creationFILETIME"])
+            out["problems"].append(f"the link process {state['pid']} cannot be verified (it may still be running)")
+    for name, meta in _recovery_records("link"):
+        if meta is MALFORMED or _identity_state(meta, b["helper"], api) != GONE:
+            out["problems"].append(f"recovery custody {name} names a link process that is not proven gone")
+            if out["state"] == "stopped":
+                out["state"] = "unknown"
     return out
 
 
@@ -396,13 +439,29 @@ def _endpoint_status(m, host_key, api, runner, session: int) -> dict:
         "launch": None,
     }
     meta = _guardian_launch()
-    out["launch"] = _launch(meta)
-    out["guardianLaunch"] = None if not meta else {
+    out["launch"] = None if meta is MALFORMED else _launch(meta)
+    out["guardianLaunch"] = None if not meta or meta is MALFORMED else {
         "pid": meta.get("pid"), "creationFILETIME": meta.get("creationFILETIME"),
         "running": {ALIVE: True, GONE: False}.get(_identity_state(meta, m.python, api))}
-    if not ready["ok"] and ready.get("pid") and api.process_birth(ready["pid"]) is None \
-            and not api.listener_pids(m.port):
-        out["state"] = "stopped"
+    if not ready["ok"] and ready.get("pid") and not api.listener_pids(m.port):
+        try:
+            daemon_absent = api.process_identity(ready["pid"]).get("state") == "absent"
+        except Exception:  # noqa: BLE001 - unverifiable is not absent
+            daemon_absent = False
+        if daemon_absent:
+            out["state"] = "stopped"
+    custody = []
+    if meta is MALFORMED:
+        custody.append("the guardian custody record guardian.json is malformed; it cannot prove absence")
+    for name, rec in _recovery_records("guardian"):
+        if rec is MALFORMED or _identity_state(rec, m.python, api) != GONE:
+            pid = "?" if rec is MALFORMED else rec["pid"]
+            custody.append(f"recovery custody {name} names guardian process {pid}, not proven gone")
+    out["custodyProblems"] = custody
+    if custody:
+        out["problems"] = [*out["problems"], *custody]
+        if out["state"] == "stopped":
+            out["state"] = "not-ready"
     if out["state"] == "stopped" and out["guardianLaunch"] and out["guardianLaunch"]["running"] is not False:
         # never infer "no runtime" from an absent CURRENT/READY: our launched
         # guardian is alive
@@ -439,7 +498,10 @@ def _collect(b, m, host_key, api, runner) -> tuple:
     owner = _owner(api)
     endpoint = _endpoint_status(m, host_key, api, runner, owner["session"])
     outbound = _link_status(b, api)
-    if endpoint["state"] == "ready" and outbound["state"] == "running":
+    custody = endpoint.get("custodyProblems") or outbound["state"] == "unknown" or outbound.get("problems")
+    if custody:
+        state, code = "failed", EXIT_NOT_READY  # unverifiable / recovery custody: never ready, never stopped
+    elif endpoint["state"] == "ready" and outbound["state"] == "running":
         state, code = "ready", EXIT_READY
     elif endpoint["state"] == "stopped" and outbound["state"] == "stopped":
         state, code = "stopped", EXIT_STOPPED
@@ -481,6 +543,34 @@ def bind_command(manifest_path, config_dir, helper, *, api, runner, operation_id
     return _guarded(operation_id, run)
 
 
+def win_same(a, b) -> bool:
+    from pocketshell.gateway import service_windows as win
+
+    return isinstance(a, str) and win._same_path(a, b)
+
+
+def _custody_gate(b, m, api) -> None:
+    """Refuse to spawn anything while any custody is unverifiable (malformed
+    record, access/query failure) or a recovery record names a process that
+    is not proven gone. Proven-gone recovery records are released."""
+    for name, meta, image, what in (("guardian.json", _guardian_launch(), m.python, "launched guardian"),
+                                    ("link.json", _link_state(), b["helper"], "link")):
+        if meta is MALFORMED:
+            raise AgentError("custody-unverifiable", f"the {what} custody record {name} is malformed; it cannot "
+                             "prove absence; not starting (run stop, or repair the record)")
+        if meta is not None and _identity_state(meta, image, api) == UNKNOWN:
+            raise AgentError("custody-unverifiable", f"the {what} process {meta['pid']} cannot be verified (it "
+                             "may still be running); not starting a second one; retry or stop")
+    for stem, image in (("guardian", m.python), ("link", b["helper"])):
+        for name, meta in _recovery_records(stem):
+            if meta is not MALFORMED and _identity_state(meta, image, api) == GONE:
+                _delete(_path(name))
+                continue
+            pid = "?" if meta is MALFORMED else meta["pid"]
+            raise AgentError("custody-recovery", f"recovery custody {name} names {stem} process {pid}, which is "
+                             "not proven gone; run stop first")
+
+
 def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=None) -> tuple:
     from pocketshell.gateway import service_windows_endpoint as wep
 
@@ -488,18 +578,13 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
         b, m, host_key = load_binding(api=api, runner=runner, revalidate=True)
         owner = _owner(api)
         deadline = time.monotonic() + timeout
+        _custody_gate(b, m, api)  # before ANY spawn
         endpoint = _endpoint_status(m, host_key, api, runner, owner["session"])
         if endpoint["state"] != "ready":
             previous = endpoint.get("generation")
             if api.listener_pids(m.port):
                 raise AgentError("port-busy", f"127.0.0.1:{m.port} is served by another process; not starting")
-            held = _guardian_launch()
-            held_state = _identity_state(held, m.python, api) if held else GONE
-            if held_state == UNKNOWN:
-                raise AgentError("custody-unverifiable",
-                                 f"the launched guardian {held.get('pid')} cannot be verified (it may still be "
-                                 "running); not starting a second one; retry or stop")
-            if held_state != ALIVE:
+            if _identity_state(_guardian_launch(), m.python, api) != ALIVE:
                 launch = _spawn(api, [m.python, *ep.BOOTSTRAP_FLAGS, m.guardian, "--manifest", m.path],
                                 m.root, dict(m.environment))
                 _record_launch("guardian.json", launch, m.python, api)  # custody BEFORE any wait
@@ -565,6 +650,11 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
         # start that timed out before READY must not orphan it)
         _release_custody("guardian.json", _guardian_launch(), m.python, api, errors, "launched guardian")
         _release_custody("link.json", _link_state(), b["helper"], api, errors, "link")
+        for stem, image in (("guardian", m.python), ("link", b["helper"])):
+            for name, meta in _recovery_records(stem):
+                if meta is not MALFORMED and not win_same(meta.get("image"), image):
+                    meta = MALFORMED  # a recovery identity must name the expected image
+                _release_custody(name, meta, image, api, errors, f"{stem} (recovery)")
         served = api.listener_pids(m.port)
         if served:
             errors.append(f"127.0.0.1:{m.port} is still served by {sanitize(str(served), 200)}")

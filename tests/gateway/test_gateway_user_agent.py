@@ -531,3 +531,94 @@ def test_u2_record_write_fails_but_termination_proven(agent, monkeypatch):
     result, data = run("start", "--json", "--timeout", "0.2")
     assert result.exit_code == 1 and data["error"]["code"] == "launch-unrecorded"
     assert "was ended" in data["error"]["message"] and data["error"].get("recovery") is None
+
+
+# --- root review of 83379b7: residual custody ----------------------------------------
+
+
+def test_a1_unverifiable_link_is_not_stopped_and_blocks_a_second_link(agent):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    bind()
+    run("start", "--json")
+    link = json.loads(agent_mod._read_private(agent_mod._path("link.json")))
+    agent["api"].denied_birth = frozenset({9000})
+    result, data = run("status", "--json")
+    assert data["outbound"]["state"] == "unknown" and data["state"] != "stopped"
+    assert result.exit_code == 3 and data["state"] == "failed"
+    n = len(agent["api"].spawns)
+    result, data = run("start", "--json")
+    assert result.exit_code == 1 and data["error"]["code"] == "custody-unverifiable"
+    assert len(agent["api"].spawns) == n, "no duplicate link"
+    assert json.loads(agent_mod._read_private(agent_mod._path("link.json"))) == link
+
+
+def _fail_guardian_record(agent, monkeypatch):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    real = agent_mod._write_private
+
+    def failing(path, data):
+        if path.endswith("guardian.json"):
+            raise OSError("disk full")
+        return real(path, data)
+
+    monkeypatch.setattr(agent_mod, "_write_private", failing)
+    agent["api"].terminate_fails = True
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert data["error"]["code"] == "launch-unrecorded"
+    monkeypatch.setattr(agent_mod, "_write_private", real)
+    agent["api"].terminate_fails = False
+    return data["error"]["recovery"]
+
+
+def test_a2_recovery_record_is_custody_for_status_start_and_stop(agent, monkeypatch):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    bind()
+    agent["g"].ready_on_run = False
+    rec = _fail_guardian_record(agent, monkeypatch)
+    result, data = run("status", "--json")
+    assert data["state"] == "failed" and result.exit_code == 3
+    assert any(str(rec["pid"]) in p for p in data["endpoint"]["problems"])
+    n = len(agent["api"].spawns)
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert result.exit_code == 1 and data["error"]["code"] == "custody-recovery"
+    assert len(agent["api"].spawns) == n
+    result, data = run("stop", "--json")  # no manual PID action
+    assert result.exit_code == 0, data
+    assert (rec["pid"], rec["creationFILETIME"], PYTHON) in agent["api"].terminated
+    assert not os.path.exists(agent_mod._path(f"recovery-guardian-{rec['pid']}.json"))
+    result, data = run("status", "--json")
+    assert result.exit_code == 4 and data["state"] == "stopped"
+
+
+def test_a2_live_recovery_record_survives_a_failed_stop(agent, monkeypatch):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    bind()
+    agent["g"].ready_on_run = False
+    rec = _fail_guardian_record(agent, monkeypatch)
+    agent["api"].terminate_fails = True
+    result, data = run("stop", "--json")
+    assert result.exit_code == 1 and str(rec["pid"]) in data["error"]["message"]
+    assert os.path.exists(agent_mod._path(f"recovery-guardian-{rec['pid']}.json"))
+
+
+@pytest.mark.parametrize("record", ["guardian.json", "link.json"])
+@pytest.mark.parametrize("payload", [b"{", b"[]", b'{"pid": "x"}'])
+def test_a3_malformed_custody_record_is_failed_and_retained(agent, record, payload):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    bind()
+    agent_mod._write_private(agent_mod._path(record), payload)
+    result, data = run("status", "--json")
+    assert data["state"] == "failed" and result.exit_code == 3
+    result, data = run("stop", "--json")
+    assert result.exit_code == 1 and data["state"] == "failed"
+    assert "malformed" in data["error"]["message"]
+    assert agent_mod._read_private(agent_mod._path(record)) == payload
+    n = len(agent["api"].spawns)
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert result.exit_code == 1 and data["error"]["code"] == "custody-unverifiable"
+    assert len(agent["api"].spawns) == n

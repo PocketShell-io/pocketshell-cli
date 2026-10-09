@@ -167,19 +167,35 @@ def test_elevated_caller_children_are_refused(layout, tmp_path):
         api.spawn_hidden([os.environ["POCKETSHELL_TEST_FAKE_LINK"], "version", "--json"], str(tmp_path), None)
 
 
+def _kernel_image_of_self():
+    """The OS's own record of this process's image (GetModuleFileNameW(NULL)),
+    independent of sys.executable (a venv launcher re-executes the base)."""
+    import ctypes as c
+
+    buf = c.create_unicode_buffer(32768)
+    n = c.windll.kernel32.GetModuleFileNameW(None, buf, 32768)
+    assert n > 0
+    return buf.value
+
+
 def test_process_identity_is_tri_state():
-    """absent only when proven; our own process is present with its image."""
+    """absent only when proven; images are grounded in what the OS reports."""
     import subprocess
-    import sys
 
     api = win.WindowsApi()
     me = api.process_identity(os.getpid())
-    # a venv's Scripts\python.exe re-launches the base interpreter
-    assert me["state"] == "present" and any(win._same_path(me["image"], x) for x in
-                                            (sys.executable, getattr(sys, "_base_executable", "")))
+    assert me["state"] == "present" and win._same_path(me["image"], _kernel_image_of_self())
     assert me["birth"] == api.process_birth(os.getpid())
-    child = subprocess.Popen([sys.executable, "-c", "pass"])
-    child.wait()  # Popen still holds the handle: an exited, unreaped process object
+    # a process spawned from a KNOWN absolute image
+    ping = os.path.join(os.environ["SystemRoot"], "System32", "PING.EXE")
+    child = subprocess.Popen([ping, "-n", "30", "127.0.0.1"], stdout=subprocess.DEVNULL,
+                             creationflags=0x08000000)
+    try:
+        ident = api.process_identity(child.pid)
+        assert ident["state"] == "present" and win._same_path(ident["image"], ping), ident
+    finally:
+        child.kill()
+        child.wait()  # Popen still holds the handle: an exited, unreaped process object
     assert api.process_identity(child.pid)["state"] == "absent"
     # the System process (pid 4) exists but its image is not ours to read
     assert api.process_identity(4)["state"] in ("present", "unknown")
