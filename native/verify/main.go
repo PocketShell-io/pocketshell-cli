@@ -114,10 +114,30 @@ func hold(cfg config, keep *held, in *os.File, out *os.File) int {
 				pid := m.PID
 				ev("spawned", &pid, &matches, err)
 			case "release":
-				keep.closeAll()
-				ev("released", nil, nil, nil)
-				return 0
+				// the controller must now close stdin: ANY further data refuses
+				return awaitEOF(cfg, keep, lines, timer, ev)
 			}
 		}
+	}
+}
+
+// awaitEOF: after `release` the only acceptable input is end-of-file. Then
+// the handles are closed and `released` is reported (exit 0). Further data
+// is refused (exit 2); the hold timer still applies (exit 5).
+func awaitEOF(cfg config, keep *held, lines chan []byte, timer *time.Timer,
+	ev func(string, *int, *bool, error)) int {
+	select {
+	case <-timer.C:
+		keep.closeAll()
+		ev("timeout", nil, nil, errors.New("no end-of-input after release; handles released"))
+		return 5
+	case _, open := <-lines:
+		keep.closeAll()
+		if open {
+			ev("refused", nil, nil, errors.New("data after release"))
+			return 2
+		}
+		ev("released", nil, nil, nil)
+		return 0
 	}
 }

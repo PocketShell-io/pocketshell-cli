@@ -110,13 +110,6 @@ type aces struct {
 	nullDACL  bool
 }
 
-type aceEntry struct {
-	typ   byte
-	flags byte
-	mask  uint32
-	sid   string
-}
-
 func security(h windows.Handle) (aces, error) {
 	var out aces
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT,
@@ -140,12 +133,22 @@ func security(h windows.Handle) (aces, error) {
 		return out, nil
 	}
 	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		// GetAce bounds the ACE inside the ACL; read ONLY its header first,
+		// then hand exactly AceSize bytes to the validating decoder.
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, i, &ace); err != nil {
 			return out, err
 		}
-		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		out.entries = append(out.entries, aceEntry{ace.Header.AceType, ace.Header.AceFlags, uint32(ace.Mask), sid.String()})
+		header := (*[4]byte)(unsafe.Pointer(ace))
+		size := int(header[2]) | int(header[3])<<8
+		if size < 4 {
+			return out, errors.New("truncated ACE")
+		}
+		entry, err := decodeACE(unsafe.Slice((*byte)(unsafe.Pointer(ace)), size))
+		if err != nil {
+			return out, err
+		}
+		out.entries = append(out.entries, entry)
 	}
 	return out, nil
 }
@@ -154,7 +157,7 @@ func security(h windows.Handle) (aces, error) {
 func checkPrivate(h windows.Handle, path, owner string) error {
 	s, err := security(h)
 	if err != nil {
-		return fmt.Errorf("cannot read the security of %s", path)
+		return fmt.Errorf("refusing the security of %s: %v", path, err)
 	}
 	if s.owner != owner || s.nullDACL {
 		return fmt.Errorf("private storage must be owned by you with a non-null DACL: %s", path)
@@ -179,7 +182,7 @@ func checkPrivate(h windows.Handle, path, owner string) error {
 func checkAncestor(h windows.Handle, path, owner string) error {
 	s, err := security(h)
 	if err != nil {
-		return fmt.Errorf("cannot read the security of %s", path)
+		return fmt.Errorf("refusing the security of %s: %v", path, err)
 	}
 	trusted := map[string]bool{owner: true, "S-1-5-18": true, "S-1-5-32-544": true, trustedInstaller: true}
 	if !trusted[s.owner] {
@@ -204,9 +207,10 @@ func checkAncestor(h windows.Handle, path, owner string) error {
 
 // chain opens every directory from the drive root down to dir (inclusive),
 // without delete sharing (pinned against rename/delete), refuses reparse
-// points, applies the ancestor authority to every directory strictly above
-// `object`, and the private shape to dir itself when privateLeaf.
-func chain(dir, object, owner string, privateLeaf bool, keep *held) error {
+// points, applies the owner-only private shape to EVERY directory at or
+// below privateRoot (the declared root and all intermediates), and the
+// guardian ancestor authority to every other directory except `object`.
+func chain(dir, object, owner, privateRoot string, keep *held) error {
 	clean := strings.ReplaceAll(dir, "/", `\`)
 	parts := strings.Split(clean[3:], `\`)
 	current := clean[:3]
@@ -227,13 +231,12 @@ func chain(dir, object, owner string, privateLeaf bool, keep *held) error {
 		if _, err := checkShape(h, p, true); err != nil {
 			return err
 		}
-		if !same(p, object) {
-			if err := checkAncestor(h, p, owner); err != nil {
+		if privateRoot != "" && under(p, privateRoot) {
+			if err := checkPrivate(h, p, owner); err != nil {
 				return err
 			}
-		}
-		if privateLeaf && same(p, dir) {
-			if err := checkPrivate(h, p, owner); err != nil {
+		} else if !same(p, object) {
+			if err := checkAncestor(h, p, owner); err != nil {
 				return err
 			}
 		}
@@ -260,9 +263,10 @@ func parent(p string) string {
 	return p[:i]
 }
 
-func verifyFile(path, owner string, private, document bool, keep *held) (result, *fileID, error) {
+func verifyFile(path, owner, privateRoot string, document bool, keep *held) (result, *fileID, error) {
 	var r result
-	if err := chain(parent(path), path, owner, private, keep); err != nil {
+	private := privateRoot != ""
+	if err := chain(parent(path), path, owner, privateRoot, keep); err != nil {
 		return r, nil, err
 	}
 	h, err := open(path, accessFile, windows.FILE_SHARE_READ, false)
@@ -333,9 +337,9 @@ func entryIdentity(path string) (fileID, error) {
 	return identity(d), nil
 }
 
-func verifyDirectory(path, owner string, private bool, keep *held) (result, error) {
+func verifyDirectory(path, owner, privateRoot string, keep *held) (result, error) {
 	var r result
-	if err := chain(path, path, owner, private, keep); err != nil {
+	if err := chain(path, path, owner, privateRoot, keep); err != nil {
 		return r, err
 	}
 	h := keep.handles[len(keep.handles)-1]
@@ -350,9 +354,10 @@ func verifyDirectory(path, owner string, private bool, keep *held) (result, erro
 	return r, nil
 }
 
-func verifyInventory(path, owner string, private bool, keep *held) (result, error) {
+func verifyInventory(path, owner, privateRoot string, keep *held) (result, error) {
 	var r result
-	if err := chain(path, path, owner, private, keep); err != nil {
+	private := privateRoot != ""
+	if err := chain(path, path, owner, privateRoot, keep); err != nil {
 		return r, err
 	}
 	files := []string{}
@@ -423,18 +428,22 @@ func verifyOne(q request, roots []root, owner string, keep *held) (result, *file
 	}
 	var r result
 	var id *fileID
+	privateRoot := ""
+	if rt.Private {
+		privateRoot = rt.Path
+	}
 	switch q.Kind {
 	case "document":
 		if !strings.HasSuffix(strings.ToLower(q.Path), ".json") {
 			return result{Root: &rt.Path}, nil, errors.New("only .json documents return bytes; use binary")
 		}
-		r, id, err = verifyFile(q.Path, owner, rt.Private, true, keep)
+		r, id, err = verifyFile(q.Path, owner, privateRoot, true, keep)
 	case "binary":
-		r, id, err = verifyFile(q.Path, owner, rt.Private, false, keep)
+		r, id, err = verifyFile(q.Path, owner, privateRoot, false, keep)
 	case "directory":
-		r, err = verifyDirectory(q.Path, owner, rt.Private, keep)
+		r, err = verifyDirectory(q.Path, owner, privateRoot, keep)
 	case "inventory":
-		r, err = verifyInventory(q.Path, owner, rt.Private, keep)
+		r, err = verifyInventory(q.Path, owner, privateRoot, keep)
 	}
 	r.Root = &rt.Path
 	return r, id, err

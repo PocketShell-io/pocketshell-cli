@@ -83,7 +83,7 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
             code, out, meta = run_outside_job(argv, env=env, cwd=str(tmp_path))
             assert meta is not None and "code" in meta, f"outside-job harness failed: {meta}"
             # the harness server may itself sit in seclogon's job; the CLI
-            # measures and decides for its own children (caller-job if not free)
+            # measures and decides for its own children (target-job if not free)
             print("outside-job server parent:", meta.get("parent"), "serverInJob:", meta.get("serverInJob"))
             print("outside-job token selection:", meta.get("token"))
         else:
@@ -105,7 +105,7 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
 
     accepted_job = False
     code, data = agent("start", "--timeout", "60")
-    if code == 1 and data and data["error"]["code"] == "caller-job":
+    if code == 1 and data and data["error"]["code"] == "target-job":
         # measured, honest refusal inside the runner's step job (KILL_ON_JOB_CLOSE,
         # breakaway forbidden): the CLI must not claim independence ...
         assert "KILL_ON_JOB_CLOSE" in data["error"]["message"]
@@ -115,7 +115,7 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
         code, data = agent("status")
         assert code == 4, data
         code, data = agent("start", "--timeout", "60")
-        if code == 1 and data and data["error"]["code"] == "caller-job":
+        if code == 1 and data and data["error"]["code"] == "target-job":
             # no job-free launch path exists on this runner (measured twice).
             # Exercise READY/STOP with the TEST-ONLY seam that accepts the job
             # while reporting it (product default refuses).

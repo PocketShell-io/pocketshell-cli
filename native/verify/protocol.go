@@ -287,6 +287,10 @@ func parseMessage(line []byte, operationID string) (message, error) {
 	if err := dec.Decode(&m); err != nil {
 		return m, errors.New("malformed hold message")
 	}
+	// exactly ONE JSON value per line: trailing values or data are refused
+	if rest := strings.TrimSpace(string(line[dec.InputOffset():])); rest != "" {
+		return m, errors.New("trailing data after the hold message")
+	}
 	if m.OperationID != operationID {
 		return m, errors.New("operationId mismatch")
 	}
@@ -315,4 +319,56 @@ func sanitize(s string) string {
 		s = s[:600]
 	}
 	return s
+}
+
+// --- N1: ACE decoding with header/type/size validated BEFORE the SID ------------------
+
+type aceEntry struct {
+	typ   byte
+	flags byte
+	mask  uint32
+	sid   string
+}
+
+// decodeACE validates one raw ACE (exactly AceSize bytes): only
+// ACCESS_ALLOWED (0) and ACCESS_DENIED (1) are supported — object, callback,
+// audit and every other type is refused before any SID is read. The SID must
+// be revision 1, at most 15 sub-authorities, and lie inside the ACE (padding
+// of at most 3 bytes).
+func decodeACE(b []byte) (aceEntry, error) {
+	if len(b) < 4 {
+		return aceEntry{}, errors.New("truncated ACE header")
+	}
+	typ, flags, size := b[0], b[1], int(b[2])|int(b[3])<<8
+	if size != len(b) {
+		return aceEntry{}, errors.New("ACE size does not match its bytes")
+	}
+	if typ != 0 && typ != 1 {
+		return aceEntry{}, fmt.Errorf("unsupported ACE type %d", typ)
+	}
+	if size < 8+8 {
+		return aceEntry{}, errors.New("ACE too small for a SID")
+	}
+	mask := uint32(b[4]) | uint32(b[5])<<8 | uint32(b[6])<<16 | uint32(b[7])<<24
+	sid := b[8:]
+	if sid[0] != 1 || sid[1] > 15 {
+		return aceEntry{}, errors.New("malformed SID in ACE")
+	}
+	sidLen := 8 + 4*int(sid[1])
+	if sidLen > len(sid) || len(sid)-sidLen > 3 {
+		return aceEntry{}, errors.New("SID does not fit its ACE")
+	}
+	var authority uint64
+	for _, x := range sid[2:8] {
+		authority = authority<<8 | uint64(x)
+	}
+	text := fmt.Sprintf("S-1-%d", authority)
+	if authority >= 1<<32 {
+		text = fmt.Sprintf("S-1-0x%012X", authority)
+	}
+	for i := 0; i < int(sid[1]); i++ {
+		o := 8 + 4*i
+		text += fmt.Sprintf("-%d", uint32(sid[o])|uint32(sid[o+1])<<8|uint32(sid[o+2])<<16|uint32(sid[o+3])<<24)
+	}
+	return aceEntry{typ: typ, flags: flags, mask: mask, sid: text}, nil
 }

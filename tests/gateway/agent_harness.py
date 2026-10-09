@@ -15,7 +15,16 @@ seams = json.load(open(sys.argv[1], encoding="utf-8"))
 win.ALLOWED_HELPER_SHA256 = frozenset(seams["helper"])
 ep.ALLOWED_ENDPOINT_MANIFEST_SHA256 = frozenset(seams["manifest"])
 ep.ALLOWED_GUARDIAN_SOURCES = frozenset(tuple(t) for t in seams["sources"])
-win.ACCEPT_JOB_MEMBERSHIP_FOR_TESTS = bool(seams.get("acceptJob"))
+if seams.get("acceptJob"):
+    # TEST-ONLY (this harness process): the windows-latest runner cannot create a
+    # job-free child (measured), so READY/STOP protocol coverage replaces the
+    # production job verdict with one that ACCEPTS and truthfully REPORTS the
+    # membership. Production has no such flag.
+    def _report_only(*, caller_in_job, broke_away, child_in_job, nearest_kill):
+        return {"inJob": bool(child_in_job), "brokeAway": bool(broke_away) and not child_in_job,
+                "callerInJob": bool(caller_in_job), "callerJobKillOnClose": bool(nearest_kill)}
+
+    win.job_verdict = _report_only
 
 from pocketshell.cli import cli  # noqa: E402
 

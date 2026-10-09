@@ -539,15 +539,36 @@ def resolve_helper(explicit: Optional[str], runner: Optional[Runner] = None) -> 
 # --- native Windows queries (ctypes; imported lazily) ------------------------
 
 
-# Test-only seam (module constant; no CLI flag or environment reads it): the
-# windows-latest runner cannot create a job-free child at all (measured), so the
-# native CI round trip sets this to exercise READY/STOP while REPORTING the job
-# membership. Product default: refuse any job.
-ACCEPT_JOB_MEMBERSHIP_FOR_TESTS = False
+class TargetJobError(ServiceError):
+    """The launched TARGET (guardian/link) is not measured outside every job."""
 
 
-class CallerJobError(ServiceError):
-    """A spawned child stayed in the caller's KILL_ON_JOB_CLOSE job."""
+def job_verdict(*, caller_in_job: Optional[bool], broke_away: bool, child_in_job: Optional[bool],
+                nearest_kill: Optional[bool]) -> dict:
+    """Job-lifetime policy (agreement v3.3, root-accepted Fleet design 77d32a3a):
+    the CALLER (Desktop/Explorer, the CLI) may be in a job — that is measured
+    diagnostic context only. The persistent TARGET must have been created with
+    CREATE_BREAKAWAY_FROM_JOB and be measured (IsProcessInJob(child, NULL))
+    outside ANY job before it is resumed; independence is never inferred from
+    the parent, a requested flag, or the nearest job's limits. An intentional
+    workload job the guardian creates for its own daemon is separate."""
+    kill = "unknown" if nearest_kill is None else "set" if nearest_kill else "not set"
+    if caller_in_job is None:
+        raise TargetJobError("the caller's job membership cannot be measured; refusing")
+    if child_in_job is None:
+        raise TargetJobError("the target's job membership cannot be measured; refusing")
+    if child_in_job:
+        if not broke_away:
+            raise TargetJobError(
+                f"breakaway was refused by the caller's job (nearest job KILL_ON_JOB_CLOSE {kill}): the target "
+                "would share the caller's lifetime; independence cannot be proven; the suspended target was "
+                "terminated before resume")
+        raise TargetJobError(
+            f"breakaway was requested but the target is still inside a job (an ancestor job forbids breakaway; "
+            f"nearest job KILL_ON_JOB_CLOSE {kill}); independence cannot be proven; the suspended target was "
+            "terminated before resume")
+    return {"inJob": False, "brokeAway": bool(broke_away), "callerInJob": bool(caller_in_job),
+            "callerJobKillOnClose": bool(caller_in_job) and nearest_kill is not False}
 
 
 class WindowsApi:
@@ -788,7 +809,7 @@ class WindowsApi:
         breakaway the child is created inside it. Independence is never
         claimed for a child in ANY job (the nearest job cannot prove the KILL
         semantics of its ancestors): the exact suspended child is terminated
-        through its held handle and CallerJobError is raised. A failed
+        through its held handle and TargetJobError is raised. A failed
         ResumeThread ((DWORD)-1) likewise ends the held child."""
         import ctypes as c
         import subprocess
@@ -892,26 +913,19 @@ class WindowsApi:
                     f"(user {'ok' if child_sid == mine[0] else 'differs'}, elevated {bool(elevation.value)}, "
                     f"session {session.value} vs {mine[1]})")
             in_job = w.BOOL()
-            if not k.IsProcessInJob(pi.hProcess, None, c.byref(in_job)):
-                raise ServiceError("cannot query the child's job membership")
-            kill_on_close = False
-            if in_job.value:
-                # the child is in the CALLER's job (it could not break away):
-                # inspect that job through our own membership (hJob = NULL)
+            child_in_job = bool(in_job.value) if k.IsProcessInJob(pi.hProcess, None, c.byref(in_job)) else None
+            caller = w.BOOL()
+            k.GetCurrentProcess.restype = w.HANDLE
+            caller_in_job = bool(caller.value) if k.IsProcessInJob(k.GetCurrentProcess(), None,
+                                                                   c.byref(caller)) else None
+            nearest_kill = None
+            if caller_in_job:
+                # diagnostic only: our NEAREST job's limits (hJob = NULL) say nothing about ancestors
                 info = (c.c_byte * 144)()  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION (x64)
-                if not k.QueryInformationJobObject(None, 9, info, c.sizeof(info), None):
-                    kill_on_close = None  # unknown limits
-                else:
-                    flags = c.c_uint32.from_buffer(info, 16).value  # BasicLimitInformation.LimitFlags
-                    kill_on_close = bool(flags & 0x2000)
-            if in_job.value and not ACCEPT_JOB_MEMBERSHIP_FOR_TESTS:
-                # the nearest (NULL = our) job cannot prove the KILL semantics of
-                # every ancestor job: ANY membership is refused, never reported
-                # as independence
-                raise CallerJobError(
-                    "the child is inside a job object (it could not break away from the caller's job; "
-                    f"KILL_ON_JOB_CLOSE {'unknown' if kill_on_close is None else 'set' if kill_on_close else 'not set on the nearest job'}); "
-                    "independence cannot be proven; the suspended child was terminated before resume")
+                if k.QueryInformationJobObject(None, 9, info, c.sizeof(info), None):
+                    nearest_kill = bool(c.c_uint32.from_buffer(info, 16).value & 0x2000)
+            verdict = job_verdict(caller_in_job=caller_in_job, broke_away=broke_away, child_in_job=child_in_job,
+                                  nearest_kill=nearest_kill)
             times = [w.FILETIME() for _ in range(4)]
             if not k.GetProcessTimes(pi.hProcess, *[c.byref(t) for t in times]):
                 raise ServiceError("cannot read the child's creation time")
@@ -919,8 +933,7 @@ class WindowsApi:
             if k.ResumeThread(pi.hThread) == 0xFFFFFFFF:
                 raise ServiceError("cannot resume the child")
             resumed = True
-            return {"pid": int(pi.dwProcessId), "creationFILETIME": birth, "inJob": bool(in_job.value),
-                    "callerJobKillOnClose": kill_on_close, "brokeAway": broke_away and not in_job.value,
+            return {"pid": int(pi.dwProcessId), "creationFILETIME": birth, **verdict,
                     "elevated": False, "session": int(session.value)}
         finally:
             if not resumed:

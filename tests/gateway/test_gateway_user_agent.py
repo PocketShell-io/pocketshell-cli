@@ -63,14 +63,14 @@ class AgentApi(EndpointApi):
     def spawn_hidden(self, argv, cwd, env, *, image_sha256=None):
         self.spawns.append({"argv": list(argv), "cwd": cwd, "env": dict(env) if env is not None else None,
                             "imageSHA256": image_sha256})
-        if self.caller_job is not None:
-            raise win.CallerJobError("the child is inside a job object (it could not break away from the "
-                                     "caller's job; KILL_ON_JOB_CLOSE "
-                                     f"{'set' if self.caller_job['killOnJobClose'] else 'not set on the nearest job'}); "
-                                     "independence cannot be proven; the suspended child was terminated before resume")
-        job = {"inJob": self.caller_job is not None,
-               "callerJobKillOnClose": bool(self.caller_job and self.caller_job["killOnJobClose"]),
-               "brokeAway": self.caller_job is None, "elevated": False, "session": self.session}
+        # job-lifetime design (root-accepted): the CALLER may be in a job; the
+        # TARGET must break away and be measured outside any job
+        caller = self.caller_job
+        breakaway_ok = caller is None or caller.get("breakawayOK", False)
+        verdict = win.job_verdict(caller_in_job=caller is not None, broke_away=breakaway_ok,
+                                  child_in_job=not breakaway_ok,
+                                  nearest_kill=bool(caller and caller["killOnJobClose"]))
+        job = {**verdict, "elevated": False, "session": self.session}
         if argv[0] == PYTHON:
             self.guardian_holder["g"].run("agent")
             ready = json.loads(self.vfs[self.guardian_holder["g"].generation + "\\READY.json"]) \
@@ -377,19 +377,30 @@ def test_r1_link_gone_or_pid_reused_counts_as_stopped(agent):
 
 def test_r2_children_in_a_kill_on_close_caller_job_are_refused(agent):
     bind()
-    agent["api"].caller_job = {"killOnJobClose": True}
+    agent["api"].caller_job = {"killOnJobClose": True, "breakawayOK": False}
     result, data = run("start", "--json")
-    assert result.exit_code == 1 and data["error"]["code"] == "caller-job"
+    assert result.exit_code == 1 and data["error"]["code"] == "target-job"
     assert "KILL_ON_JOB_CLOSE" in data["error"]["message"]
 
 
 def test_r2_any_job_membership_is_refused_never_claimed(agent):
     """root 626 review: the nearest job cannot prove ancestor KILL semantics."""
     bind()
-    agent["api"].caller_job = {"killOnJobClose": False}
+    agent["api"].caller_job = {"killOnJobClose": False, "breakawayOK": False}
     result, data = run("start", "--json")
-    assert result.exit_code == 1 and data["error"]["code"] == "caller-job"
+    assert result.exit_code == 1 and data["error"]["code"] == "target-job"
     assert "independence cannot be proven" in data["error"]["message"]
+
+
+def test_job_lifetime_caller_in_a_job_is_allowed_when_the_target_breaks_away(agent):
+    """Explorer itself is in a job (measured on the user's machine): the caller's
+    membership is diagnostic; the TARGET is measured outside any job."""
+    bind()
+    agent["api"].caller_job = {"killOnJobClose": False, "breakawayOK": True}
+    result, data = run("start", "--json")
+    assert result.exit_code == 0 and data["state"] == "ready", data
+    for launch in (data["endpoint"]["launch"], data["outbound"]["launch"]):
+        assert launch["inJob"] is False and launch["brokeAway"] is True and launch["callerInJob"] is True
 
 
 def test_r2_broke_away_children(agent):
@@ -701,3 +712,57 @@ def test_r1e00_ready_requires_the_current_measured_guardian(agent):
     os.unlink(agent_mod._path("guardian.json"))  # no current launch measurement at all
     result, data = run("status", "--json")
     assert data["state"] != "ready" and result.exit_code == 3, data
+
+
+
+# --- job-lifetime verdict (pure; the native spawn_hidden applies it before resume) -----
+
+
+def test_job_verdict_target_outside_any_job():
+    v = win.job_verdict(caller_in_job=True, broke_away=True, child_in_job=False, nearest_kill=False)
+    assert v == {"inJob": False, "brokeAway": True, "callerInJob": True, "callerJobKillOnClose": False}
+    v = win.job_verdict(caller_in_job=False, broke_away=True, child_in_job=False, nearest_kill=None)
+    assert v["callerInJob"] is False and v["callerJobKillOnClose"] is False
+
+
+@pytest.mark.parametrize("kw,needle", [
+    (dict(caller_in_job=True, broke_away=False, child_in_job=True, nearest_kill=True), "breakaway was refused"),
+    (dict(caller_in_job=True, broke_away=True, child_in_job=True, nearest_kill=False), "ancestor job"),
+    (dict(caller_in_job=True, broke_away=True, child_in_job=None, nearest_kill=None), "cannot be measured"),
+    (dict(caller_in_job=None, broke_away=True, child_in_job=False, nearest_kill=None), "caller"),
+])
+def test_job_verdict_refusals(kw, needle):
+    with pytest.raises(win.TargetJobError, match=needle):
+        win.job_verdict(**kw)
+
+
+# --- v3.3: explicit absenceVerified (Fleet ManagedAgentReplyV31 requires it) ------------
+
+
+def test_v33_absence_verified_is_explicit_in_every_measured_document(agent):
+    bind()
+    result, data = run("status", "--json")
+    assert result.exit_code == 4
+    assert data["endpoint"]["absenceVerified"] is True and data["outbound"]["absenceVerified"] is True
+    result, data = run("start", "--json")
+    assert result.exit_code == 0
+    assert data["endpoint"]["absenceVerified"] is False and data["outbound"]["absenceVerified"] is False
+    agent["api"].terminate_fails = True
+    result, data = run("stop", "--json")
+    assert result.exit_code == 1
+    assert data["endpoint"]["absenceVerified"] is False and data["outbound"]["absenceVerified"] is False
+    agent["api"].terminate_fails = False
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0
+    assert data["endpoint"]["absenceVerified"] is True and data["outbound"]["absenceVerified"] is True
+
+
+def test_v33_stop_is_never_clean_while_collect_is_not_stopped(agent, monkeypatch):
+    """A stop with no recorded errors but an unverifiable listener is NOT stopped."""
+    bind()
+    run("start", "--json")
+    run("stop", "--json")  # proper stop first
+    monkeypatch.setattr(agent["api"], "listener_pids", lambda port: (_ for _ in ()).throw(ServiceError("boom")))
+    result, data = run("stop", "--json")
+    assert result.exit_code == 1 and data["state"] == "failed", data
+    assert data["endpoint"]["absenceVerified"] is False

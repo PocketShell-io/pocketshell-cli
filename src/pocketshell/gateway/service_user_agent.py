@@ -228,7 +228,7 @@ def load_binding(*, api, runner, revalidate: bool):
 
 # --- spawning ------------------------------------------------------------------------------
 
-LAUNCH_KEYS = ("inJob", "callerJobKillOnClose", "brokeAway", "elevated", "session")
+LAUNCH_KEYS = ("inJob", "callerJobKillOnClose", "brokeAway", "callerInJob", "elevated", "session")
 
 
 def _spawn(api, argv, cwd, env, image_sha256=None) -> dict:
@@ -239,8 +239,8 @@ def _spawn(api, argv, cwd, env, image_sha256=None) -> dict:
 
     try:
         meta = api.spawn_hidden(argv, cwd, env, image_sha256=image_sha256)
-    except win.CallerJobError as exc:
-        raise AgentError("caller-job", str(exc)) from None
+    except win.TargetJobError as exc:
+        raise AgentError("target-job", str(exc)) from None
     if meta.get("elevated") is not False:
         raise AgentError("error", "the spawned child token is elevated or unknown; refusing")
     return meta
@@ -527,6 +527,10 @@ def _collect(b, m, host_key, api, runner) -> tuple:
         state, code = "starting" if endpoint["state"] != "ready" else "failed", EXIT_NOT_READY
         if endpoint["state"] == "ready":
             state = "failed"  # endpoint up, link down
+    # v3.3: explicit, never implied. True on BOTH components only for a
+    # measured "stopped": every primary/recovery identity proven gone, the
+    # listener proven absent, a successful protected custody enumeration.
+    endpoint["absenceVerified"] = outbound["absenceVerified"] = state == "stopped"
     return owner, endpoint, outbound, state, code
 
 
@@ -675,14 +679,21 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
                 if meta is not MALFORMED and not win_same(meta.get("image"), image):
                     meta = MALFORMED  # a recovery identity must name the expected image
                 _release_custody(name, meta, image, api, errors, f"{stem} (recovery)")
-        served = api.listener_pids(m.port)
+        try:
+            served = api.listener_pids(m.port)
+        except Exception:  # noqa: BLE001 - an unverifiable listener is never "absent"
+            served = None
+            errors.append(f"the 127.0.0.1:{m.port} listener cannot be verified")
         if served:
             errors.append(f"127.0.0.1:{m.port} is still served by {sanitize(str(served), 200)}")
         owner, endpoint, outbound, state_name, code = _collect(b, m, host_key, api, runner)
         doc = _document(operation_id, state="stopped", binding=b, owner=owner, endpoint=endpoint, outbound=outbound)
-        if errors or endpoint["state"] == "ready" or outbound["state"] == "running":
+        if errors or state_name != "stopped" or endpoint["state"] == "ready" or outbound["state"] == "running":
             doc["state"] = "failed"
-            doc["error"] = {"code": "stop-failed", "message": sanitize("; ".join(errors) or "still running", 600)}
+            endpoint["absenceVerified"] = outbound["absenceVerified"] = False  # never contradict a failed stop
+            doc["error"] = {"code": "stop-failed",
+                            "message": sanitize("; ".join([*errors, *endpoint.get("custodyProblems", []),
+                                                           *outbound.get("problems", [])]) or "still running", 600)}
             return doc, EXIT_ERROR
         return doc, EXIT_READY
     return _guarded(operation_id, run)

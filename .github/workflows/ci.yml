@@ -167,10 +167,20 @@ jobs:
           if ($a -ne $b) { throw "pocketshell-verify.exe is not reproducible" }
           "POCKETSHELL_TEST_VERIFY_EXE=$env:RUNNER_TEMP\verify-a\pocketshell-verify.exe" >> $env:GITHUB_ENV
 
-      - name: Windows gateway service (real scheduled task)
+      # OPTIONAL admin path only: the S4U scheduled-task service (`gateway
+      # service`, branch gateway-service). Not part of the ordinary-user product.
+      - name: S4U scheduled-task service (optional admin path, real Task Scheduler)
         env:
           POCKETSHELL_WINDOWS_SERVICE_E2E: "1"
-        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_service_native.py tests/gateway/test_windows_gateway_user_agent_native.py tests/gateway/test_windows_agent_install_native.py tests/gateway/test_windows_verify_native.py
+        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_service_native.py
+
+      # The ordinary-user product path: agent runtime, producer/installer and
+      # the bootstrap verifier. No scheduled task, no service.
+      - name: Ordinary-user agent, installer and pocketshell-verify.exe (native)
+        if: ${{ !cancelled() }}  # independent of the optional S4U step's outcome
+        env:
+          POCKETSHELL_WINDOWS_SERVICE_E2E: "1"
+        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_user_agent_native.py tests/gateway/test_windows_agent_install_native.py tests/gateway/test_windows_verify_native.py
 
       - name: Prepare OpenSSH Server and a spaced interpreter (CI only)
         shell: pwsh

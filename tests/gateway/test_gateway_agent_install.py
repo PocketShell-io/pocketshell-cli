@@ -57,7 +57,7 @@ class Paths:
         if private and k in self.unprotected:
             raise inst.ServiceError(f"{path} is not owner-only")
 
-    def file(self, path, owner_sid, *, private, max_bytes):
+    def file(self, path, owner_sid, *, private, max_bytes, private_root=None):
         self._refuse(path, private)
         if self.key(path) not in self.files:
             raise FileNotFoundError(path)
@@ -65,7 +65,7 @@ class Paths:
         return {"canonicalPath": path, "size": len(data), "sha256": sha(data),
                 "bytes": data if len(data) <= max_bytes else None}
 
-    def directory(self, path, owner_sid):
+    def directory(self, path, owner_sid, private_root=None):
         self._refuse(path, True)
         if self.key(path) not in self.dirs:
             raise FileNotFoundError(path)
@@ -75,7 +75,7 @@ class Paths:
         self._refuse(path, False)
         return path
 
-    def inventory(self, path, owner_sid, *, private=True):
+    def inventory(self, path, owner_sid, *, private=True, private_root=None):
         self._refuse(path, private)
         prefix = self.key(path) + "\\"
         out = []
@@ -394,7 +394,7 @@ def test_cli_install_uses_the_existing_binding_and_the_enrolled_server(agent, mo
     paths.put(STAGED + "\\bin\\pocketshell-link.exe", b"helper")
     real_file = paths.file
 
-    def file(path, owner_sid, *, private, max_bytes):  # the helper's staged bytes hash to QUALIFIED here
+    def file(path, owner_sid, *, private, max_bytes, private_root=None):  # the helper's staged bytes: QUALIFIED
         got = real_file(path, owner_sid, private=private, max_bytes=max_bytes)
         if path.lower().endswith("pocketshell-link.exe"):
             got = dict(got, sha256=QUALIFIED)

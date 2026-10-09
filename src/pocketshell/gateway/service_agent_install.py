@@ -155,7 +155,7 @@ class NativePaths:
             self.api._check_acl(str(parent), owner_sid, "ancestor")
 
     @staticmethod
-    def _pinned(path, *, private_leaf: bool):
+    def _pinned(path, *, private_leaf: bool, private_root=None):
         """Open every directory component of ``path`` by handle (list access,
         no delete sharing: pinned against rename/replace while held), refuse
         reparse points, and require the private shape on ``path`` itself when
@@ -171,7 +171,8 @@ class NativePaths:
                     current /= part
                 handle = ws._open(current, directory=True, access=0x20081)
                 handles.append(handle)
-                ws._check(handle, directory=True, private=private_leaf and current == path)
+                inside = private_root is not None and _under(str(current), str(private_root))
+                ws._check(handle, directory=True, private=inside or (private_leaf and current == path))
             return handles
         except BaseException:
             for handle in reversed(handles):
@@ -199,7 +200,7 @@ class NativePaths:
         value = buf.value
         return value[4:] if value.startswith("\\\\?\\") else value
 
-    def file(self, path: str, owner_sid: str, *, private: bool, max_bytes: int) -> dict:
+    def file(self, path: str, owner_sid: str, *, private: bool, max_bytes: int, private_root=None) -> dict:
         import os
         from pathlib import Path
 
@@ -207,7 +208,7 @@ class NativePaths:
 
         p = ws._path(Path(path))
         self._ancestors(str(p), owner_sid)
-        pinned = self._pinned(p.parent, private_leaf=private)
+        pinned = self._pinned(p.parent, private_leaf=private, private_root=private_root if private else None)
         try:
             handle = ws._open(p)
             try:
@@ -237,14 +238,14 @@ class NativePaths:
         return {"canonicalPath": canonical, "size": size, "sha256": digest.hexdigest(),
                 "bytes": bytes(head) if size <= max_bytes else None}
 
-    def directory(self, path: str, owner_sid: str) -> str:
+    def directory(self, path: str, owner_sid: str, private_root=None) -> str:
         from pathlib import Path
 
         from pocketshell import windows_security as ws
 
         p = ws._path(Path(path))
         self._ancestors(str(p), owner_sid)
-        pinned = self._pinned(p, private_leaf=True)
+        pinned = self._pinned(p, private_leaf=True, private_root=private_root)
         try:
             return self._final(pinned[-1]) or str(p)
         finally:
@@ -265,7 +266,7 @@ class NativePaths:
         finally:
             self._close(pinned)
 
-    def inventory(self, path: str, owner_sid: str, *, private: bool = True) -> list:
+    def inventory(self, path: str, owner_sid: str, *, private: bool = True, private_root=None) -> list:
         """Every regular file under a directory, by handle; any reparse entry
         refuses, and with ``private`` any non-private object refuses."""
         import os
@@ -276,7 +277,7 @@ class NativePaths:
         root = ws._path(Path(path))
         self._ancestors(str(root), owner_sid)
         out = []
-        pinned = self._pinned(root, private_leaf=private)
+        pinned = self._pinned(root, private_leaf=private, private_root=private_root if private else None)
         try:
             stack = [root]
             while stack:
@@ -423,7 +424,8 @@ def verify_paths(*, owner_sid: str, operation_id: str, private_roots=(), resourc
                 if kind == "document" and not path.lower().endswith(".json"):
                     raise ServiceError("only .json documents return bytes; use binary")
                 got = paths.file(path, owner_sid, private=private,
-                                 max_bytes=MAX_DOCUMENT if kind == "document" else 0)
+                                 max_bytes=MAX_DOCUMENT if kind == "document" else 0,
+                                 private_root=root if private else None)
                 if not got["canonicalPath"] or not _same(got["canonicalPath"], path):
                     raise ServiceError("the opened object is not the requested path")
                 if kind == "document" and got["bytes"] is None:
@@ -431,12 +433,14 @@ def verify_paths(*, owner_sid: str, operation_id: str, private_roots=(), resourc
                 item.update(canonicalPath=got["canonicalPath"], size=got["size"], sha256=got["sha256"],
                             bytesBase64=base64.b64encode(got["bytes"]).decode() if kind == "document" else None)
             elif kind == "directory":
-                canonical = paths.directory(path, owner_sid) if private else paths.directory_anchored(path, owner_sid)
+                canonical = paths.directory(path, owner_sid, private_root=root) if private \
+                    else paths.directory_anchored(path, owner_sid)
                 if not _same(canonical, path):
                     raise ServiceError("the opened directory is not the requested path")
                 item["canonicalPath"] = canonical
             else:
-                item["files"] = paths.inventory(path, owner_sid, private=private)
+                item["files"] = paths.inventory(path, owner_sid, private=private,
+                                                private_root=root if private else None)
             item["ok"] = True
         except Exception as exc:  # noqa: BLE001 - every failure is a refusal of that request
             item["problem"] = sanitize(str(exc) or type(exc).__name__, 600)
@@ -532,7 +536,7 @@ def install_runtime(*, user_data: str, catalog_path: str, staged: str, binding: 
     # 2) copy with the private shape; an existing release dir must be exactly this closure
     for folder in (root, ntpath.join(root, "releases"), release_dir, tmp):
         paths.mkdir(folder)
-    present = paths.inventory(release_dir, owner_sid)
+    present = paths.inventory(release_dir, owner_sid, private_root=root)
     stray = sorted(set(p.lower() for p in present) - set(want))
     if stray:
         raise InstallError("release-dirty", f"{release_dir} holds files outside the catalog: {stray[:5]}")
@@ -544,14 +548,15 @@ def install_runtime(*, user_data: str, catalog_path: str, staged: str, binding: 
         paths.write(target, data)
 
     # 3) re-measure what is installed (handle-based), then the receipt
-    if sorted(p.lower() for p in paths.inventory(release_dir, owner_sid)) != sorted(want):
+    if sorted(p.lower() for p in paths.inventory(release_dir, owner_sid, private_root=root)) != sorted(want):
         raise InstallError("install-failed", "the installed closure differs from the catalog")
     for f in catalog["files"]:
-        got = paths.file(ntpath.join(release_dir, *f["path"].split("/")), owner_sid, private=True, max_bytes=0)
+        got = paths.file(ntpath.join(release_dir, *f["path"].split("/")), owner_sid, private=True, max_bytes=0,
+                         private_root=root)
         if got["sha256"] != f["sha256"]:
             raise InstallError("install-failed", f"installed {f['path']} does not match its catalog sha256")
     for folder in (root, tmp, release_dir):
-        if not _same(paths.directory(folder, owner_sid), folder):
+        if not _same(paths.directory(folder, owner_sid, private_root=root), folder):
             raise InstallError("install-failed", f"{folder} is not the protected directory")
     paths.write(ntpath.join(root, "authority.json"), json.dumps(receipt, indent=1).encode("utf-8"))
     return receipt
