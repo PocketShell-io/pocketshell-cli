@@ -55,6 +55,15 @@ dependencies = [
     # human/agent-readable default output format (#714). The Android client
     # consumes the `--json` flag instead; the host-facing default is YAML.
     "pyyaml>=6.0",
+    # AES-256-GCM for the device-password key vault (`pocketshell keys`,
+    # docs/keys.md) and in-memory key generation. The stdlib has PBKDF2
+    # (hashlib) but no AEAD, so this is the one primitive we cannot get
+    # without a dependency. It was already in every install as a transitive
+    # dependency of google-auth (locked at 48.0.0, no lock change beyond the
+    # new edge); declaring it makes the vault independent of google-auth's
+    # dependency choices. 42 is a conservative floor for the APIs used
+    # (GCM `update_into`, OpenSSH private-key serialization).
+    "cryptography>=42",
     # aplexer ships WITH the pocketshell CLI (issue #2543). `pocketshell
     # sessions create` needs BOTH the `a` CLI and its
     # `aplexer` worker binary (aplexer/src/lib.rs::worker_executable resolves

@@ -223,6 +223,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aplexer", marker = "sys_platform == 'linux'" },
     { name = "click" },
+    { name = "cryptography" },
     { name = "google-auth" },
     { name = "pyyaml" },
     { name = "quse" },
@@ -247,6 +248,7 @@ dev = [
 requires-dist = [
     { name = "aplexer", marker = "sys_platform == 'linux'", specifier = "==0.1.8" },
     { name = "click", specifier = ">=8.2.0" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.0" },
     { name = "pyyaml", specifier = ">=6.0" },
