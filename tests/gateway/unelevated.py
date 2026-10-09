@@ -156,12 +156,12 @@ def _safer_token():
     return token
 
 
-def run_unelevated(argv, *, env=None, cwd=None, timeout=300):
+def run_unelevated(argv, *, env=None, cwd=None, timeout=300, breakaway=False):
     """(exit code, stdout bytes) of ``argv`` run with an unelevated token."""
-    return _launch(_unelevated_token(), argv, env, cwd, timeout)
+    return _launch(_unelevated_token(), argv, env, cwd, timeout, breakaway)
 
 
-def _launch(token, argv, env, cwd, timeout):
+def _launch(token, argv, env, cwd, timeout, breakaway=False):
     a.CreateProcessAsUserW.argtypes = [w.HANDLE, w.LPCWSTR, w.LPWSTR, c.c_void_p, c.c_void_p, w.BOOL, w.DWORD,
                                        c.c_void_p, w.LPCWSTR, c.POINTER(SI), c.POINTER(PI)]
     k.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
@@ -181,11 +181,17 @@ def _launch(token, argv, env, cwd, timeout):
         block = c.create_unicode_buffer("\0".join(f"{kk}={v}" for kk, v in sorted(env.items())) + "\0\0")
     pi = PI()
     cmd = c.create_unicode_buffer(subprocess.list2cmdline(argv))
+    flags = 0x08000000 | 0x400
     try:
-        if not a.CreateProcessAsUserW(token, argv[0], cmd, None, None, True, 0x08000000 | 0x400,
-                                      c.cast(block, c.c_void_p) if block is not None else None, cwd,
-                                      c.byref(si), c.byref(pi)):
+        made = breakaway and a.CreateProcessAsUserW(token, argv[0], cmd, None, None, True, flags | 0x01000000,
+                                                    c.cast(block, c.c_void_p) if block is not None else None,
+                                                    cwd, c.byref(si), c.byref(pi))
+        if not made and not a.CreateProcessAsUserW(token, argv[0], cmd, None, None, True, flags,
+                                                   c.cast(block, c.c_void_p) if block is not None else None,
+                                                   cwd, c.byref(si), c.byref(pi)):
             raise c.WinError(c.get_last_error())
+        if breakaway:
+            DIAGNOSTICS.append(f"cli breakaway {'accepted' if made else 'refused'}")
         try:
             if k.WaitForSingleObject(pi.hProcess, int(timeout * 1000)) != 0:
                 k.TerminateProcess(pi.hProcess, 99)
@@ -280,7 +286,7 @@ def _serve(request_path):
     k.IsProcessInJob.argtypes = [w.HANDLE, w.HANDLE, cc.POINTER(w.BOOL)]
     k.IsProcessInJob(k.GetCurrentProcess(), None, cc.byref(in_job))
     try:
-        code, out = run_unelevated(req["argv"], env=req["env"], cwd=req["cwd"])
+        code, out = run_unelevated(req["argv"], env=req["env"], cwd=req["cwd"], breakaway=True)
         data = {"code": code, "stdout": out.decode("utf-8", "replace"), "serverInJob": bool(in_job.value),
                 "token": DIAGNOSTICS}
     except Exception as exc:  # noqa: BLE001 - reported to the waiting test
