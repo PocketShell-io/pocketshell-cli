@@ -211,6 +211,38 @@ def _sub(parent, tag, text=None, **attrs):
     return element
 
 
+@dataclass(frozen=True)
+class TaskSpec:
+    """One managed task: a single direct Exec action, nothing else varies."""
+
+    leaf: str
+    command: str
+    argv: tuple  # what the process receives after argv[0]
+    arguments: str  # the Arguments string that yields exactly ``argv``
+    working_directory: str
+    boot_delay: str
+    description: str
+
+    @property
+    def name(self) -> str:
+        return TASK_FOLDER + self.leaf
+
+
+def link_spec(helper: str, config_dir: str) -> TaskSpec:
+    return TaskSpec(
+        leaf=TASK_LEAF,
+        command=helper,
+        argv=("run", "--config-dir", config_dir),
+        arguments=task_arguments(config_dir),
+        working_directory=ntpath.dirname(helper),
+        boot_delay="PT30S",
+        description=(
+            "PocketShell gateway host agent (pocketshell-link run): hidden, session 0, "
+            f"runs as the enrolling user. {MANAGED_MARKER}."
+        ),
+    )
+
+
 def build_task_xml(
     helper: str,
     config_dir: str,
@@ -219,7 +251,20 @@ def build_task_xml(
     logon_type: str = DEFAULT_LOGON_TYPE,
     enabled: bool = True,
 ) -> str:
-    """The task definition (plan §3.2 + Revision 5), as an XML string.
+    """The link task definition (plan §3.2 + Revision 5), as an XML string."""
+    return build_spec_xml(
+        link_spec(helper, config_dir), user_sid, logon_type=logon_type, enabled=enabled
+    )
+
+
+def build_spec_xml(
+    spec: TaskSpec,
+    user_sid: str,
+    *,
+    logon_type: str = DEFAULT_LOGON_TYPE,
+    enabled: bool = True,
+) -> str:
+    """A managed task definition, as an XML string.
 
     Built with ElementTree, so every value is XML-escaped; the declared
     encoding is UTF-16, which :func:`task_xml_bytes` produces.
@@ -231,15 +276,13 @@ def build_task_xml(
     ET.register_namespace("", TASK_NS)
     task = ET.Element(f"{{{TASK_NS}}}Task", {"version": "1.4"})
     reg = _sub(task, "RegistrationInfo")
-    _sub(reg, "URI", TASK_NAME)
-    _sub(reg, "Description",
-         "PocketShell gateway host agent (pocketshell-link run): hidden, session 0, "
-         f"runs as the enrolling user. {MANAGED_MARKER}.")
+    _sub(reg, "URI", spec.name)
+    _sub(reg, "Description", spec.description)
 
     triggers = _sub(task, "Triggers")
     boot = _sub(triggers, "BootTrigger")
     _sub(boot, "Enabled", "true")
-    _sub(boot, "Delay", "PT30S")
+    _sub(boot, "Delay", spec.boot_delay)
     watchdog = _sub(triggers, "TimeTrigger")
     repetition = _sub(watchdog, "Repetition")
     _sub(repetition, "Interval", "PT5M")
@@ -284,9 +327,9 @@ def build_task_xml(
 
     actions = _sub(task, "Actions", Context="Author")
     exe = _sub(actions, "Exec")
-    _sub(exe, "Command", helper)
-    _sub(exe, "Arguments", task_arguments(config_dir))
-    _sub(exe, "WorkingDirectory", ntpath.dirname(helper))
+    _sub(exe, "Command", spec.command)
+    _sub(exe, "Arguments", spec.arguments)
+    _sub(exe, "WorkingDirectory", spec.working_directory)
 
     ET.indent(task, space="  ")
     body = ET.tostring(task, encoding="unicode")
@@ -554,19 +597,25 @@ TASK_STATES = {0: "Unknown", 1: "Disabled", 2: "Queued", 3: "Ready", 4: "Running
 # must never be reported as "not installed" or as a successful deletion.
 _NOT_FOUND_HRESULTS = {"0x80070002", "0x80070003"}
 
-_QUERY_SCRIPT = (
-    "$ErrorActionPreference='Stop';"
-    "try{"
-    "$s=New-Object -ComObject Schedule.Service;$s.Connect();"
-    f"$t=$s.GetFolder('{TASK_FOLDER.rstrip(chr(92))}').GetTask('{TASK_LEAF}');"
-    "$o=[ordered]@{found=$true;state=[int]$t.State;last_result=[int64]$t.LastTaskResult;"
-    "xml=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t.Xml))}"
-    "}catch{"
-    "$e=$_.Exception;while($e.InnerException){$e=$e.InnerException};"
-    "$o=[ordered]@{found=$false;hresult=('0x{0:X8}' -f $e.HResult);message=[string]$e.Message}"
-    "};"
-    "$o|ConvertTo-Json -Compress"
-)
+def _query_script(leaf: str) -> str:
+    if not re.fullmatch(r"[A-Za-z]+", leaf):
+        raise ServiceError("unexpected task name")
+    return (
+        "$ErrorActionPreference='Stop';"
+        "try{"
+        "$s=New-Object -ComObject Schedule.Service;$s.Connect();"
+        f"$t=$s.GetFolder('{TASK_FOLDER.rstrip(chr(92))}').GetTask('{leaf}');"
+        "$o=[ordered]@{found=$true;state=[int]$t.State;last_result=[int64]$t.LastTaskResult;"
+        "xml=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t.Xml))}"
+        "}catch{"
+        "$e=$_.Exception;while($e.InnerException){$e=$e.InnerException};"
+        "$o=[ordered]@{found=$false;hresult=('0x{0:X8}' -f $e.HResult);message=[string]$e.Message}"
+        "};"
+        "$o|ConvertTo-Json -Compress"
+    )
+
+
+_QUERY_SCRIPT = _query_script(TASK_LEAF)
 
 
 @dataclass
@@ -583,7 +632,7 @@ def _powershell(script: str) -> list:
     ]
 
 
-def query_task(runner: Optional[Runner] = None) -> Optional[TaskInfo]:
+def query_task(runner: Optional[Runner] = None, leaf: str = TASK_LEAF) -> Optional[TaskInfo]:
     """The registered task, ``None`` ONLY when its absence is confirmed.
 
     Reads through the Task Scheduler COM API (locale-independent HRESULTs,
@@ -592,7 +641,8 @@ def query_task(runner: Optional[Runner] = None) -> Optional[TaskInfo]:
     :class:`ServiceError` with a sanitized message.
     """
     runner = runner or run_child
-    result = runner(_powershell(_QUERY_SCRIPT))
+    name = TASK_FOLDER + leaf
+    result = runner(_powershell(_query_script(leaf)))
     try:
         data = json.loads(decode(result.stdout).strip() or "null")
     except ValueError:
@@ -600,7 +650,7 @@ def query_task(runner: Optional[Runner] = None) -> Optional[TaskInfo]:
     if result.returncode != 0 or not isinstance(data, dict):
         detail = sanitize(decode(result.stderr or result.stdout), 300)
         raise ServiceError(
-            f"could not query the scheduled task {TASK_NAME} (exit {result.returncode})"
+            f"could not query the scheduled task {name} (exit {result.returncode})"
             + (f": {detail}" if detail else "")
         )
     if not data.get("found"):
@@ -608,21 +658,21 @@ def query_task(runner: Optional[Runner] = None) -> Optional[TaskInfo]:
         if hresult in _NOT_FOUND_HRESULTS:
             return None
         raise ServiceError(
-            f"could not query the scheduled task {TASK_NAME} (HRESULT {sanitize(hresult, 20)}: "
+            f"could not query the scheduled task {name} (HRESULT {sanitize(hresult, 20)}: "
             f"{sanitize(str(data.get('message', '')), 300)})"
         )
     try:
         xml = base64.b64decode(str(data.get("xml", "")), validate=True).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
-        raise ServiceError(f"the definition of {TASK_NAME} could not be decoded") from None
+        raise ServiceError(f"the definition of {name} could not be decoded") from None
     state = TASK_STATES.get(data.get("state"), "Unknown")
     last = data.get("last_result")
     return TaskInfo(xml, state, last if isinstance(last, int) else None)
 
 
-def query_task_xml(runner: Optional[Runner] = None) -> Optional[str]:
+def query_task_xml(runner: Optional[Runner] = None, leaf: str = TASK_LEAF) -> Optional[str]:
     """The registered definition; ``None`` only on confirmed absence."""
-    info = query_task(runner)
+    info = query_task(runner, leaf)
     return info.xml if info is not None else None
 
 
@@ -725,144 +775,183 @@ def plan_install(
     )
 
 
-def readback_problems(fields: dict, plan: WindowsPlan, api: WindowsApi) -> list:
-    """Differences between the REGISTERED task and the requested one.
+def readback_problems(fields: dict, plan: "WindowsPlan", api: WindowsApi) -> list:
+    """Differences between the registered LINK task and the requested one."""
+    return spec_readback_problems(
+        fields, link_spec(plan.helper, plan.config_dir), plan.user_sid, plan.logon_type, api
+    )
+
+
+def spec_readback_problems(
+    fields: dict, spec: TaskSpec, user_sid: str, logon_type: str, api: WindowsApi
+) -> list:
+    """Differences between a REGISTERED task and the requested ``spec``.
 
     Checked before the task is ever started: one direct Exec of the exact
-    helper argv, the working directory, and the same-user, non-interactive
-    principal (the current user's SID — an account-name form is accepted
-    only if it resolves to that SID —, the requested logon type, and
-    LeastPrivilege, which an export may omit as the schema default).
+    command and argv, the working directory, and the same-user,
+    non-interactive principal (the current user's SID — an account-name form
+    is accepted only if it resolves to that SID —, the requested logon type,
+    and LeastPrivilege, which an export may omit as the schema default).
     """
     problems = []
-    expected_args = action_argv(plan.helper, plan.config_dir)[1:]
     if fields["exec_count"] != 1 or fields["action_count"] != 1:
         problems.append("not exactly one Exec action")
-    if not _same_path(fields["command"], plan.helper):
-        problems.append("command is not the requested helper")
-    if parse_arguments(fields["arguments"]) != expected_args:
-        problems.append("arguments are not `run --config-dir <dir>`")
-    if not _same_path(fields["working_directory"], ntpath.dirname(plan.helper)):
-        problems.append("working directory is not the helper's directory")
+    if not _same_path(fields["command"], spec.command):
+        problems.append("command is not the requested executable")
+    if parse_arguments(fields["arguments"]) != list(spec.argv):
+        problems.append("arguments are not the requested argv")
+    if not _same_path(fields["working_directory"], spec.working_directory):
+        problems.append("working directory is not the requested one")
     user = fields["user_id"] or ""
-    if user != plan.user_sid:
+    if user != user_sid:
         try:
             resolved = api.account_sid(user) if user else None
         except ServiceError:
             resolved = None
-        if resolved != plan.user_sid:
-            problems.append(f"principal {sanitize(user, 100) or '(none)'} is not your SID {plan.user_sid}")
-    if fields["logon_type"] != plan.logon_type:
-        problems.append(f"logon type {sanitize(str(fields['logon_type']), 40)} is not {plan.logon_type}")
+        if resolved != user_sid:
+            problems.append(f"principal {sanitize(user, 100) or '(none)'} is not your SID {user_sid}")
+    if fields["logon_type"] != logon_type:
+        problems.append(f"logon type {sanitize(str(fields['logon_type']), 40)} is not {logon_type}")
     if fields["run_level"] != "LeastPrivilege":
         problems.append(f"run level {sanitize(str(fields['run_level']), 40)} is not LeastPrivilege")
     return problems
 
 
-def apply_install(
-    plan: WindowsPlan, runner: Optional[Runner] = None, api: Optional[WindowsApi] = None
-) -> list:
-    runner = runner or run_child
-    api = api or WindowsApi()
-    warnings = []
+def _register(
+    spec: TaskSpec,
+    xml: str,
+    *,
+    replace: bool,
+    user_sid: str,
+    logon_type: str,
+    runner: Runner,
+    api: WindowsApi,
+) -> None:
+    """schtasks /Create /XML, read it back, delete it again on any mismatch."""
     tmpdir = tempfile.mkdtemp(prefix="pocketshell-task-")
-    xml_path = os.path.join(tmpdir, "GatewayLink.xml")
+    xml_path = os.path.join(tmpdir, spec.leaf + ".xml")
     try:
         with open(xml_path, "wb") as handle:
-            handle.write(task_xml_bytes(plan.xml))
-        for argv in plan.commands(xml_path):
-            verb = argv[1]
-            if verb == "/Run":
-                continue  # after verification below
-            result = runner(argv)
-            if verb == "/Create" and result.returncode != 0:
-                raise _fail(result, f"registering {TASK_NAME}", ELEVATION_HINT)
+            handle.write(task_xml_bytes(xml))
+        if replace:
+            runner(schtasks("/End", "/TN", spec.name))
+        create = schtasks("/Create", "/TN", spec.name, "/XML", xml_path)
+        if replace:
+            create.append("/F")
+        result = runner(create)
+        if result.returncode != 0:
+            raise _fail(result, f"registering {spec.name}", ELEVATION_HINT)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-    registered = query_task_xml(runner)
+    registered = query_task_xml(runner, spec.leaf)
     if registered is None:
-        raise ServiceError(f"{TASK_NAME} is not visible after registration")
+        raise ServiceError(f"{spec.name} is not visible after registration")
     try:
-        problems = readback_problems(parse_task_xml(registered), plan, api)
+        problems = spec_readback_problems(parse_task_xml(registered), spec, user_sid, logon_type, api)
     except ServiceError as exc:
         problems = [str(exc)]
     if problems:
         # Never start a task that is not what was requested: roll it back.
-        removed = runner(schtasks("/Delete", "/TN", TASK_NAME, "/F")).returncode == 0
+        removed = runner(schtasks("/Delete", "/TN", spec.name, "/F")).returncode == 0
         raise ServiceError(
-            f"{TASK_NAME} was registered but does not match the requested "
+            f"{spec.name} was registered but does not match the requested "
             f"same-user direct launch ({'; '.join(problems)}); it was "
             + ("removed again and never started" if removed else
                "NOT removed — run `pocketshell gateway service uninstall`")
         )
+
+
+def apply_install(
+    plan: "WindowsPlan", runner: Optional[Runner] = None, api: Optional[WindowsApi] = None
+) -> list:
+    runner = runner or run_child
+    api = api or WindowsApi()
+    _register(
+        link_spec(plan.helper, plan.config_dir), plan.xml, replace=plan.replace,
+        user_sid=plan.user_sid, logon_type=plan.logon_type, runner=runner, api=api,
+    )
     if plan.start:
         _start_and_confirm(runner)
-    return warnings
+    return []
 
 
-def _start_and_confirm(runner: Runner) -> None:
-    """``/Run``, then require the task's own state to reach Running."""
-    result = runner(schtasks("/Run", "/TN", TASK_NAME))
+def _start_and_confirm(runner: Runner, leaf: str = TASK_LEAF, ready=None) -> None:
+    """``/Run``, then require the task's own state to reach Running (and,
+    when given, ``ready()`` to hold) within :data:`START_CONFIRM_SECONDS`."""
+    name = TASK_FOLDER + leaf
+    result = runner(schtasks("/Run", "/TN", name))
     if result.returncode != 0:
         detail = sanitize(decode(result.stderr or result.stdout), 600)
         raise NotStartedError(
-            f"{TASK_NAME} is registered but NOT started: /Run failed "
+            f"{name} is registered but NOT started: /Run failed "
             f"(exit {result.returncode})" + (f": {detail}" if detail else "")
             + ". It will still start at boot or from its 5-minute watchdog; "
             "check `pocketshell gateway service status`."
         )
     deadline = time.monotonic() + START_CONFIRM_SECONDS
-    state, last = "Unknown", None
+    state, last, extra = "Unknown", None, ""
     while True:
         try:
-            info = query_task(runner)
+            info = query_task(runner, leaf)
         except ServiceError as exc:
             raise NotStartedError(
-                f"{TASK_NAME} is registered but its start could not be confirmed: {exc}"
+                f"{name} is registered but its start could not be confirmed: {exc}"
             ) from None
         if info is not None:
             state, last = info.state, info.last_result
             if state == "Running":
-                return
+                if ready is None:
+                    return
+                ok, extra = ready()
+                if ok:
+                    return
         if time.monotonic() >= deadline:
             break
         time.sleep(0.5)
     raise NotStartedError(
-        f"{TASK_NAME} is registered but NOT started: its state is {state} "
-        f"after {START_CONFIRM_SECONDS:g}s (last result {last}); check "
-        "`pocketshell gateway service status`"
+        f"{name} is registered but NOT started: its state is {state} "
+        f"after {START_CONFIRM_SECONDS:g}s (last result {last})"
+        + (f"; {extra}" if extra else "")
+        + "; check `pocketshell gateway service status`"
     )
 
 
-def uninstall(
-    *, force: bool = False, runner: Optional[Runner] = None, api: Optional[WindowsApi] = None
-) -> str:
-    runner = runner or run_child
-    registered = query_task_xml(runner)
+def _uninstall_one(leaf: str, *, force: bool, runner: Runner, what: str) -> Optional[dict]:
+    """End + delete one managed task. None if confirmed absent; else its fields."""
+    name = TASK_FOLDER + leaf
+    registered = query_task_xml(runner, leaf)
     if registered is None:
-        return f"not installed ({TASK_NAME} does not exist); nothing to do"
+        return None
     try:
         fields = parse_task_xml(registered)
     except ServiceError:
         fields = {"description": "", "command": None}
     if MANAGED_MARKER not in fields["description"] and not force:
         raise ServiceError(
-            f"{TASK_NAME} was not written by `pocketshell gateway service install`; "
+            f"{name} was not written by `pocketshell gateway service install`; "
             "refusing to stop or delete a task this command does not own (pass --force)"
         )
-    helper = fields.get("command")
-    runner(schtasks("/End", "/TN", TASK_NAME))
-    result = runner(schtasks("/Delete", "/TN", TASK_NAME, "/F"))
+    runner(schtasks("/End", "/TN", name))
+    result = runner(schtasks("/Delete", "/TN", name, "/F"))
     if result.returncode != 0:
-        raise _fail(result, f"deleting {TASK_NAME}", ELEVATION_HINT)
+        raise _fail(result, f"deleting {name}", ELEVATION_HINT)
     try:
-        still_there = query_task(runner) is not None
+        still_there = query_task(runner, leaf) is not None
     except ServiceError as exc:
-        raise ServiceError(
-            f"deleted {TASK_NAME} but could not verify its removal: {exc}"
-        ) from None
+        raise ServiceError(f"deleted {name} but could not verify its removal: {exc}") from None
     if still_there:
-        raise ServiceError(f"{TASK_NAME} still exists after deletion")
+        raise ServiceError(f"{name} still exists after deletion")
+    return fields
+
+
+def uninstall(
+    *, force: bool = False, runner: Optional[Runner] = None, api: Optional[WindowsApi] = None
+) -> str:
+    runner = runner or run_child
+    fields = _uninstall_one(TASK_LEAF, force=force, runner=runner, what="link")
+    if fields is None:
+        return f"not installed ({TASK_NAME} does not exist); nothing to do"
+    helper = fields.get("command")
     message = f"removed the scheduled task {TASK_NAME} (enrollment and config dir untouched)"
     if helper:
         api = api or WindowsApi()
