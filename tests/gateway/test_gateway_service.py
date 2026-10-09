@@ -571,6 +571,7 @@ class FakeWindows:
         self.mutate_on_create = None      # callable(xml) -> registered readback
         self.deleted = False
         self.on_run = {}                  # leaf -> callback
+        self.last_result = {}             # leaf -> LastTaskResult
 
     # link-task shorthands used by the earlier tests
     @property
@@ -664,7 +665,7 @@ class FakeWindows:
                     out = {
                         "found": True,
                         "state": _STATE_CODES[task["state"]],
-                        "last_result": 267009,
+                        "last_result": self.last_result.get(leaf, 267009),
                         "xml": base64.b64encode(task["xml"].encode("utf-8")).decode(),
                     }
                 return ChildResult(0, json.dumps(out).encode(), b"")

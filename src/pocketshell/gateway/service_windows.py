@@ -264,8 +264,11 @@ def build_spec_xml(
     *,
     logon_type: str = DEFAULT_LOGON_TYPE,
     enabled: bool = True,
+    triggers: bool = True,
+    execution_time_limit: str = "PT0S",
 ) -> str:
-    """A managed task definition, as an XML string.
+    """A managed task definition, as an XML string. ``triggers=False`` (the
+    check-only qualification) registers an on-demand task with no triggers.
 
     Built with ElementTree, so every value is XML-escaped; the declared
     encoding is UTF-16, which :func:`task_xml_bytes` produces.
@@ -280,16 +283,17 @@ def build_spec_xml(
     _sub(reg, "URI", spec.name)
     _sub(reg, "Description", spec.description)
 
-    triggers = _sub(task, "Triggers")
-    boot = _sub(triggers, "BootTrigger")
-    _sub(boot, "Enabled", "true")
-    _sub(boot, "Delay", spec.boot_delay)
-    watchdog = _sub(triggers, "TimeTrigger")
-    repetition = _sub(watchdog, "Repetition")
-    _sub(repetition, "Interval", "PT5M")
-    _sub(repetition, "StopAtDurationEnd", "false")
-    _sub(watchdog, "StartBoundary", WATCHDOG_START_BOUNDARY)
-    _sub(watchdog, "Enabled", "true")
+    if triggers:
+        trigger_list = _sub(task, "Triggers")
+        boot = _sub(trigger_list, "BootTrigger")
+        _sub(boot, "Enabled", "true")
+        _sub(boot, "Delay", spec.boot_delay)
+        watchdog = _sub(trigger_list, "TimeTrigger")
+        repetition = _sub(watchdog, "Repetition")
+        _sub(repetition, "Interval", "PT5M")
+        _sub(repetition, "StopAtDurationEnd", "false")
+        _sub(watchdog, "StartBoundary", WATCHDOG_START_BOUNDARY)
+        _sub(watchdog, "Enabled", "true")
 
     principals = _sub(task, "Principals")
     principal = _sub(principals, "Principal", id="Author")
@@ -318,7 +322,7 @@ def build_spec_xml(
         ("Hidden", "false"),
         ("RunOnlyIfIdle", "false"),
         ("WakeToRun", "false"),
-        ("ExecutionTimeLimit", "PT0S"),
+        ("ExecutionTimeLimit", execution_time_limit),
         ("Priority", "7"),
     ):
         _sub(settings, tag, value)
@@ -550,6 +554,116 @@ class WindowsApi:
             return str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime)
         finally:
             k.CloseHandle(handle)
+
+    def process_image(self, pid: int) -> Optional[str]:
+        """Full image path of a live process (QueryFullProcessImageNameW)."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.restype = w.HANDLE
+        k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        handle = k.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        try:
+            buf = c.create_unicode_buffer(32768)
+            size = w.DWORD(32768)
+            return buf.value if k.QueryFullProcessImageNameW(handle, 0, buf, c.byref(size)) else None
+        finally:
+            k.CloseHandle(handle)
+
+    def path_authority(self, path: str, owner_sid: str, *, role: str, directory: bool = False,
+                       protected: bool = False, servicing: bool = False) -> None:
+        """The guardian's path_authority (6cf7ae85), as a refusal BEFORE the
+        task can execute anything: no reparse point on the path or any
+        ancestor, a regular single-link file (servicing System32 images may
+        be hard-linked), every ancestor without foreign
+        replace/delete/write-DAC authority (mask 0x500d0150), the object
+        itself owned as its role requires and without foreign write
+        authority (0x500d0116) — private objects: owned by ``owner_sid``,
+        no foreign allow ACE at all."""
+        import pathlib
+
+        p = pathlib.Path(path)
+        for item in [p, *p.parents]:
+            try:
+                st = item.lstat()
+            except OSError:
+                raise ServiceError(f"{sanitize(str(item))} is missing") from None
+            if getattr(st, "st_file_attributes", 0) & 0x400:
+                raise ServiceError(f"{sanitize(str(item))} is a reparse point")
+        st = p.stat()
+        if directory:
+            if not p.is_dir():
+                raise ServiceError(f"{sanitize(path)} must be a directory")
+        else:
+            if not p.is_file():
+                raise ServiceError(f"{sanitize(path)} must be a regular file")
+            if st.st_nlink != 1 and not (servicing and st.st_nlink >= 1):
+                raise ServiceError(f"{sanitize(path)} must be a regular single-link file")
+        for parent in reversed(p.parents):
+            self._check_acl(str(parent), owner_sid, "ancestor")
+        self._check_acl(str(p), owner_sid, "private" if role == "private" else "file",
+                        protected=protected, servicing=servicing)
+
+    _TRUSTED_INSTALLER = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+
+    def _check_acl(self, path: str, owner_sid: str, role: str, *, protected: bool = False,
+                   servicing: bool = False) -> None:
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        a = c.WinDLL("advapi32", use_last_error=True)
+        k = c.WinDLL("kernel32", use_last_error=True)
+        a.GetNamedSecurityInfoW.argtypes = [w.LPCWSTR, c.c_int, w.DWORD] + [c.POINTER(c.c_void_p)] * 5
+        a.GetNamedSecurityInfoW.restype = w.DWORD
+        a.GetSecurityDescriptorControl.argtypes = [c.c_void_p, c.POINTER(w.WORD), c.POINTER(w.DWORD)]
+        a.GetAce.argtypes = [c.c_void_p, w.DWORD, c.POINTER(c.c_void_p)]
+        k.LocalFree.argtypes = [c.c_void_p]
+        owner, group, dacl, sacl, sd = (c.c_void_p() for _ in range(5))
+        code = a.GetNamedSecurityInfoW(path, 1, 5, c.byref(owner), c.byref(group), c.byref(dacl),
+                                       c.byref(sacl), c.byref(sd))
+        if code:
+            raise ServiceError(f"cannot read the security of {sanitize(path)} (error {code})")
+        try:
+            trusted = {owner_sid, "S-1-5-18", "S-1-5-32-544", self._TRUSTED_INSTALLER}
+            if servicing:
+                trusted.discard(owner_sid)
+            actual = self._sid_text(owner)
+            if actual not in ({owner_sid} if role == "private" else trusted):
+                raise ServiceError(f"{sanitize(path)} owner {actual} has no {role} authority")
+            ctrl, rev = w.WORD(), w.DWORD()
+            if not a.GetSecurityDescriptorControl(sd, c.byref(ctrl), c.byref(rev)) or (
+                protected and not ctrl.value & 0x1000
+            ):
+                raise ServiceError(f"{sanitize(path)} must have a protected DACL")
+            if not dacl:
+                raise ServiceError(f"{sanitize(path)} has a NULL DACL")
+            count = c.c_ushort.from_address(dacl.value + 4).value
+            mutation = 0x500D0150 if role == "ancestor" else 0x500D0116
+            for i in range(count):
+                ace = c.c_void_p()
+                if not a.GetAce(dacl, i, c.byref(ace)):
+                    raise ServiceError(f"cannot read an ACE of {sanitize(path)}")
+                header = (c.c_ubyte * 4).from_address(ace.value)
+                if header[0] not in (0, 1):
+                    raise ServiceError(f"{sanitize(path)} has an unsupported ACE type")
+                if header[0] != 0 or header[1] & 8:
+                    continue  # deny ACEs never grant; inherit-only does not apply here
+                sid = self._sid_text(c.c_void_p(ace.value + 8))
+                mask = w.DWORD.from_address(ace.value + 4).value
+                if sid in trusted:
+                    continue
+                if role == "private" or mask & mutation:
+                    raise ServiceError(
+                        f"{sanitize(path)}: {sid} holds foreign mutation authority "
+                        f"(role {role}, mask 0x{mask:08X})"
+                    )
+        finally:
+            k.LocalFree(sd)
 
     def listener_pids(self, port: int) -> list:
         """[(address, pid)] of IPv4 TCP listeners on ``port``."""
@@ -872,6 +986,7 @@ def plan_install(
     endpoint_manifest: Optional[str] = None,
     endpoint_only: bool = False,
     instance: Optional[str] = None,
+    check_only: bool = False,
 ) -> WindowsPlan:
     runner = runner or run_child
     api = api or WindowsApi()
@@ -904,6 +1019,7 @@ def plan_install(
         endpoint = wep.plan_endpoint(
             manifest_path, show, user_sid,
             instance=instance, start=start, api=api, runner=runner, logon_type=logon_type,
+            check_only=check_only,
         )
     return WindowsPlan(
         binary, config_dir, user_sid, xml, action_argv(binary, config_dir), exists, start, show,
@@ -1014,7 +1130,9 @@ def apply_install(
             user_sid=plan.user_sid, logon_type=plan.logon_type, runner=runner, api=api,
         )
         if plan.start:
-            wep.start_and_confirm(plan.endpoint, runner, api)
+            confirmed = wep.start_and_confirm(plan.endpoint, runner, api)
+            if confirmed.get("checkOnly"):
+                return [confirmed["detail"]]
     if not plan.include_link:
         return []
     _register(

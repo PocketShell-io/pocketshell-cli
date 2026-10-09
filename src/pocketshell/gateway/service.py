@@ -119,6 +119,15 @@ _CONFIG_DIR_HELP = (
         "(GatewayEndpointQ<NAME>) on a non-production port."
     ),
 )
+@click.option(
+    "--check-only",
+    is_flag=True,
+    help=(
+        "With --endpoint-only --instance: the Phase A qualification task runs the guardian "
+        "with --check-only (validates source/manifest/roles/ACL/token/config, then exits "
+        "before any generation, desktop, Job or daemon)."
+    ),
+)
 @click.option("--dry-run", is_flag=True, help="Print the exact unit/task and commands; change nothing.")
 @click.option("--force", is_flag=True, help="Replace an existing unit/task.")
 @click.option(
@@ -137,6 +146,7 @@ def install(
     endpoint_manifest: Optional[str],
     endpoint_only: bool,
     instance: Optional[str],
+    check_only: bool,
     dry_run: bool,
     force: bool,
     no_start: bool,
@@ -152,7 +162,7 @@ def install(
     if platform == "linux":
         from pocketshell.gateway import service_linux as backend
 
-        if endpoint_manifest or endpoint_only or instance:
+        if endpoint_manifest or endpoint_only or instance or check_only:
             raise ServiceError(
                 "--with-endpoint is Windows-only; on Linux the local sshd is already a "
                 "durable system or user service"
@@ -178,6 +188,7 @@ def install(
         plan = backend.plan_install(
             helper, config_dir, force=force, start=not no_start,
             endpoint_manifest=endpoint_manifest, endpoint_only=endpoint_only, instance=instance,
+            check_only=check_only,
         )
         device = common.parse_show(plan.show).get("device id", "?")
         if dry_run:
@@ -191,7 +202,7 @@ def install(
                 )
                 click.echo(plan.endpoint.xml, nl=False)
                 click.echo("# the endpoint task's process argv (direct, no shell):")
-                click.echo("  " + json.dumps([m.python, m.guardian, "--manifest", m.path]))
+                click.echo("  " + json.dumps([m.python, *plan.endpoint.spec.argv]))
             if not plan.include_link:
                 click.echo("# then run (CREATE_NO_WINDOW):")
                 for argv in plan.commands():
@@ -206,12 +217,14 @@ def install(
             click.echo("  " + json.dumps(plan.action_argv))
             return
         warnings = backend.apply_install(plan)
-        if plan.endpoint is not None:
+        if plan.endpoint is not None and not plan.endpoint.check_only:
             click.echo(
                 f"registered {plan.endpoint.name} (127.0.0.1:{plan.endpoint.manifest.port})"
                 + (" (registered DISABLED)" if no_start
                    else " (started; guardian READY, held daemon alive, enrolled host key proven)")
             )
+        elif plan.endpoint is not None:
+            click.echo(f"registered {plan.endpoint.name} (check-only, no triggers)")
         if plan.include_link:
             click.echo(f"registered {backend.TASK_NAME} for device {device} as {plan.user_sid}"
                        + (" (registered DISABLED; `install --force` enables and starts it)"
