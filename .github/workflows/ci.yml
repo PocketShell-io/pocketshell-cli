@@ -119,6 +119,30 @@ jobs:
           tests/gateway/test_windows_winssh_native.py
           tests/gateway/test_windows_sshcmd.py
           tests/gateway/test_gateway_proxy.py
+          tests/gateway/test_gateway_service.py
+
+      # `pocketshell gateway service` against the REAL Task Scheduler of
+      # this disposable runner: a fake pocketshell-link.exe (Go, built
+      # here from tests/gateway/fakelink) is allow-listed only through the
+      # test's monkeypatch seam; install registers \PocketShell\GatewayLink
+      # (S4U, LeastPrivilege, direct exe action), status sees its session-0
+      # process, uninstall removes it and leaves the fake config untouched.
+      - name: Set up Go (fake helper for the service test)
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: false
+
+      - name: Build the fake pocketshell-link.exe
+        shell: pwsh
+        run: |
+          go build -o "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" ./tests/gateway/fakelink/main.go
+          "POCKETSHELL_TEST_FAKE_LINK=$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" >> $env:GITHUB_ENV
+
+      - name: Windows gateway service (real scheduled task)
+        env:
+          POCKETSHELL_WINDOWS_SERVICE_E2E: "1"
+        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_service_native.py
 
       - name: Prepare OpenSSH Server and a spaced interpreter (CI only)
         shell: pwsh
