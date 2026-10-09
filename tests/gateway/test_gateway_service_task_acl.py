@@ -71,3 +71,24 @@ def test_requested_descriptors():
 def test_unparseable_or_exotic_descriptors_are_refused(bad):
     assert acl.task_object_problems(bad or None, FOLDER, OWN)
     assert acl.task_object_problems(THREE, bad or None, OWN)
+
+
+def _struct(sddl, **overrides):
+    d = acl.from_sddl(sddl)
+    d.update(overrides)
+    return d
+
+
+def test_structured_descriptors_from_the_scheduler():
+    """The real query emits RawSecurityDescriptor facts; a machine-relative
+    alias such as LA is resolved there, and the DACL_DEFAULTED control (their
+    20th control, not expressible in SDDL) is visible and refused."""
+    task, folder = _struct(ACTUAL), _struct(FOLDER)
+    assert acl.task_object_problems(task, folder, OWN) == []
+    defaulted = _struct(THREE, control=0x800C)  # SELF_RELATIVE | DACL_PRESENT | DACL_DEFAULTED
+    assert acl.task_object_problems(defaulted, folder, OWN)
+    custom = _struct(THREE)
+    custom["dacl"] = custom["dacl"] + [{"type": 0, "flags": 0, "mask": None, "sid": None, "common": False,
+                                         "callback": False}]
+    assert acl.task_object_problems(custom, folder, OWN)
+    assert acl.task_object_problems({"owner": OWN}, folder, OWN)  # malformed

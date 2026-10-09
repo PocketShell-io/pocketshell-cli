@@ -945,20 +945,22 @@ _NOT_FOUND_HRESULTS = {"0x80070002", "0x80070003"}
 def _query_script(leaf: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9]+", leaf):
         raise ServiceError("unexpected task name")
+    from pocketshell.gateway.service_task_acl import PS_SDJ
+
     return (
-        "$ErrorActionPreference='Stop';"
+        "$ErrorActionPreference='Stop';" + PS_SDJ +
         "try{"
         "$s=New-Object -ComObject Schedule.Service;$s.Connect();"
         f"$f=$s.GetFolder('{TASK_FOLDER.rstrip(chr(92))}');$t=$f.GetTask('{leaf}');"
-        "$tsd=$null;$fsd=$null;try{$tsd=[string]$t.GetSecurityDescriptor(7)}catch{};"
-        "try{$fsd=[string]$f.GetSecurityDescriptor(7)}catch{};"
+        "$tsd=$null;$fsd=$null;try{$tsd=SDJ([string]$t.GetSecurityDescriptor(7))}catch{};"
+        "try{$fsd=SDJ([string]$f.GetSecurityDescriptor(7))}catch{};"
         "$o=[ordered]@{found=$true;state=[int]$t.State;last_result=[int64]$t.LastTaskResult;"
         "xml=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t.Xml));taskSD=$tsd;folderSD=$fsd}"
         "}catch{"
         "$e=$_.Exception;while($e.InnerException){$e=$e.InnerException};"
         "$o=[ordered]@{found=$false;hresult=('0x{0:X8}' -f $e.HResult);message=[string]$e.Message}"
         "};"
-        "$o|ConvertTo-Json -Compress"
+        "$o|ConvertTo-Json -Compress -Depth 8"
     )
 
 
@@ -970,8 +972,8 @@ class TaskInfo:
     xml: str
     state: str
     last_result: Optional[int]
-    task_sddl: Optional[str] = None
-    folder_sddl: Optional[str] = None
+    task_sddl: object = None  # structured descriptor (service_task_acl) or None
+    folder_sddl: object = None
 
 
 def _powershell(script: str) -> list:
@@ -1018,8 +1020,8 @@ def query_task(runner: Optional[Runner] = None, leaf: str = TASK_LEAF) -> Option
     last = data.get("last_result")
     task_sd, folder_sd = data.get("taskSD"), data.get("folderSD")
     return TaskInfo(xml, state, last if isinstance(last, int) else None,
-                    task_sd if isinstance(task_sd, str) else None,
-                    folder_sd if isinstance(folder_sd, str) else None)
+                    task_sd if isinstance(task_sd, (dict, str)) else None,
+                    folder_sd if isinstance(folder_sd, (dict, str)) else None)
 
 
 def query_task_xml(runner: Optional[Runner] = None, leaf: str = TASK_LEAF) -> Optional[str]:
@@ -1208,14 +1210,14 @@ TASK_CREATE, TASK_CREATE_OR_UPDATE = 2, 6
 LOGON_TYPES = {"Password": 1, "S4U": 2, "InteractiveToken": 3}
 
 
-def _com_payload_script(payload: dict, body: str) -> str:
+def _com_payload_script(payload: dict, body: str, prelude: str = "") -> str:
     """A COM script whose inputs travel base64(JSON) (no quoting of paths,
     SIDs or SDDL into PowerShell source)."""
     import base64
 
     b64 = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
     return (
-        "$ErrorActionPreference='Stop';"
+        "$ErrorActionPreference='Stop';" + prelude +
         f"$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b64}'))|ConvertFrom-Json;"
         "try{$s=New-Object -ComObject Schedule.Service;$s.Connect();" + body +
         "}catch{$e=$_.Exception;while($e.InnerException){$e=$e.InnerException};"
@@ -1250,7 +1252,8 @@ def ensure_task_folder(runner: Runner, user_sid: str) -> str:
         "$c=$false;try{$f=$s.GetFolder($p.folder)}catch{$h=$_.Exception;while($h.InnerException){$h=$h.InnerException};"
         "if($h.HResult -notin @(-2147024894,-2147024893)){throw};"
         "$f=$s.GetFolder('\\').CreateFolder($p.name,$p.sddl);$c=$true};"
-        "[ordered]@{ok=$true;created=$c;sddl=[string]$f.GetSecurityDescriptor(7)}|ConvertTo-Json -Compress",
+        "[ordered]@{ok=$true;created=$c;sddl=(SDJ([string]$f.GetSecurityDescriptor(7)))}|ConvertTo-Json -Compress -Depth 6",
+        prelude=acl.PS_SDJ,
     )
     data = _com_json(runner, script, f"preparing the task folder {TASK_FOLDER}")
     problems = acl._object_problems(data.get("sddl"), user_sid, folder=True)

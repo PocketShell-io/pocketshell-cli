@@ -19,9 +19,10 @@ helper accept and refuse exactly the same descriptors:
   P control, so the task need not be protected (its folder must be).
 
 Only the task-object check lives here. Filesystem and private-desktop guards
-are separate and are NOT weakened by it. Descriptors arrive as SDDL from
-``IRegisteredTask/ITaskFolder.GetSecurityDescriptor(7)``; this parser accepts
-the canonical SDDL subset those return and refuses anything else.
+are separate and are NOT weakened by it. From the real scheduler the
+descriptors arrive structured (owner, control, ACE type/flags/mask/SID),
+converted by RawSecurityDescriptor in the COM query, exactly what their
+function inspects; SDDL strings (unit tests, controls) are parsed here.
 """
 
 from __future__ import annotations
@@ -182,14 +183,49 @@ def parse_sddl(sddl: str) -> Descriptor:
     return Descriptor(owner, control, dacl)
 
 
-def _object_problems(sddl: Optional[str], owner_sid: str, *, folder: bool) -> list:
+# Structured descriptor, as the service's COM query emits it from
+# System.Security.AccessControl.RawSecurityDescriptor (the same object their
+# PowerShell function inspects; SIDs fully resolved, so machine-relative SDDL
+# aliases such as LA/LG never reach this module from the real scheduler):
+#   {"owner": "S-1-…"|None, "control": int, "dacl": None | [
+#       {"type": int, "flags": int, "mask": int, "sid": "S-1-…"|None,
+#        "common": bool, "callback": bool}, …]}
+_ACE_TYPES = {"A": 0, "D": 1, "OA": 5, "OD": 6, "XA": 9, "XD": 10, "ZA": 11, "XU": 13, "AU": 2, "ML": 17}
+_ACE_FLAGS = {"CI": 0x2, "OI": 0x1, "NP": 0x4, "IO": 0x8, "ID": 0x10, "SA": 0x40, "FA": 0x80}
+
+
+def from_sddl(sddl: str) -> dict:
+    """The structured form of an SDDL string (unit tests / folder readback)."""
+    sd = parse_sddl(sddl)
+    dacl = None
+    if sd.dacl is not None:
+        dacl = []
+        for ace in sd.dacl:
+            flags = 0
+            for i in range(0, len(ace.flags), 2):
+                flags |= _ACE_FLAGS.get(ace.flags[i:i + 2], 0x100)
+            ace_type = _ACE_TYPES.get(ace.type, 255)
+            dacl.append({"type": ace_type, "flags": flags, "mask": ace.mask, "sid": ace.sid,
+                         "common": ace_type in (0, 1, 2, 9, 10, 13), "callback": ace.conditional or ace_type in (9, 10, 11, 13)})
+    return {"owner": sd.owner, "control": sd.control, "dacl": dacl}
+
+
+def _object_problems(descriptor, owner_sid: str, *, folder: bool) -> list:
     what = "task folder" if folder else "task"
-    if sddl is None:
+    if descriptor is None:
         return [f"{what} security descriptor is unavailable"]
+    if isinstance(descriptor, str):
+        try:
+            descriptor = from_sddl(descriptor)
+        except SddlError as exc:
+            return [f"{what} security descriptor refused ({exc})"]
     try:
-        sd = parse_sddl(sddl)
-    except SddlError as exc:
-        return [f"{what} security descriptor refused ({exc})"]
+        sd = Descriptor(
+            descriptor.get("owner"), int(descriptor.get("control")),
+            None if descriptor.get("dacl") is None else tuple(descriptor["dacl"]),
+        )
+    except (AttributeError, TypeError, ValueError):
+        return [f"{what} security descriptor is malformed"]
     if sd.owner != owner_sid or not sd.control & SE_DACL_PRESENT or sd.dacl is None:
         return [f"{what} object owner/non-null DACL refused (owner {sd.owner})"]
     if sd.control & ~ALLOWED_CONTROL:
@@ -200,25 +236,27 @@ def _object_problems(sddl: Optional[str], owner_sid: str, *, folder: bool) -> li
     full: set = set()
     principal_read = 0
     for ace in sd.dacl:
-        if ace.type != "A" or ace.flags or ace.conditional:
-            return [f"{what} ACE type/inheritance/condition refused ({ace.type};{ace.flags})"]
-        if ace.sid not in trusted:
-            return [f"{what} foreign trustee {ace.sid} refused"]
+        if not isinstance(ace, dict) or not ace.get("common") or ace.get("type") != 0 or ace.get("flags") != 0 \
+                or ace.get("callback"):
+            return [f"{what} ACE type/inheritance/condition refused ({ace})"]
+        sid, mask = ace.get("sid"), int(ace.get("mask", -1)) & 0xFFFFFFFF
+        if sid not in trusted:
+            return [f"{what} foreign trustee {sid} refused"]
         full_masks = (GENERIC_ALL, FILE_ALL_ACCESS) if folder else (FILE_ALL_ACCESS,)
-        if ace.mask in full_masks:
-            if ace.sid in full:
-                return [f"{what} duplicate full-control ACE for {ace.sid} refused"]
-            full.add(ace.sid)
-        elif not folder and ace.sid == owner_sid and ace.mask == FILE_GENERIC_READ and principal_read == 0:
+        if mask in full_masks:
+            if sid in full:
+                return [f"{what} duplicate full-control ACE for {sid} refused"]
+            full.add(sid)
+        elif not folder and sid == owner_sid and mask == FILE_GENERIC_READ and principal_read == 0:
             principal_read = 1
         else:
-            return [f"{what} unexpected access mask 0x{ace.mask:X} / duplicate principal read for {ace.sid} refused"]
+            return [f"{what} unexpected access mask 0x{mask:X} / duplicate principal read for {sid} refused"]
     if full != set(trusted):
         return [f"{what} required full-control trustees absent ({sorted(set(trusted) - full)})"]
     return []
 
 
-def task_object_problems(task_sddl: Optional[str], folder_sddl: Optional[str], owner_sid: str) -> list:
+def task_object_problems(task_sddl, folder_sddl, owner_sid: str) -> list:
     """[] when both the task and its parent folder satisfy contract ec8534aa
     (folder first, as AssertTaskObjectAuthority checks parentSD then sd)."""
     return _object_problems(folder_sddl, owner_sid, folder=True) or \
@@ -233,3 +271,17 @@ def task_sddl(owner_sid: str) -> str:
 def folder_sddl(owner_sid: str) -> str:
     """Requested \\PocketShell folder descriptor: protected, exact trusted GA."""
     return f"O:{owner_sid}D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})"
+
+
+# PowerShell: SDDL -> the structured form above via RawSecurityDescriptor.
+PS_SDJ = (
+    "function SDJ($x){if(-not $x){return $null};"
+    "$r=New-Object Security.AccessControl.RawSecurityDescriptor($x);$d=$null;"
+    "if($null -ne $r.DiscretionaryAcl){$d=@(foreach($a in $r.DiscretionaryAcl){"
+    "$sid=$null;if($a -is [Security.AccessControl.KnownAce]){$sid=$a.SecurityIdentifier.Value};"
+    "$m=$null;if($a -is [Security.AccessControl.KnownAce]){$m=[BitConverter]::ToUInt32([BitConverter]::GetBytes([int32]$a.AccessMask),0)};"
+    "[ordered]@{type=[int]$a.AceType;flags=[int]$a.AceFlags;mask=$m;sid=$sid;"
+    "common=($a -is [Security.AccessControl.CommonAce]);callback=[bool]$a.IsCallback}})};"
+    "$o=$null;if($r.Owner){$o=$r.Owner.Value};"
+    "[ordered]@{owner=$o;control=[int]$r.ControlFlags;dacl=$d;sddl=$x}};"
+)

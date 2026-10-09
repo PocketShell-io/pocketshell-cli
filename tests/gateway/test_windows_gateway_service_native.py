@@ -600,7 +600,9 @@ def test_task_object_security_contract_on_the_real_scheduler(layout):
     sd = _read_task_security("GatewayLink")
     print("REAL task SD:", sd["task"])
     print("REAL folder SD:", sd["folder"])
-    assert acl.task_object_problems(sd["task"], sd["folder"], sid) == []
+    info = win.query_task(None, "GatewayLink")  # the service's own structured readback
+    print("service structured task SD:", info.task_sddl)
+    assert acl.task_object_problems(info.task_sddl, info.folder_sddl, sid) == []
     assert _oracle([(sd["task"], sd["folder"], sid)]) == [True], "the native frozen validator disagrees"
     status = _service("status", "--json")
     data = json.loads(status.stdout)
