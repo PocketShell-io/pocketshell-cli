@@ -173,7 +173,7 @@ def test_real_task_round_trip(layout):
     if logon_type == "S4U":
         assert markers, "the task never started the helper"
     if markers:
-        marker = json.loads(markers[0].read_text())
+        marker = json.loads(markers[0].read_text(encoding="utf-8"))
         print("marker:", marker)
         assert marker["args"][1:] == ["run", "--config-dir", config]
         assert Path(marker["exe"]).resolve() == Path(helper).resolve()
@@ -202,7 +202,7 @@ def test_real_task_round_trip(layout):
     assert gone.exit_code == 0 and "removed" in gone.output
     assert _query_xml() is None
     if markers:
-        pid = json.loads(markers[0].read_text())["pid"]
+        pid = json.loads(markers[0].read_text(encoding="utf-8"))["pid"]
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             if pid not in {p["pid"] for p in win.WindowsApi().processes("pocketshell-link.exe")}:
