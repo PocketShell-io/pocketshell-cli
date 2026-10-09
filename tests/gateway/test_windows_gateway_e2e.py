@@ -430,6 +430,13 @@ def test_console_ctrl_c_ends_the_session_cleanly(tmp_path, client, remote_io):
     assert "finished" not in res["stdout"], res
 
 
+def _qualifier_cat_args() -> str:
+    return (
+        '-c "import msvcrt,os,shutil,sys;msvcrt.setmode(0,os.O_BINARY);'
+        'msvcrt.setmode(1,os.O_BINARY);shutil.copyfileobj(sys.stdin.buffer,sys.stdout.buffer)"'
+    )
+
+
 def test_fleet_qualifier_passes_against_this_host(tmp_path, client, sshd, gateway):
     """scripts/windows-gateway-qualify.py — what the fleet runs on its real
     laptops — must itself pass here, end to end, non-interactively."""
@@ -441,7 +448,9 @@ def test_fleet_qualifier_passes_against_this_host(tmp_path, client, sshd, gatewa
             [sys.executable, str(script), "--device-id", DEVICE, "--pinned-key", sshd["host_pub"],
              "--user", sshd["user"], "--identity", sshd["key"],
              "--server", f"ws://127.0.0.1:{gateway.port}", "--trust-gateway", "127.0.0.1", "--insecure-dev",
-             "--remote-os", "windows", "--json", str(receipt)],
+             "--remote-os", "windows", "--json", str(receipt),
+             # the sshd session's PATH has no python: name it explicitly
+             "--remote-cat", f"{sys.executable} " + _qualifier_cat_args()],
             stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT,
             env=client.env(), cwd=client.cwd,
         )

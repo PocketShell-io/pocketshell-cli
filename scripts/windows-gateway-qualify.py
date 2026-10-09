@@ -43,6 +43,10 @@ import time
 
 CREATE_NO_WINDOW = 0x08000000
 MARK = "pocketshell-qualify"
+WINDOWS_REMOTE_CAT = (
+    'python -c "import msvcrt,os,shutil,sys;msvcrt.setmode(0,os.O_BINARY);'
+    'msvcrt.setmode(1,os.O_BINARY);shutil.copyfileobj(sys.stdin.buffer,sys.stdout.buffer)"'
+)
 
 
 # --------------------------------------------------------------------------
@@ -191,8 +195,19 @@ class Qualifier:
         return argv + self.server_args() + ["--", *extra, *remote]
 
     def run(self, argv, stdin: bytes = b"", timeout: float = 0):
+        """subprocess.run, but a timeout kills the WHOLE tree (ssh.exe and
+        the proxy keep the pipes open otherwise) and is reported as exit
+        -1 instead of hanging."""
         timeout = timeout or self.a.timeout
-        return subprocess.run(argv, input=stdin, capture_output=True, env=self.env, timeout=timeout)
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=self.env)
+        try:
+            out, err = proc.communicate(stdin, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_tree(proc.pid)
+            out, err = proc.communicate()
+            return subprocess.CompletedProcess(argv, -1, out, err + b"\n(timed out)")
+        return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
     def remote(self, kind: str, *arg: str) -> list[str]:
         win = self.a.remote_os == "windows"
@@ -201,10 +216,13 @@ class Qualifier:
         if kind == "exit":
             return ["exit", arg[0]]
         if kind == "cat":
+            if self.a.remote_cat:
+                return [self.a.remote_cat]
             if win:
-                return ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                        '"$i=[Console]::OpenStandardInput();$o=[Console]::OpenStandardOutput();'
-                        '$i.CopyTo($o);$o.Flush()"']
+                # A binary-safe stdin->stdout echo needs a real program on a
+                # Windows host (cmd has none, and powershell.exe's host
+                # interferes with redirected stdin): Python on PATH.
+                return [WINDOWS_REMOTE_CAT]
             return ["cat"]
         if kind == "sleep":
             seconds = arg[0]
@@ -477,6 +495,8 @@ def main(argv=None) -> int:
     ap.add_argument("--trust-gateway")
     ap.add_argument("--insecure-dev", action="store_true", help="DEV ONLY loopback ws://")
     ap.add_argument("--remote-os", choices=("posix", "windows"), default="posix")
+    ap.add_argument("--remote-cat", help="remote command echoing stdin to stdout byte-exactly "
+                    "(default: `cat`; Windows hosts: `python -c ...` from PATH)")
     ap.add_argument("--python", help="interpreter running pocketshell (default: this one)")
     ap.add_argument("--json", help="also write the receipt as JSON here")
     ap.add_argument("--timeout", type=float, default=90, help="per-session timeout in seconds (default 90)")

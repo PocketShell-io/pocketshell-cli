@@ -131,6 +131,8 @@ qualifier with the interpreter you use for pocketshell:
     --device-id home-lab --pinned-key "ssh-ed25519 AAAA…" `
     --user me --identity C:\Users\me\.ssh\id_ed25519 `
     --remote-os posix --json $env:TEMP\ps-qualify.json
+# Windows host: --remote-os windows (needs `python` on the host PATH, or pass
+# --remote-cat "<remote command that echoes stdin to stdout byte-exactly>")
 # custom gateway: add --server wss://gw.example --trust-gateway gw.example
 ```
 
@@ -140,8 +142,9 @@ global: it never logs in or out, never pins, and leaves ssh config, PATH,
 profiles and DefaultShell alone. The wrong-pin check uses a throwaway pin
 file. It shows no window: sessions share your console, and the Ctrl+C
 check runs in a hidden console of its own, so your console never gets a
-signal. Use `--remote-os windows` when the host is Windows; it then uses
-cmd/PowerShell remote commands.
+signal. Use `--remote-os windows` when the host is Windows. It then uses
+cmd remote commands, and `python` from the host's PATH for the byte-exact
+echo.
 
 ### Interactive checklist (cannot be automated)
 
