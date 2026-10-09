@@ -68,6 +68,7 @@ func main() {
 func daemon(config string) int {
 	data, err := os.ReadFile(config)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "fake daemon: config:", err)
 		return 3
 	}
 	values := map[string]string{}
@@ -79,10 +80,12 @@ func daemon(config string) int {
 	}
 	keyBytes, err := os.ReadFile(values["hostkey"])
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "fake daemon: host key:", err)
 		return 4
 	}
 	signer, err := ssh.ParsePrivateKey(keyBytes)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "fake daemon: parse host key:", err)
 		return 5
 	}
 	cfg := &ssh.ServerConfig{
@@ -93,8 +96,10 @@ func daemon(config string) int {
 	cfg.AddHostKey(signer)
 	ln, err := net.Listen("tcp", net.JoinHostPort(values["listenaddress"], values["port"]))
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "fake daemon: listen:", err)
 		return 6
 	}
+	fmt.Fprintln(os.Stderr, "fake daemon: listening on", ln.Addr())
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -192,6 +197,10 @@ func guardian(manifestPath string) int {
 	cmd := exec.Command(m.Daemon, "-D", "-f", m.Config)
 	cmd.Dir = m.Root
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	if logFile, err := os.Create(filepath.Join(genDir, "daemon.stderr.log")); err == nil {
+		cmd.Stdout, cmd.Stderr = logFile, logFile
+		defer logFile.Close()
+	}
 	if err := cmd.Start(); err != nil {
 		return closeWith(17, "daemon start")
 	}

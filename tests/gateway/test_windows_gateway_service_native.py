@@ -317,7 +317,7 @@ def _diagnose(endpoint, leaf):
         print("task query failed:", exc)
     for path in sorted(endpoint["state"].rglob("*")):
         print("state:", path.relative_to(endpoint["state"]))
-        if path.suffix == ".json":
+        if path.suffix in (".json", ".log"):
             print("   ", path.read_text(encoding="utf-8", errors="replace")[:2000])
 
 
