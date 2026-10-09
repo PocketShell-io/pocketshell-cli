@@ -618,17 +618,14 @@ def agent_install(user_data, catalog, staged, dry_run, as_json, operation_id):
               help="Owner-only protected root (e.g. <userData>\\managed-runtime).")
 @click.option("--resources-root", "resources_roots", multiple=True, metavar="DIR",
               help="Shipped resources root (digest-anchored, reparse-free).")
-@click.option("--document", "documents", multiple=True, metavar="PATH", help=".json, bytes returned (<=64 KiB).")
-@click.option("--binary", "binaries", multiple=True, metavar="PATH", help="size + sha256 only.")
-@click.option("--directory", "directories", multiple=True, metavar="DIR")
-@click.option("--inventory", "inventories", multiple=True, metavar="DIR")
+@click.option("--request", "raw_requests", multiple=True, metavar="KIND=PATH",
+              help="Ordered request: document=… (.json, bytes <=64 KiB), binary=… (hash only), "
+                   "directory=…, inventory=…. Results come back 1:1 in this order.")
 @_JSON
-def agent_verify_paths(operation_id, owner_sid, private_roots, resources_roots, documents, binaries, directories,
-                       inventories, as_json):
+def agent_verify_paths(operation_id, owner_sid, private_roots, resources_roots, raw_requests, as_json):
     """Reference path verifier, protocol v2 (exit 0 all ok, 1 refusal, 2 malformed request)."""
     api, _runner = _api_runner()
-    requests = [*(("document", p) for p in documents), *(("binary", p) for p in binaries),
-                *(("directory", p) for p in directories), *(("inventory", p) for p in inventories)]
+    requests = [tuple(r.split("=", 1)) if "=" in r else (r, "") for r in raw_requests]
     _emit_raw(*_agent.verify_paths_command(owner_sid=owner_sid, operation_id=operation_id,
                                            private_roots=private_roots, resources_roots=resources_roots,
                                            requests=requests, api=api))

@@ -147,10 +147,30 @@ jobs:
           go -C tests/gateway/fakeguardian build -mod=readonly -o "$env:RUNNER_TEMP\fakeguardian\fakeguardian.exe" .
           "POCKETSHELL_TEST_FAKE_GUARDIAN=$env:RUNNER_TEMP\fakeguardian\fakeguardian.exe" >> $env:GITHUB_ENV
 
+      # The bootstrap verifier (agreement v3.1 §11.3): static, reproducible.
+      # Built twice into different directories; the bytes must be identical.
+      - name: Build pocketshell-verify.exe (reproducible) and run its Go tests
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go -C native/verify test -mod=readonly ./...
+          foreach ($d in "a", "b") {
+            go -C native/verify build -mod=readonly -trimpath -buildvcs=false '-ldflags=-s -w -buildid=' -o "$env:RUNNER_TEMP\verify-$d\pocketshell-verify.exe" .
+            if ($LASTEXITCODE) { exit 1 }
+          }
+          $a = (Get-FileHash "$env:RUNNER_TEMP\verify-a\pocketshell-verify.exe").Hash
+          $b = (Get-FileHash "$env:RUNNER_TEMP\verify-b\pocketshell-verify.exe").Hash
+          "pocketshell-verify.exe sha256 a=$a b=$b (go $(go env GOVERSION))"
+          if ($a -ne $b) { throw "pocketshell-verify.exe is not reproducible" }
+          "POCKETSHELL_TEST_VERIFY_EXE=$env:RUNNER_TEMP\verify-a\pocketshell-verify.exe" >> $env:GITHUB_ENV
+
       - name: Windows gateway service (real scheduled task)
         env:
           POCKETSHELL_WINDOWS_SERVICE_E2E: "1"
-        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_service_native.py tests/gateway/test_windows_gateway_user_agent_native.py tests/gateway/test_windows_agent_install_native.py
+        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_service_native.py tests/gateway/test_windows_gateway_user_agent_native.py tests/gateway/test_windows_agent_install_native.py tests/gateway/test_windows_verify_native.py
 
       - name: Prepare OpenSSH Server and a spaced interpreter (CI only)
         shell: pwsh

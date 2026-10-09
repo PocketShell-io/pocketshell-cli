@@ -415,3 +415,24 @@ def test_cli_install_requires_a_binding(agent):  # noqa: F811
     doc, code = agent_mod.install_command(user_data=USER_DATA, catalog=CATALOG, staged=STAGED, dry_run=False,
                                           api=agent["api"], runner=None, paths=staged_paths(), folders=FOLDERS)
     assert code == 1 and doc["error"]["code"] == "not-bound" and doc["receipt"] is None
+
+
+def test_cli_verify_paths_keeps_interleaved_request_order(monkeypatch):
+    """Fleet ManagedVerifierReply requires results 1:1 in the REQUEST order."""
+    from click.testing import CliRunner
+
+    from pocketshell.cli import cli
+
+    seen = {}
+
+    def fake(**kw):
+        seen.update(kw)
+        return {"version": 2}, 0
+
+    monkeypatch.setattr(agent_mod, "verify_paths_command", fake)
+    result = CliRunner().invoke(cli, ["gateway", "agent", "verify-paths", "--operation-id", "o", "--owner-sid", USER_SID,
+                                      "--private-root", PRIV, "--request", "binary=" + PRIV + "\\a.exe",
+                                      "--request", "document=" + PRIV + "\\b.json",
+                                      "--request", "binary=" + PRIV + "\\c.exe", "--json"])
+    assert result.exit_code == 0, result.output
+    assert [k for k, _p in seen["requests"]] == ["binary", "document", "binary"]
