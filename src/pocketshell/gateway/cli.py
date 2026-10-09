@@ -589,4 +589,43 @@ def agent_stop(timeout, as_json, operation_id):
                        operation_id=operation_id), as_json)
 
 
+def _emit_raw(doc, code):
+    import json as _json
+
+    click.echo(_json.dumps(doc, indent=1, sort_keys=False))
+    raise SystemExit(code)
+
+
+@agent_group.command("install")
+@click.option("--user-data", required=True, metavar="DIR", help="The Desktop app's userData directory.")
+@click.option("--catalog", required=True, metavar="PATH", help="resources/host-runtime-catalog.json (v2).")
+@click.option("--staged", required=True, metavar="DIR", help="The staged release closure to install.")
+@click.option("--dry-run", is_flag=True, help="Verify and print the receipt; write nothing.")
+@_JSON
+@_OPERATION_ID
+def agent_install(user_data, catalog, staged, dry_run, as_json, operation_id):
+    """Install the catalogued ordinary-v2 runtime and write authority.json (PROPOSED v3)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit_raw(*_agent.install_command(user_data=user_data, catalog=catalog, staged=staged, dry_run=dry_run,
+                                      api=api, runner=runner, operation_id=operation_id))
+
+
+@agent_group.command("verify-paths")
+@click.option("--owner-sid", required=True, metavar="SID", help="The expected owner (the current user).")
+@click.option("--file", "files", multiple=True, metavar="PATH", help="Private file: owner-only, by handle.")
+@click.option("--anchored-file", "anchored", multiple=True, metavar="PATH",
+              help="Digest-anchored file (no ACL shape required; reparse-free, by handle).")
+@click.option("--directory", "directories", multiple=True, metavar="DIR", help="Private directory.")
+@click.option("--inventory", "inventories", multiple=True, metavar="DIR", help="List a private tree.")
+@click.option("--max-bytes", type=int, default=1048576, help="Return bytes for files up to this size.")
+@_JSON
+def agent_verify_paths(owner_sid, files, anchored, directories, inventories, max_bytes, as_json):
+    """Trusted native path verifier for the Desktop app (exit 0 all ok, 1 refusal)."""
+    api, _runner = _api_runner()
+    _emit_raw(*_agent.verify_paths_command(owner_sid=owner_sid, files=files, anchored=anchored,
+                                           directories=directories, inventories=inventories,
+                                           max_bytes=max_bytes, api=api))
+
+
 gateway_group.add_command(agent_group)

@@ -666,3 +666,58 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
             return doc, EXIT_ERROR
         return doc, EXIT_READY
     return _guarded(operation_id, run)
+
+
+# --- ordinary-v2 producer (agreement v3 §10, PROPOSED) ------------------------------------
+
+
+def install_command(*, user_data, catalog, staged, dry_run, api, runner, operation_id=None, paths=None,
+                    folders=None) -> tuple:
+    """`gateway agent install`: copy the catalogued closure and write the
+    public-only authority receipt. Never starts, enrolls, or reads secrets."""
+    from pocketshell import __version__
+    from pocketshell.gateway import service_agent_install as inst
+
+    def doc(ok, receipt=None, error=None):
+        return {"version": API_VERSION, "operationId": operation_id, "action": "install", "ok": ok,
+                "dryRun": bool(dry_run), "receipt": receipt,
+                "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600)}}
+
+    if sys.platform != "win32":
+        return doc(False, error=AgentError("unsupported-platform", "the ordinary-v2 runtime is Windows-only")), \
+            EXIT_ERROR
+    try:
+        with _OperationLock():
+            b, _m, host_key = load_binding(api=api, runner=runner, revalidate=True)
+            show = common.parse_show(common.check_enrollment(b["helper"], b["configDir"], runner))
+            public = {**b, "hostKeyFingerprint": host_key.fingerprint}
+            receipt = inst.install_runtime(
+                user_data=user_data, catalog_path=catalog, staged=staged, binding=public,
+                server=show.get("server", ""), owner_sid=api.current_sid(),
+                paths=paths or inst.NativePaths(api), folders=folders or inst.known_folders(),
+                cli_version=__version__, dry_run=dry_run)
+    except (AgentError, inst.InstallError) as exc:
+        return doc(False, error=exc), EXIT_USAGE if getattr(exc, "code", "") == "usage" else EXIT_ERROR
+    except Exception as exc:  # noqa: BLE001 - a refusal, never a traceback
+        return doc(False, error=AgentError("error", str(exc) or type(exc).__name__)), EXIT_ERROR
+    return doc(True, receipt), EXIT_READY
+
+
+def verify_paths_command(*, owner_sid, files, anchored, directories, inventories, max_bytes, api,
+                         paths=None) -> tuple:
+    """`gateway agent verify-paths`: the trusted native path verifier."""
+    from pocketshell.gateway import service_agent_install as inst
+
+    if sys.platform != "win32":
+        return {"version": inst.VERIFY_VERSION, "ownerSid": owner_sid, "ok": False, "results": [],
+                "problem": "Windows-only"}, EXIT_ERROR
+    if not 0 <= max_bytes <= inst.MAX_DOC:
+        return {"version": inst.VERIFY_VERSION, "ownerSid": owner_sid, "ok": False, "results": [],
+                "problem": "--max-bytes must be in [0, 1048576]"}, EXIT_USAGE
+    try:
+        current = api.current_sid()
+    except Exception:  # noqa: BLE001
+        current = None
+    return inst.verify_paths(owner_sid=owner_sid, files=files, anchored=anchored, directories=directories,
+                             inventories=inventories, max_bytes=max_bytes, paths=paths or inst.NativePaths(api),
+                             current_sid=current)

@@ -1,0 +1,690 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pocketshell:ordinary-v2-authority:v3-proposed",
+  "title": "PocketShell ordinary-v2 installed-runtime authority (user-background-api-agreement v3, PROPOSED)",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "release": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,80}$"
+    },
+    "sid": {
+      "type": "string",
+      "pattern": "^S-1-5-21-[0-9]+(-[0-9]+){3}$"
+    },
+    "absPath": {
+      "type": "string",
+      "pattern": "^[A-Za-z]:[\\\\/][^\\u0000\\r\\n]*$",
+      "maxLength": 4096
+    },
+    "relPath": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.\\-]+(/[A-Za-z0-9_.\\-]+)*$",
+      "maxLength": 1024
+    },
+    "birth": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pinned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceSHA256"
+      ],
+      "properties": {
+        "sourceSHA256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "release",
+        "source",
+        "platform",
+        "api",
+        "lineage",
+        "files"
+      ],
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "release": {
+          "$ref": "#/$defs/release"
+        },
+        "source": {
+          "$ref": "#/$defs/commit"
+        },
+        "platform": {
+          "const": "win32-x64"
+        },
+        "api": {
+          "const": "ordinary-v2"
+        },
+        "lineage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cliVersion",
+            "cliCommit",
+            "agentApi",
+            "guardian",
+            "nativeApi",
+            "policy",
+            "interpreter",
+            "helper",
+            "lockSHA256"
+          ],
+          "properties": {
+            "cliVersion": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([.+-][A-Za-z0-9.]+)?$"
+            },
+            "cliCommit": {
+              "$ref": "#/$defs/commit"
+            },
+            "agentApi": {
+              "const": 1
+            },
+            "guardian": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "abi",
+                "sourceSHA256"
+              ],
+              "properties": {
+                "abi": {
+                  "const": "6cf7ae85"
+                },
+                "sourceSHA256": {
+                  "$ref": "#/$defs/sha256"
+                }
+              }
+            },
+            "nativeApi": {
+              "$ref": "#/$defs/pinned"
+            },
+            "policy": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "sourceSHA256"
+              ],
+              "properties": {
+                "version": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "sourceSHA256": {
+                  "$ref": "#/$defs/sha256"
+                }
+              }
+            },
+            "interpreter": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "distribution",
+                "version",
+                "sha256"
+              ],
+              "properties": {
+                "distribution": {
+                  "const": "python-build-standalone"
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^3\\.[0-9]+\\.[0-9]+$"
+                },
+                "sha256": {
+                  "$ref": "#/$defs/sha256"
+                }
+              }
+            },
+            "helper": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "sha256"
+              ],
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "sha256": {
+                  "$ref": "#/$defs/sha256"
+                }
+              }
+            },
+            "lockSHA256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "files": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "sha256",
+              "role"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/relPath"
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "role": {
+                "enum": [
+                  "cli",
+                  "interpreter",
+                  "guardian",
+                  "native-api",
+                  "policy",
+                  "helper",
+                  "module"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "$comment": "Cross-field (enforced by producer and consumer, not expressible here): exactly one file per non-module role, >=1 module; lineage.cliCommit == source; lineage guardian/nativeApi/policy sourceSHA256, interpreter.sha256, helper.sha256 equal the sha256 of the file with the matching role; no case-colliding paths; the catalogued set equals the regular-file inventory of releases/<release>."
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "release",
+        "catalogSHA256",
+        "ownerSid",
+        "binding",
+        "environment",
+        "location",
+        "installer"
+      ],
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "release": {
+          "$ref": "#/$defs/release"
+        },
+        "catalogSHA256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "ownerSid": {
+          "$ref": "#/$defs/sid"
+        },
+        "binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "deviceId",
+            "manifest",
+            "manifestSHA256",
+            "configDir",
+            "port",
+            "hostKeyFingerprint",
+            "server"
+          ],
+          "properties": {
+            "deviceId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$"
+            },
+            "manifest": {
+              "$ref": "#/$defs/absPath"
+            },
+            "manifestSHA256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "configDir": {
+              "$ref": "#/$defs/absPath"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "hostKeyFingerprint": {
+              "type": "string",
+              "pattern": "^SHA256:[A-Za-z0-9+/]{43}$"
+            },
+            "server": {
+              "type": "string",
+              "pattern": "^wss://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$"
+            }
+          }
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "SystemDrive",
+            "SystemRoot",
+            "ProgramData",
+            "USERPROFILE",
+            "LOCALAPPDATA",
+            "TEMP",
+            "TMP"
+          ],
+          "properties": {
+            "SystemDrive": {
+              "type": "string",
+              "pattern": "^[A-Za-z]:$"
+            },
+            "SystemRoot": {
+              "$ref": "#/$defs/absPath"
+            },
+            "ProgramData": {
+              "$ref": "#/$defs/absPath"
+            },
+            "USERPROFILE": {
+              "$ref": "#/$defs/absPath"
+            },
+            "LOCALAPPDATA": {
+              "$ref": "#/$defs/absPath"
+            },
+            "TEMP": {
+              "$ref": "#/$defs/absPath"
+            },
+            "TMP": {
+              "$ref": "#/$defs/absPath"
+            }
+          }
+        },
+        "location": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "root",
+            "ownerSid",
+            "protectedDACL",
+            "allowTrustees",
+            "reparseFree",
+            "verifier"
+          ],
+          "properties": {
+            "root": {
+              "$ref": "#/$defs/absPath"
+            },
+            "ownerSid": {
+              "$ref": "#/$defs/sid"
+            },
+            "protectedDACL": {
+              "const": true
+            },
+            "allowTrustees": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "$ref": "#/$defs/sid"
+              }
+            },
+            "reparseFree": {
+              "const": true
+            },
+            "verifier": {
+              "const": "pocketshell gateway agent verify-paths"
+            }
+          }
+        },
+        "installer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cliVersion",
+            "cliCommit",
+            "installedAt"
+          ],
+          "properties": {
+            "cliVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "cliCommit": {
+              "$ref": "#/$defs/commit"
+            },
+            "installedAt": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+            }
+          }
+        }
+      },
+      "$comment": "Cross-field: ownerSid == location.ownerSid == allowTrustees[0] == measured current owner; TEMP == TMP == location.root + '\\\\tmp'; location.root == <userData>\\\\managed-runtime; catalogSHA256 == shipped anchor (never this receipt's own claim)."
+    },
+    "launch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session",
+        "elevated",
+        "inJob",
+        "callerJobKillOnClose",
+        "brokeAway"
+      ],
+      "properties": {
+        "session": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "elevated": {
+          "const": false
+        },
+        "inJob": {
+          "const": false
+        },
+        "callerJobKillOnClose": {
+          "type": "boolean"
+        },
+        "brokeAway": {
+          "type": "boolean"
+        }
+      }
+    },
+    "attestation": {
+      "$comment": "Additive to the JSON-v1 agent document. Live (ready/starting) requirements; session must equal owner.session; outbound.helperSHA256 must equal the catalog helper sha256.",
+      "type": "object",
+      "required": [
+        "endpoint",
+        "outbound"
+      ],
+      "properties": {
+        "endpoint": {
+          "type": "object",
+          "required": [
+            "launch",
+            "guardianLaunch",
+            "absenceVerified"
+          ],
+          "properties": {
+            "launch": {
+              "$ref": "#/$defs/launch"
+            },
+            "guardianLaunch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pid",
+                "creationFILETIME",
+                "running"
+              ],
+              "properties": {
+                "pid": {
+                  "$ref": "#/$defs/pid"
+                },
+                "creationFILETIME": {
+                  "$ref": "#/$defs/birth"
+                },
+                "running": {
+                  "const": true
+                }
+              }
+            },
+            "absenceVerified": {
+              "const": false
+            }
+          }
+        },
+        "outbound": {
+          "type": "object",
+          "required": [
+            "launch",
+            "pid",
+            "creationFILETIME",
+            "helperSHA256",
+            "absenceVerified"
+          ],
+          "properties": {
+            "launch": {
+              "$ref": "#/$defs/launch"
+            },
+            "pid": {
+              "$ref": "#/$defs/pid"
+            },
+            "creationFILETIME": {
+              "$ref": "#/$defs/birth"
+            },
+            "helperSHA256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "absenceVerified": {
+              "const": false
+            }
+          }
+        }
+      }
+    },
+    "stoppedAttestation": {
+      "$comment": "An accepted stopped document: both absenceVerified true (custody proven gone, port not served).",
+      "type": "object",
+      "required": [
+        "endpoint",
+        "outbound"
+      ],
+      "properties": {
+        "endpoint": {
+          "type": "object",
+          "required": [
+            "state",
+            "absenceVerified"
+          ],
+          "properties": {
+            "state": {
+              "const": "stopped"
+            },
+            "absenceVerified": {
+              "const": true
+            }
+          }
+        },
+        "outbound": {
+          "type": "object",
+          "required": [
+            "state",
+            "absenceVerified"
+          ],
+          "properties": {
+            "state": {
+              "const": "stopped"
+            },
+            "absenceVerified": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "verifyPathsReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "ownerSid",
+        "ok",
+        "results"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "ownerSid": {
+          "$ref": "#/$defs/sid"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "path",
+                  "canonicalPath",
+                  "ok",
+                  "size",
+                  "sha256",
+                  "bytesBase64",
+                  "problem"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "file"
+                  },
+                  "path": {
+                    "$ref": "#/$defs/absPath"
+                  },
+                  "canonicalPath": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "size": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "sha256": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/sha256"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "bytesBase64": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "problem": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 600
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "path",
+                  "canonicalPath",
+                  "ok",
+                  "problem"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "directory"
+                  },
+                  "path": {
+                    "$ref": "#/$defs/absPath"
+                  },
+                  "canonicalPath": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "problem": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 600
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "path",
+                  "ok",
+                  "files",
+                  "problem"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "inventory"
+                  },
+                  "path": {
+                    "$ref": "#/$defs/absPath"
+                  },
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/relPath"
+                    }
+                  },
+                  "problem": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 600
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
