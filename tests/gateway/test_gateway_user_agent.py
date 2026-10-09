@@ -671,3 +671,33 @@ def test_v31_partial_start_with_unverifiable_custody_is_failed_not_starting(agen
     result, data = run("start", "--json", "--timeout", "0.2")
     assert result.exit_code == 5 and data["error"]["code"] == "start-deadline"
     assert data["state"] == "failed" and data["outbound"]["state"] == "unknown"
+
+
+# --- root review of 1e00f00: UNKNOWN primary guardian identity is never ready ---------
+
+
+@pytest.mark.parametrize("denied", ["denied_birth", "denied_image"])
+def test_r1e00_unknown_primary_guardian_is_not_ready(agent, denied):
+    bind()
+    result, data = run("start", "--json")
+    assert result.exit_code == 0 and data["state"] == "ready"
+    launch = _guardian_launch(agent)
+    setattr(agent["api"], denied, frozenset({launch["pid"]}))
+    result, data = run("status", "--json")
+    assert data["outbound"]["state"] == "running"
+    assert data["endpoint"]["guardianLaunch"]["running"] is None
+    assert data["state"] == "failed" and result.exit_code == 3, data
+    assert any(str(launch["pid"]) in p for p in data["endpoint"]["custodyProblems"])
+    result, data = run("start", "--json")
+    assert result.exit_code == 1 and data["error"]["code"] == "custody-unverifiable"
+
+
+def test_r1e00_ready_requires_the_current_measured_guardian(agent):
+    """READY's guardianPID must be the exact launched guardian, measured alive."""
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    bind()
+    run("start", "--json")
+    os.unlink(agent_mod._path("guardian.json"))  # no current launch measurement at all
+    result, data = run("status", "--json")
+    assert data["state"] != "ready" and result.exit_code == 3, data

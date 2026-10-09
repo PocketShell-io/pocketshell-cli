@@ -457,6 +457,16 @@ def _endpoint_status(m, host_key, api, runner, session: int) -> dict:
     custody = []
     if meta is MALFORMED:
         custody.append("the guardian custody record guardian.json is malformed; it cannot prove absence")
+    elif meta is not None and out["guardianLaunch"]["running"] is None:
+        custody.append(f"the launched guardian {meta['pid']} (birth {meta['creationFILETIME']}) cannot be "
+                       "verified (birth/image query failed); UNKNOWN is never ready or stopped")
+    if ready["ok"]:
+        # READY needs the CURRENT measured guardian: the exact launched identity, alive
+        launched = meta if isinstance(meta, dict) and meta is not MALFORMED else None
+        if launched is None or launched.get("pid") != ready.get("guardianPID") \
+                or out["guardianLaunch"] is None or out["guardianLaunch"]["running"] is not True:
+            custody.append("READY names guardian "
+                           f"{ready.get('guardianPID')}, which is not the measured, running launched guardian")
     for name, rec in _recovery_records("guardian"):
         if rec is MALFORMED or _identity_state(rec, m.python, api) != GONE:
             pid = "?" if rec is MALFORMED else rec["pid"]
