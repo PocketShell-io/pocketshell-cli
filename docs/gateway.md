@@ -367,7 +367,7 @@ pocketshell gateway service uninstall           # stop and remove ONLY the unit/
 | `--helper PATH` | Absolute `pocketshell-link`. Linux default: the normal resolution of §1.1 plus the `version --json` protocol gate. Windows: required (or `POCKETSHELL_GATEWAY_HELPER`). |
 | `--dry-run` | Print the unit file / task XML, the commands and the agent's exact argv; write and register nothing. |
 | `--force` | Replace an existing unit/task (otherwise refused). |
-| `--no-start` | Enable/register only; start it later (e.g. inside an agreed cut-over window). |
+| `--no-start` | Do not start it now. Linux: `enable` only (starts at the next boot/login). Windows: the task is registered **disabled** (the 5-minute watchdog would otherwise start it); `install --force` later enables and starts it. |
 
 What every platform shares:
 
@@ -470,8 +470,8 @@ the task, then waits briefly for the helper process to exit.
 
 **One agent per device:** a new connection supersedes the old one at the
 gateway. Stop any other `pocketshell-link run` for the same enrolled device
-before starting the task (`install --no-start` registers without starting;
-`schtasks /Run /TN \PocketShell\GatewayLink` starts it).
+before starting the task (`install --no-start` registers it disabled;
+`install --force` re-registers it enabled and starts it).
 
 ## 5. Show the enrolled state
 

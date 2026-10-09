@@ -421,6 +421,13 @@ def test_task_xml_laptop_revision5_action():
     assert fields["user_id"] == USER_SID
 
 
+def test_no_start_registers_the_task_disabled():
+    root = ET.fromstring(win._strip_declaration(_xml(enabled=False)))
+    assert root.find("t:Settings/t:Enabled", NS).text == "false"
+    root = ET.fromstring(win._strip_declaration(_xml()))
+    assert root.find("t:Settings/t:Enabled", NS).text == "true"
+
+
 def test_task_xml_escapes_values():
     config = r"C:\Users\a b\keys & <stuff> 'x'"
     text = _xml(config=config)
@@ -649,6 +656,7 @@ def test_windows_install_refuses_existing_without_force(fake_windows):
     with pytest.raises(ServiceError, match="--force"):
         win.plan_install(WIN_HELPER, WIN_CONFIG, force=False, start=True, api=FakeApi())
     plan = win.plan_install(WIN_HELPER, WIN_CONFIG, force=True, start=False, api=FakeApi())
+    assert "<Enabled>false</Enabled>" in plan.xml
     win.apply_install(plan)
     verbs = [c[1] for c in fake_windows.calls if c[0].lower().endswith("schtasks.exe")]
     assert verbs[-3:] == ["/End", "/Create", "/Query"]

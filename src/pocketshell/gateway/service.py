@@ -95,7 +95,15 @@ _CONFIG_DIR_HELP = (
 )
 @click.option("--dry-run", is_flag=True, help="Print the exact unit/task and commands; change nothing.")
 @click.option("--force", is_flag=True, help="Replace an existing unit/task.")
-@click.option("--no-start", is_flag=True, help="Register/enable only; do not start it now.")
+@click.option(
+    "--no-start",
+    is_flag=True,
+    help=(
+        "Do not start it now. Linux: enable only (starts at next boot/login). "
+        "Windows: register the task DISABLED (the watchdog would otherwise start "
+        "it within 5 minutes); `install --force` later enables and starts it."
+    ),
+)
 @_guard
 def install(
     config_dir: Optional[str], helper: Optional[str], dry_run: bool, force: bool, no_start: bool
@@ -138,7 +146,8 @@ def install(
             return
         warnings = backend.apply_install(plan)
         click.echo(f"registered {backend.TASK_NAME} for device {device} as {plan.user_sid}"
-                   + ("" if no_start else " (started)"))
+                   + (" (registered DISABLED; `install --force` enables and starts it)"
+                      if no_start else " (started)"))
     for warning in warnings:
         click.echo(f"warning: {warning}", err=True)
 

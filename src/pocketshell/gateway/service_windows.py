@@ -203,7 +203,12 @@ def _sub(parent, tag, text=None, **attrs):
 
 
 def build_task_xml(
-    helper: str, config_dir: str, user_sid: str, *, logon_type: str = DEFAULT_LOGON_TYPE
+    helper: str,
+    config_dir: str,
+    user_sid: str,
+    *,
+    logon_type: str = DEFAULT_LOGON_TYPE,
+    enabled: bool = True,
 ) -> str:
     """The task definition (plan §3.2 + Revision 5), as an XML string.
 
@@ -254,7 +259,9 @@ def build_task_xml(
     _sub(idle, "RestartOnIdle", "false")
     for tag, value in (
         ("AllowStartOnDemand", "true"),
-        ("Enabled", "true"),
+        # --no-start registers the task DISABLED: otherwise the 5-minute
+        # watchdog trigger would start it anyway within minutes.
+        ("Enabled", "true" if enabled else "false"),
         ("Hidden", "false"),
         ("RunOnlyIfIdle", "false"),
         ("WakeToRun", "false"),
@@ -631,7 +638,7 @@ def plan_install(
     show = common.check_enrollment(binary, config_dir, runner)
     user_sid = api.current_sid()
     check_owner(api, config_dir, user_sid)
-    xml = build_task_xml(binary, config_dir, user_sid, logon_type=logon_type)
+    xml = build_task_xml(binary, config_dir, user_sid, logon_type=logon_type, enabled=start)
     exists = query_task_xml(runner) is not None
     if exists and not force:
         raise ServiceError(
