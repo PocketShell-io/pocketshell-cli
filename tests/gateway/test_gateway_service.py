@@ -572,6 +572,11 @@ class FakeWindows:
         self.deleted = False
         self.on_run = {}                  # leaf -> callback
         self.last_result = {}             # leaf -> LastTaskResult
+        # Task Scheduler OBJECT security (contract ec8534aa)
+        self.folder_sddl = None           # \PocketShell folder SD (None: absent)
+        self.unprotected_folder_sddl = "O:BAD:AI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFX;;;AU)"
+        self.task_sddl_mutate = None      # callable(sddl) -> registered task SD
+        self.register_payloads = []
 
     # link-task shorthands used by the earlier tests
     @property
@@ -584,7 +589,12 @@ class FakeWindows:
         if xml is None:
             self.tasks.pop(self.LINK, None)
         else:
-            self.tasks[self.LINK] = {"xml": xml, "state": self.tasks.get(self.LINK, {}).get("state", "Ready")}
+            # a task put in place directly by a test: compliant object security
+            self.folder_sddl = self.folder_sddl or f"O:{USER_SID}D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{USER_SID})"
+            self.tasks[self.LINK] = {
+                "xml": xml, "state": self.tasks.get(self.LINK, {}).get("state", "Ready"),
+                "sddl": f"O:{USER_SID}D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{USER_SID})(A;;FR;;;{USER_SID})",
+            }
 
     @property
     def state(self):
@@ -596,6 +606,39 @@ class FakeWindows:
 
     def _query_failed(self):
         return self.query_error or (self.query_error_after_delete and self.deleted)
+
+    @staticmethod
+    def payload(script):
+        return json.loads(base64.b64decode(re.search(r"FromBase64String\('([A-Za-z0-9+/=]+)'\)", script).group(1)))
+
+    def _com_write(self, script):
+        """COM CreateFolder / RegisterTask with an explicit SD (contract ec8534aa)."""
+        p = self.payload(script)
+        if "CreateFolder(" in script and "RegisterTask(" not in script:
+            created = self.folder_sddl is None
+            if created:
+                self.folder_sddl = p["sddl"]
+            return ChildResult(0, json.dumps({"ok": True, "created": created, "sddl": self.folder_sddl}).encode(), b"")
+        self.register_payloads.append(p)
+        self.xml_path = p["xml"]
+        self.xml_seen = Path(p["xml"]).read_bytes()
+        if self.create_rc:
+            return ChildResult(0, json.dumps({"ok": False, "hresult": "0x80070005",
+                                              "message": "Access is denied."}).encode(), b"")
+        xml = self.xml_seen.decode("utf-16")
+        readback = self.mutate_on_create(xml) if self.mutate_on_create else xml
+        sid = p["user"]
+        # measured scheduler behaviour: the P control is dropped and the
+        # principal FR ACE is added (MS-TSCH, no TASK_DONT_ADD_PRINCIPAL_ACE)
+        sddl = f"O:{sid}D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})(A;;FR;;;{sid})"
+        if self.task_sddl_mutate:
+            sddl = self.task_sddl_mutate(sddl)
+        self.tasks[p["name"]] = {
+            "xml": readback,
+            "state": "Disabled" if "<Enabled>false</Enabled>" in xml else "Ready",
+            "sddl": sddl,
+        }
+        return ChildResult(0, b'{"ok":true}', b"")
 
     @staticmethod
     def _leaf(argv):
@@ -615,6 +658,7 @@ class FakeWindows:
                     return ChildResult(1, b"", b"ERROR: The system cannot find the file specified.\r\n")
                 return ChildResult(0, task["xml"].encode("utf-16"), b"")
             if verb == "/Create":
+                self.folder_sddl = self.folder_sddl or self.unprotected_folder_sddl
                 self.xml_path = argv[argv.index("/XML") + 1]
                 self.xml_seen = Path(self.xml_path).read_bytes()
                 if self.create_rc:
@@ -624,6 +668,8 @@ class FakeWindows:
                 self.tasks[leaf] = {
                     "xml": readback,
                     "state": "Disabled" if "<Enabled>false</Enabled>" in xml else "Ready",
+                    # schtasks /Create without an SD: the scheduler's default
+                    "sddl": f"O:{USER_SID}D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;FRFX;;;{USER_SID})",
                 }
                 return ChildResult(0, b"SUCCESS", b"")
             if verb == "/Run":
@@ -644,6 +690,8 @@ class FakeWindows:
             return ChildResult(0, b"", b"")
         if exe.endswith("powershell.exe"):
             script = argv[-1]
+            if "RegisterTask(" in script or "CreateFolder(" in script:
+                return self._com_write(script)
             if "Schedule.Service" in script and ".Enabled=$" in script:  # COM enable/disable
                 leaf = re.search(r"GetTask\('([A-Za-z0-9]+)'\)", script).group(1)
                 task = self.tasks.get(leaf)
@@ -667,6 +715,8 @@ class FakeWindows:
                         "state": _STATE_CODES[task["state"]],
                         "last_result": self.last_result.get(leaf, 267009),
                         "xml": base64.b64encode(task["xml"].encode("utf-8")).decode(),
+                        "taskSD": task.get("sddl"),
+                        "folderSD": self.folder_sddl,
                     }
                 return ChildResult(0, json.dumps(out).encode(), b"")
             if self._query_failed():
@@ -685,6 +735,10 @@ def _task_verbs(fake):
     for c in fake.calls:
         if c[0].lower().endswith("schtasks.exe"):
             out.append((c[1], FakeWindows._leaf(c)))
+        elif c[0].lower().endswith("powershell.exe") and "RegisterTask(" in c[-1]:
+            out.append(("/Create", FakeWindows.payload(c[-1])["name"]))
+        elif c[0].lower().endswith("powershell.exe") and "CreateFolder(" in c[-1]:
+            continue
         elif c[0].lower().endswith("powershell.exe") and "Schedule.Service" in c[-1]:
             if ".Enabled=$" not in c[-1]:
                 out.append(("QUERY", re.search(r"GetTask\('([A-Za-z0-9]+)'\)", c[-1]).group(1)))
@@ -697,6 +751,10 @@ def _verbs(fake):
     for c in fake.calls:
         if c[0].lower().endswith("schtasks.exe"):
             out.append(c[1])
+        elif c[0].lower().endswith("powershell.exe") and "RegisterTask(" in c[-1]:
+            out.append("/Create")
+        elif c[0].lower().endswith("powershell.exe") and "CreateFolder(" in c[-1]:
+            continue
         elif c[0].lower().endswith("powershell.exe") and "Schedule.Service" in c[-1] and ".Enabled=$" not in c[-1]:
             out.append("QUERY")
     return out
@@ -747,9 +805,9 @@ def test_windows_install_registers_one_direct_task(fake_windows):
     assert warnings == []
     verbs = _verbs(fake_windows)
     assert verbs[:3] == ["QUERY", "/Create", "QUERY"] and verbs[3] == "/Run"
-    create = next(c for c in fake_windows.calls if c[1:2] == ["/Create"])
-    assert create[1:5] == ["/Create", "/TN", "\\PocketShell\\GatewayLink", "/XML"]
-    assert "/F" not in create and "/RU" not in create and "/RP" not in create
+    create = fake_windows.register_payloads[-1]  # COM RegisterTask (contract ec8534aa)
+    assert create["folder"] == "\\PocketShell" and create["name"] == "GatewayLink"
+    assert create["flags"] == 2 and create["logon"] == 2 and create["user"] == USER_SID
     assert fake_windows.xml_seen.startswith(b"\xff\xfe")
     assert not Path(fake_windows.xml_path).exists()  # temp definition removed
     assert not Path(fake_windows.xml_path).parent.exists()
@@ -798,7 +856,7 @@ def test_windows_install_refuses_existing_without_force(fake_windows):
     win.apply_install(plan)
     verbs = _verbs(fake_windows)
     assert verbs[-3:] == ["/End", "/Create", "QUERY"]
-    assert next(c for c in fake_windows.calls if c[1:2] == ["/Create"])[-1] == "/F"
+    assert fake_windows.register_payloads[-1]["flags"] == 6  # TASK_CREATE_OR_UPDATE
 
 
 def test_windows_registration_refusal_is_clear(fake_windows):

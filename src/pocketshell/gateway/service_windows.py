@@ -949,9 +949,11 @@ def _query_script(leaf: str) -> str:
         "$ErrorActionPreference='Stop';"
         "try{"
         "$s=New-Object -ComObject Schedule.Service;$s.Connect();"
-        f"$t=$s.GetFolder('{TASK_FOLDER.rstrip(chr(92))}').GetTask('{leaf}');"
+        f"$f=$s.GetFolder('{TASK_FOLDER.rstrip(chr(92))}');$t=$f.GetTask('{leaf}');"
+        "$tsd=$null;$fsd=$null;try{$tsd=[string]$t.GetSecurityDescriptor(7)}catch{};"
+        "try{$fsd=[string]$f.GetSecurityDescriptor(7)}catch{};"
         "$o=[ordered]@{found=$true;state=[int]$t.State;last_result=[int64]$t.LastTaskResult;"
-        "xml=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t.Xml))}"
+        "xml=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t.Xml));taskSD=$tsd;folderSD=$fsd}"
         "}catch{"
         "$e=$_.Exception;while($e.InnerException){$e=$e.InnerException};"
         "$o=[ordered]@{found=$false;hresult=('0x{0:X8}' -f $e.HResult);message=[string]$e.Message}"
@@ -968,6 +970,8 @@ class TaskInfo:
     xml: str
     state: str
     last_result: Optional[int]
+    task_sddl: Optional[str] = None
+    folder_sddl: Optional[str] = None
 
 
 def _powershell(script: str) -> list:
@@ -1012,7 +1016,10 @@ def query_task(runner: Optional[Runner] = None, leaf: str = TASK_LEAF) -> Option
         raise ServiceError(f"the definition of {name} could not be decoded") from None
     state = TASK_STATES.get(data.get("state"), "Unknown")
     last = data.get("last_result")
-    return TaskInfo(xml, state, last if isinstance(last, int) else None)
+    task_sd, folder_sd = data.get("taskSD"), data.get("folderSD")
+    return TaskInfo(xml, state, last if isinstance(last, int) else None,
+                    task_sd if isinstance(task_sd, str) else None,
+                    folder_sd if isinstance(folder_sd, str) else None)
 
 
 def query_task_xml(runner: Optional[Runner] = None, leaf: str = TASK_LEAF) -> Optional[str]:
@@ -1065,10 +1072,10 @@ class WindowsPlan:
         for name, leaf, replace in tasks:
             if replace:
                 commands.append(schtasks("/End", "/TN", name))
-            create = schtasks("/Create", "/TN", name, "/XML", f"{xml_dir}\\{leaf}.xml")
-            if replace:
-                create.append("/F")
-            commands.append(create)
+            commands.append(["<Task Scheduler COM>", "ITaskFolder.RegisterTask", name,
+                             f"{xml_dir}\\{leaf}.xml",
+                             "TASK_CREATE_OR_UPDATE" if replace else "TASK_CREATE",
+                             self.user_sid, self.logon_type, "O:<own>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;<own>)"])
             if self.start:
                 commands.append(schtasks("/Run", "/TN", name))
         return commands
@@ -1197,6 +1204,65 @@ def spec_readback_problems(
     return problems
 
 
+TASK_CREATE, TASK_CREATE_OR_UPDATE = 2, 6
+LOGON_TYPES = {"Password": 1, "S4U": 2, "InteractiveToken": 3}
+
+
+def _com_payload_script(payload: dict, body: str) -> str:
+    """A COM script whose inputs travel base64(JSON) (no quoting of paths,
+    SIDs or SDDL into PowerShell source)."""
+    import base64
+
+    b64 = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
+    return (
+        "$ErrorActionPreference='Stop';"
+        f"$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b64}'))|ConvertFrom-Json;"
+        "try{$s=New-Object -ComObject Schedule.Service;$s.Connect();" + body +
+        "}catch{$e=$_.Exception;while($e.InnerException){$e=$e.InnerException};"
+        "[ordered]@{ok=$false;hresult=('0x{0:X8}' -f $e.HResult);message=[string]$e.Message}|ConvertTo-Json -Compress}"
+    )
+
+
+def _com_json(runner: Runner, script: str, what: str) -> dict:
+    result = runner(_powershell(script))
+    try:
+        data = json.loads(decode(result.stdout).strip() or "null")
+    except ValueError:
+        data = None
+    if result.returncode != 0 or not isinstance(data, dict):
+        raise ServiceError(f"{what} failed (exit {result.returncode}): "
+                           f"{sanitize(decode(result.stderr or result.stdout), 300)}")
+    if not data.get("ok"):
+        raise ServiceError(f"{what} failed (HRESULT {sanitize(str(data.get('hresult')), 20)}: "
+                           f"{sanitize(str(data.get('message', '')), 300)})\n{ELEVATION_HINT}")
+    return data
+
+
+def ensure_task_folder(runner: Runner, user_sid: str) -> str:
+    """\\PocketShell exists with the protected own/SYSTEM/Administrators
+    descriptor (contract ec8534aa), creating it with exactly that SD if absent.
+    An existing folder that does not satisfy the contract is refused: the
+    service never re-ACLs an existing folder."""
+    from pocketshell.gateway import service_task_acl as acl
+
+    script = _com_payload_script(
+        {"folder": TASK_FOLDER.rstrip("\\"), "name": TASK_FOLDER.strip("\\"), "sddl": acl.folder_sddl(user_sid)},
+        "$c=$false;try{$f=$s.GetFolder($p.folder)}catch{$h=$_.Exception;while($h.InnerException){$h=$h.InnerException};"
+        "if($h.HResult -notin @(-2147024894,-2147024893)){throw};"
+        "$f=$s.GetFolder('\\').CreateFolder($p.name,$p.sddl);$c=$true};"
+        "[ordered]@{ok=$true;created=$c;sddl=[string]$f.GetSecurityDescriptor(7)}|ConvertTo-Json -Compress",
+    )
+    data = _com_json(runner, script, f"preparing the task folder {TASK_FOLDER}")
+    problems = acl._object_problems(data.get("sddl"), user_sid, folder=True)
+    if problems:
+        raise ServiceError(
+            f"the task folder {TASK_FOLDER} does not satisfy the task-object security contract "
+            f"({'; '.join(problems)}); refusing to register into it (it was "
+            + ("created" if data.get("created") else "already present") + "; it is not changed)"
+        )
+    return data["sddl"]
+
+
 def _register(
     spec: TaskSpec,
     xml: str,
@@ -1207,7 +1273,11 @@ def _register(
     runner: Runner,
     api: WindowsApi,
 ) -> None:
-    """schtasks /Create /XML, read it back, delete it again on any mismatch."""
+    """COM RegisterTask with the explicit task SD into the protected folder,
+    read back (definition AND task/folder security), delete on any mismatch."""
+    from pocketshell.gateway import service_task_acl as acl
+
+    ensure_task_folder(runner, user_sid)
     tmpdir = tempfile.mkdtemp(prefix="pocketshell-task-")
     xml_path = os.path.join(tmpdir, spec.leaf + ".xml")
     try:
@@ -1215,23 +1285,30 @@ def _register(
             handle.write(task_xml_bytes(xml))
         if replace:
             runner(schtasks("/End", "/TN", spec.name))
-        create = schtasks("/Create", "/TN", spec.name, "/XML", xml_path)
-        if replace:
-            create.append("/F")
-        result = runner(create)
-        if result.returncode != 0:
-            raise _fail(result, f"registering {spec.name}", ELEVATION_HINT)
+        script = _com_payload_script(
+            {"folder": TASK_FOLDER.rstrip("\\"), "name": spec.leaf, "xml": xml_path,
+             "flags": TASK_CREATE_OR_UPDATE if replace else TASK_CREATE, "user": user_sid,
+             "logon": LOGON_TYPES[logon_type], "sddl": acl.task_sddl(user_sid)},
+            "$f=$s.GetFolder($p.folder);$x=[IO.File]::ReadAllText($p.xml,[Text.Encoding]::Unicode);"
+            "$null=$f.RegisterTask($p.name,$x,[int]$p.flags,$p.user,$null,[int]$p.logon,$p.sddl);"
+            "[ordered]@{ok=$true}|ConvertTo-Json -Compress",
+        )
+        try:
+            _com_json(runner, script, f"registering {spec.name}")
+        except ServiceError as exc:
+            raise ServiceError(str(exc)) from None
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-    registered = query_task_xml(runner, spec.leaf)
-    if registered is None:
+    info = query_task(runner, spec.leaf)
+    if info is None:
         raise ServiceError(f"{spec.name} is not visible after registration")
     try:
         problems = spec_readback_problems(
-            parse_task_xml(registered), spec, user_sid, logon_type, api, expected_xml=xml
+            parse_task_xml(info.xml), spec, user_sid, logon_type, api, expected_xml=xml
         )
     except ServiceError as exc:
         problems = [str(exc)]
+    problems += acl.task_object_problems(info.task_sddl, info.folder_sddl, user_sid)
     if problems:
         # Never start a task that is not what was requested: roll it back.
         removed = runner(schtasks("/Delete", "/TN", spec.name, "/F")).returncode == 0
@@ -1488,6 +1565,17 @@ def status(
     # may run another config/device, in another session, under another
     # supervisor.
     st.running = st.state == "Running"
+    from pocketshell.gateway import service_task_acl as acl
+
+    try:
+        acl_problems = acl.task_object_problems(info.task_sddl, info.folder_sddl, api.current_sid())
+    except ServiceError as exc:
+        acl_problems = [str(exc)]
+    st.details["taskObjectAuthority"] = {"ok": not acl_problems, "problems": acl_problems,
+                                        "taskSD": info.task_sddl, "folderSD": info.folder_sddl}
+    if acl_problems:
+        st.running = False
+        st.warnings.append("task object security: " + "; ".join(acl_problems))
     if endpoint is not None and not endpoint["running"]:
         st.running = False
         problems = list(endpoint["contract"]) + list((endpoint["readiness"] or {}).get("problems", []))

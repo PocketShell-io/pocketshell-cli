@@ -545,3 +545,72 @@ def test_isolated_qualification_instance(layout, monkeypatch):
     gone = _service("uninstall", "--instance", INSTANCE)
     assert gone.exit_code == 0 and "CLOSED accepted" in gone.output
     assert _query_xml(QUALIFICATION_TASK) is None and not listening(port)
+
+
+# --- Task Scheduler OBJECT security (contract ec8534aa) --------------------------------
+#
+# tests/gateway/fixtures/task-object-authority.ps1 is the native owner's FROZEN
+# validator (sha256 02dbc13b…), byte-identical, used only as a test oracle: the
+# service's Python validator must give the same verdict on the real runner's
+# task/folder descriptors and on every control descriptor.
+
+ORACLE = Path(__file__).parent / "fixtures" / "task-object-authority.ps1"
+ORACLE_SHA256 = "02dbc13be3446504fe8dbdc900a984d6280646bf6fda75f92e6d460e1d82c389"
+
+
+def _oracle(cases):
+    """[(taskSDDL, folderSDDL, owner)] -> [accepted] by their frozen function."""
+    import base64
+
+    assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
+    payload = base64.b64encode(json.dumps([{"t": t, "f": f, "o": o} for t, f, o in cases]).encode()).decode()
+    script = (
+        "$ErrorActionPreference='Stop';"
+        f". ([scriptblock]::Create([IO.File]::ReadAllText('{ORACLE}')));"
+        f"$cases=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{payload}'))|ConvertFrom-Json;"
+        "$out=@();foreach($c in $cases){try{"
+        "$t=New-Object Security.AccessControl.RawSecurityDescriptor($c.t);"
+        "$f=New-Object Security.AccessControl.RawSecurityDescriptor($c.f);"
+        "$null=AssertTaskObjectAuthority $t $c.o $f;$out+=$true}catch{$out+=$false}};"
+        "ConvertTo-Json -Compress -InputObject @($out)"
+    )
+    proc = _run(win._powershell(script))
+    assert proc.returncode == 0, common.decode(proc.stderr)
+    return json.loads(common.decode(proc.stdout))
+
+
+def _read_task_security(leaf):
+    script = (
+        "$ErrorActionPreference='Stop';$s=New-Object -ComObject Schedule.Service;$s.Connect();"
+        f"$f=$s.GetFolder('\\PocketShell');$t=$f.GetTask('{leaf}');"
+        "[ordered]@{task=[string]$t.GetSecurityDescriptor(7);folder=[string]$f.GetSecurityDescriptor(7)}"
+        "|ConvertTo-Json -Compress"
+    )
+    proc = _run(win._powershell(script))
+    assert proc.returncode == 0, common.decode(proc.stderr)
+    return json.loads(common.decode(proc.stdout))
+
+
+def test_task_object_security_contract_on_the_real_scheduler(layout):
+    from pocketshell.gateway import service_task_acl as acl
+
+    sid = layout["sid"]
+    result = _service("install", "--helper", layout["helper"], "--config-dir", layout["config"], "--no-start")
+    assert result.exit_code == 0, result.output
+    sd = _read_task_security("GatewayLink")
+    print("REAL task SD:", sd["task"])
+    print("REAL folder SD:", sd["folder"])
+    assert acl.task_object_problems(sd["task"], sd["folder"], sid) == []
+    assert _oracle([(sd["task"], sd["folder"], sid)]) == [True], "the native frozen validator disagrees"
+    status = _service("status", "--json")
+    data = json.loads(status.stdout)
+    assert data["details"]["taskObjectAuthority"]["ok"] is True, data
+    # the same verdicts as their 19 SDDL controls, on the runner's own SID
+    from test_gateway_service_task_acl import CASES, OWN
+
+    cases = [(t.replace(OWN, sid), f.replace(OWN, sid), sid) for _, t, f, _ in CASES]
+    python = [acl.task_object_problems(t, f, o) == [] for t, f, o in cases]
+    oracle = _oracle(cases)
+    print("verdicts python/oracle:", python, oracle)
+    assert python == oracle == [c[3] for c in CASES]
+    assert _service("uninstall").exit_code == 0

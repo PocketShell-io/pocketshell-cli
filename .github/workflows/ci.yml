@@ -121,6 +121,8 @@ jobs:
           tests/gateway/test_gateway_proxy.py
           tests/gateway/test_gateway_service.py
           tests/gateway/test_gateway_service_endpoint.py
+          tests/gateway/test_gateway_service_task_acl.py
+          tests/gateway/test_gateway_service_task_object.py
 
       # `pocketshell gateway service` against the REAL Task Scheduler of
       # this disposable runner: a fake pocketshell-link.exe (Go, built
