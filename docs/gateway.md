@@ -356,7 +356,7 @@ and reboots, without a visible window:
 
 ```bash
 pocketshell gateway service install --dry-run   # print exactly what would be done
-pocketshell gateway service install             # write/register it and start it
+pocketshell gateway service install             # write/register it and start it (exit 5: installed, NOT started)
 pocketshell gateway service status [--json]     # exit 0 running, 3 installed but stopped, 4 not installed
 pocketshell gateway service uninstall           # stop and remove ONLY the unit/task
 ```
@@ -381,7 +381,12 @@ What every platform shares:
   enrolled loopback sshd is served).
 - **`uninstall` removes only the unit/task** — never the config dir, the
   key, or the device registration (revoke a device separately). Running it
-  again is a no-op.
+  again is a no-op. A unit/task of the same name that this command did not
+  write (no "Managed by" marker) is refused unless `--force`.
+- **Exit status** of `install`: 0 installed and started (or registered with
+  `--no-start`), **5 installed but NOT started** (the start failed or was not
+  confirmed; the unit/task is kept), 1 refused/failed. `status`: 0 running,
+  3 installed but not running, 4 not installed, 1 the state could not be read.
 - `status` reports presence and state, the configured helper and config
   dir, the helper's sha256, the running process id(s), and the helper's
   non-secret `show` output. All child output is sanitized.
@@ -390,9 +395,10 @@ What every platform shares:
 
 `install` atomically writes `~/.config/systemd/user/pocketshell-gateway.service`
 (`$XDG_CONFIG_HOME` respected; mode 0644, no secrets) and runs
-`systemctl --user daemon-reload` and `systemctl --user enable --now
-pocketshell-gateway.service` (`--force` on an existing unit: `enable` +
-`restart`). The unit:
+`systemctl --user daemon-reload`, `systemctl --user enable
+pocketshell-gateway.service` and then, as a separate step, `start`
+(`restart` when `--force` replaced an existing unit). If that start fails the
+unit stays written and enabled and `install` exits **5**. The unit:
 
 ```ini
 # Managed by `pocketshell gateway service install` — ...
@@ -461,12 +467,28 @@ therefore the principal — is still you, and the task still runs with
 LeastPrivilege. A refused registration is reported as such; never fall back
 to a logon trigger or the Startup folder (they show a console window).
 
-`status` adds the task's `State` (via `Get-ScheduledTask`), the registered
-principal / logon type / run level, whether the action is still the direct
-launch, whether the configured helper is still an allow-listed build (it runs
-that helper's `show` only if so), and each matching process with its
-**session id** (expect exactly one, in session 0). `uninstall` ends and deletes
-the task, then waits briefly for the helper process to exit.
+Before the task is ever started, `install` reads the registered definition
+back and requires exactly the requested one: one direct Exec with the exact
+argv, `WorkingDirectory` = the helper's directory, `UserId` = your SID (an
+account-name form only if it resolves to that SID), LogonType S4U and
+LeastPrivilege (an export may omit it as the schema default). Anything else
+is deleted again and never started. After `/Run`, `install` waits up to
+15 s for the task's own state to report Running; otherwise it exits 5.
+
+The task is read through the Task Scheduler COM API (child PowerShell with
+`CREATE_NO_WINDOW`). Only "not found" (HRESULT 0x80070002/0x80070003) counts
+as absent; access denied or any other query failure is an error — `status`
+exits 1 and `uninstall` does not claim success.
+
+`status` reports **running only from the task's own state** (Running). It
+also lists the registered principal / logon type / run level, whether the
+action is still the direct launch, whether the configured helper is still an
+allow-listed build (it runs that helper's `show` only if so), and every
+process with the helper's image path and its **session id** — as
+diagnostics: a same-path process next to a Ready/Disabled task (e.g. another
+supervisor's agent) is reported, but the result is still "not running"
+(exit 3). `uninstall` ends and deletes the task, verifies it is gone, then
+waits briefly for the helper process to exit.
 
 **One agent per device:** a new connection supersedes the old one at the
 gateway. Stop any other `pocketshell-link run` for the same enrolled device
