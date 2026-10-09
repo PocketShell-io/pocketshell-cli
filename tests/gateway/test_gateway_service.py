@@ -871,3 +871,28 @@ def test_windows_install_existence_query_failure_refuses(fake_windows):
     fake_windows.query_error = True
     with pytest.raises(ServiceError):
         win.plan_install(WIN_HELPER, WIN_CONFIG, force=False, start=True, api=FakeApi())
+
+
+# --- review PR21-1: running comes from the task, not from a same-path process --------
+
+FIXTURE_PROC = {"pid": 11944, "session_id": 1, "path": WIN_HELPER}
+
+
+@pytest.mark.parametrize("state", ["Ready", "Disabled", "Queued", "Unknown"])
+def test_windows_same_image_process_does_not_make_a_stopped_task_running(fake_windows, monkeypatch, state):
+    fake_windows.registered = _xml()
+    fake_windows.state = state
+    monkeypatch.setattr(win, "WindowsApi", lambda: FakeApi(procs=[FIXTURE_PROC]))
+    st = win.status()
+    assert st.running is False and st.exit_code == 3
+    assert st.processes == [FIXTURE_PROC]  # still listed, as a diagnostic
+    assert any("not proof" in w or "diagnostic" in w for w in st.warnings)
+    result = _windows_cli(monkeypatch, "status")
+    assert result.exit_code == 3, result.output
+
+
+def test_windows_running_task_is_running(fake_windows, monkeypatch):
+    fake_windows.registered = _xml()
+    fake_windows.state = "Running"
+    monkeypatch.setattr(win, "WindowsApi", lambda: FakeApi(procs=[]))
+    assert _windows_cli(monkeypatch, "status").exit_code == 0

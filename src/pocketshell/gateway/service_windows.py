@@ -847,7 +847,16 @@ def status(runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) ->
                 st.show_error = str(exc)
         elif st.helper_allowed is False:
             st.warnings.append("the task's helper is not a reviewed build; not running its `show`")
-    st.running = st.state == "Running" or bool(st.processes)
+    # Acceptance comes from the task itself. A process with the same image
+    # path (e.g. a held fixture agent) is listed only as a diagnostic: it
+    # may run another config/device, in another session, under another
+    # supervisor.
+    st.running = st.state == "Running"
+    if st.processes and not st.running:
+        st.warnings.append(
+            "process(es) from the task's helper path are running, but the task "
+            f"is {st.state}: not proof the task runs the agent (diagnostic only)"
+        )
     if st.processes and any(p.get("session_id") not in (0, None) for p in st.processes):
         st.warnings.append("a helper process runs in an interactive session (not session 0)")
     return st
