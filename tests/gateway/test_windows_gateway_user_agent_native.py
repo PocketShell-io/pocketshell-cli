@@ -58,7 +58,7 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
     import sys
 
     from pocketshell.gateway import service_endpoint as ep
-    from unelevated import run_unelevated
+    from unelevated import run_outside_job, run_unelevated
 
     api = win.WindowsApi()
     session = api.current_session()
@@ -75,11 +75,18 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
     }))
     env = dict(os.environ, XDG_CONFIG_HOME=str(tmp_path / "agent-config"), PYTHONIOENCODING="utf-8")
 
+    where = {"mode": "in-runner-job"}
+
     def agent(*args):
-        code, out = run_unelevated([sys.executable, str(HARNESS), str(seams), "gateway", "agent", *args, "--json"],
-                                   env=env, cwd=str(tmp_path))
+        argv = [sys.executable, str(HARNESS), str(seams), "gateway", "agent", *args, "--json"]
+        if where["mode"] == "outside-job":
+            code, out, meta = run_outside_job(argv, env=env, cwd=str(tmp_path))
+            assert meta is not None, "the interactive shell did not run the outside-job harness"
+            assert meta.get("serverInJob") is False, meta
+        else:
+            code, out = run_unelevated(argv, env=env, cwd=str(tmp_path))
         text = out.decode("utf-8", "replace")
-        print(f"$ (unelevated) pocketshell gateway agent {' '.join(args)} --json -> exit {code}")
+        print(f"$ ({where['mode']}, unelevated) pocketshell gateway agent {' '.join(args)} --json -> exit {code}")
         print(text)
         start = text.find("{")
         return code, (json.loads(text[start:]) if start >= 0 else None)
@@ -92,10 +99,15 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
 
     code, data = agent("start", "--timeout", "60")
     if code == 1 and data and data["error"]["code"] == "caller-job":
-        # measured, honest refusal: the runner's job has KILL_ON_JOB_CLOSE and
-        # forbids breakaway; the CLI must not claim independence
+        # measured, honest refusal inside the runner's step job (KILL_ON_JOB_CLOSE,
+        # breakaway forbidden): the CLI must not claim independence ...
         assert "KILL_ON_JOB_CLOSE" in data["error"]["message"]
-        pytest.skip("runner job forbids breakaway with KILL_ON_JOB_CLOSE: start refused as designed")
+        print("MEASURED: the runner step job forbids breakaway and has KILL_ON_JOB_CLOSE; start refused")
+        # ... then run it the way the Desktop app does: outside any foreign job
+        where["mode"] = "outside-job"
+        code, data = agent("status")
+        assert code == 4, data
+        code, data = agent("start", "--timeout", "60")
     if code != 0:
         for p in sorted(Path(endpoint["state"]).rglob("*.json")):
             print(p, p.read_text(encoding="utf-8", errors="replace")[:1500])
@@ -131,5 +143,5 @@ def test_elevated_caller_children_are_refused(layout, tmp_path):
     if not c.windll.shell32.IsUserAnAdmin():
         pytest.skip("runner not elevated")
     api = win.WindowsApi()
-    with pytest.raises(ServiceError, match="ordinary, same-session token"):
+    with pytest.raises(ServiceError, match="ordinary, same-session token"):  # checked before the job
         api.spawn_hidden([os.environ["POCKETSHELL_TEST_FAKE_LINK"], "version", "--json"], str(tmp_path), None)

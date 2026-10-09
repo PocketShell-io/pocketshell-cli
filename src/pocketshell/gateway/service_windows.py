@@ -735,24 +735,6 @@ class WindowsApi:
                 raise ServiceError(f"cannot start {sanitize(str(argv[0]))} (error {c.get_last_error()})")
         resumed = False
         try:
-            in_job = w.BOOL()
-            if not k.IsProcessInJob(pi.hProcess, None, c.byref(in_job)):
-                raise ServiceError("cannot query the child's job membership")
-            kill_on_close = False
-            if in_job.value:
-                # the child is in the CALLER's job (it could not break away):
-                # inspect that job through our own membership (hJob = NULL)
-                info = (c.c_byte * 144)()  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION (x64)
-                if not k.QueryInformationJobObject(None, 9, info, c.sizeof(info), None):
-                    kill_on_close = True  # unknown limits: never claim independence
-                else:
-                    flags = c.c_uint32.from_buffer(info, 16).value  # BasicLimitInformation.LimitFlags
-                    kill_on_close = bool(flags & 0x2000)
-            if in_job.value and kill_on_close:
-                raise CallerJobError(
-                    "the child could not break away from the caller's job, which has "
-                    "KILL_ON_JOB_CLOSE (its lifetime would end with the caller); the suspended "
-                    "child was terminated before resume")
             # child token: our user, not elevated, our session
             token = w.HANDLE()
             if not a.OpenProcessToken(pi.hProcess, 0x0008, c.byref(token)):
@@ -779,6 +761,24 @@ class WindowsApi:
                 raise ServiceError("the child's image is not the requested executable")
             if child_sid != self.current_sid() or elevation.value or session.value != self.current_session():
                 raise ServiceError("the child token is not this user's ordinary, same-session token")
+            in_job = w.BOOL()
+            if not k.IsProcessInJob(pi.hProcess, None, c.byref(in_job)):
+                raise ServiceError("cannot query the child's job membership")
+            kill_on_close = False
+            if in_job.value:
+                # the child is in the CALLER's job (it could not break away):
+                # inspect that job through our own membership (hJob = NULL)
+                info = (c.c_byte * 144)()  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION (x64)
+                if not k.QueryInformationJobObject(None, 9, info, c.sizeof(info), None):
+                    kill_on_close = True  # unknown limits: never claim independence
+                else:
+                    flags = c.c_uint32.from_buffer(info, 16).value  # BasicLimitInformation.LimitFlags
+                    kill_on_close = bool(flags & 0x2000)
+            if in_job.value and kill_on_close:
+                raise CallerJobError(
+                    "the child could not break away from the caller's job, which has "
+                    "KILL_ON_JOB_CLOSE (its lifetime would end with the caller); the suspended "
+                    "child was terminated before resume")
             times = [w.FILETIME() for _ in range(4)]
             if not k.GetProcessTimes(pi.hProcess, *[c.byref(t) for t in times]):
                 raise ServiceError("cannot read the child's creation time")

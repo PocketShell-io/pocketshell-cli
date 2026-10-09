@@ -89,3 +89,72 @@ def run_unelevated(argv, *, env=None, cwd=None, timeout=300):
         k.CloseHandle(token)
     out.seek(0)
     return code.value, out.read()
+
+
+# --- outside the runner's job (CI only) -------------------------------------------------
+#
+# The windows-latest step processes live in a job with KILL_ON_JOB_CLOSE that
+# forbids breakaway (measured). To exercise the agent the way the Desktop app
+# runs it (a user process NOT inside a foreign kill-on-close job), the test asks
+# the interactive shell (explorer, via Shell.Application.ShellExecute) to start
+# this module in --serve mode; that process is outside the runner's job and runs
+# the CLI with the unelevated token above.
+
+
+def run_outside_job(argv, *, env, cwd, timeout=300, poll=0.5):
+    import json
+    import sys
+    import time
+    import uuid
+
+    work = os.path.join(cwd, "outside-" + uuid.uuid4().hex)
+    os.makedirs(work)
+    request = os.path.join(work, "request.json")
+    result = os.path.join(work, "result.json")
+    with open(request, "w", encoding="utf-8") as handle:
+        json.dump({"argv": argv, "env": env, "cwd": cwd, "result": result}, handle)
+    args = subprocess.list2cmdline([os.path.abspath(__file__), "--serve", request])
+
+    def ps(value):
+        return "'" + value.replace("'", "''") + "'"
+
+    script = (f"(New-Object -ComObject Shell.Application).ShellExecute({ps(sys.executable)},{ps(args)},"
+              f"{ps(work)},'open',0)")
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                   capture_output=True, timeout=60, creationflags=0x08000000)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.path.exists(result):
+            time.sleep(0.2)
+            with open(result, encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data["code"], data["stdout"].encode("utf-8"), data
+        time.sleep(poll)
+    return None, b"", None
+
+
+def _serve(request_path):
+    import json
+
+    import ctypes as cc
+
+    with open(request_path, encoding="utf-8") as handle:
+        req = json.load(handle)
+    in_job = w.BOOL()
+    k.IsProcessInJob(k.GetCurrentProcess(), None, cc.byref(in_job))
+    try:
+        code, out = run_unelevated(req["argv"], env=req["env"], cwd=req["cwd"])
+        data = {"code": code, "stdout": out.decode("utf-8", "replace"), "serverInJob": bool(in_job.value)}
+    except Exception as exc:  # noqa: BLE001 - reported to the waiting test
+        data = {"code": None, "stdout": "", "error": repr(exc), "serverInJob": bool(in_job.value)}
+    tmp = req["result"] + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle)
+    os.replace(tmp, req["result"])
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) == 3 and sys.argv[1] == "--serve":
+        _serve(sys.argv[2])
