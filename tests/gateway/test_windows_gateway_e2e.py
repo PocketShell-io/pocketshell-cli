@@ -427,3 +427,26 @@ def test_console_ctrl_c_ends_the_session_cleanly(tmp_path, client, remote_io):
     assert res["survivors"] == [], res
     assert "Traceback" not in res["stderr"] and "KeyboardInterrupt" not in res["stderr"], res
     assert "finished" not in res["stdout"], res
+
+
+def test_fleet_qualifier_passes_against_this_host(tmp_path, client, sshd, gateway):
+    """scripts/windows-gateway-qualify.py — what the fleet runs on its real
+    laptops — must itself pass here, end to end, non-interactively."""
+    script = Path(__file__).resolve().parents[2] / "scripts" / "windows-gateway-qualify.py"
+    receipt = tmp_path / "receipt.json"
+    proc = subprocess.run(
+        [sys.executable, str(script), "--device-id", DEVICE, "--pinned-key", sshd["host_pub"],
+         "--user", sshd["user"], "--identity", sshd["key"],
+         "--server", f"ws://127.0.0.1:{gateway.port}", "--trust-gateway", "127.0.0.1", "--insecure-dev",
+         "--remote-os", "windows", "--json", str(receipt)],
+        capture_output=True, env=client.env(), cwd=client.cwd, timeout=600,
+    )
+    out = proc.stdout.decode(errors="replace")
+    assert proc.returncode == 0, out + proc.stderr.decode(errors="replace")[-3000:]
+    assert out.rstrip().splitlines()[-1].startswith("RESULT: PASS")
+    doc = json.loads(receipt.read_text(encoding="utf-8"))
+    assert doc["result"] == "PASS"
+    assert {c["check"] for c in doc["checks"]} >= {
+        "platform", "ssh.exe", "proxycommand", "login", "pin", "remote-echo", "exit-status",
+        "binary-roundtrip", "wrong-pin", "console", "transport-loss", "ctrl-c",
+    }
