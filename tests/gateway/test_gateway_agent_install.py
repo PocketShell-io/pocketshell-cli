@@ -443,3 +443,45 @@ def test_schema_launch_matches_the_producer_launch_keys():
 
     launch = SCHEMA["$defs"]["launch"]
     assert sorted(launch["required"]) == sorted(launch["properties"]) == sorted(ua.LAUNCH_KEYS)
+
+
+# --- S1: the schema launch predicate = "target measured outside every job" --------------
+
+
+def _schema_accepts(schema, value):
+    """Minimal checker for the launch fragment (const/type/required/closed)."""
+    if sorted(value) != sorted(schema["required"]) or set(value) - set(schema["properties"]):
+        return False
+    for key, rule in schema["properties"].items():
+        v = value[key]
+        if "const" in rule and v != rule["const"]:
+            return False
+        if rule.get("type") == "boolean" and not isinstance(v, bool):
+            return False
+        if rule.get("type") == "integer" and (not isinstance(v, int) or isinstance(v, bool) or v < rule.get("minimum", v)):
+            return False
+    return True
+
+
+@pytest.mark.parametrize("broke_away,child_in_job,accepted", [
+    (True, False, True),    # breakaway applied, target measured job-free
+    (False, False, True),   # breakaway not applied (caller in no job / flag not needed), target measured job-free
+    (True, True, False),    # an ancestor job forbids breakaway: refused
+    (False, True, False),   # breakaway refused: refused
+])
+def test_s1_launch_tuples_production_and_schema_agree(broke_away, child_in_job, accepted):
+    from pocketshell.gateway import service_windows as win
+
+    try:
+        verdict = win.job_verdict(caller_in_job=False,
+                                  broke_away=broke_away, child_in_job=child_in_job, nearest_kill=False)
+    except win.TargetJobError:
+        verdict = None
+    assert (verdict is not None) == accepted
+    if verdict is not None:
+        launch = {**verdict, "elevated": False, "session": 1}
+        assert _schema_accepts(SCHEMA["$defs"]["launch"], launch), launch
+    # the schema itself refuses every in-job tuple, whatever brokeAway says
+    in_job = {"inJob": True, "brokeAway": broke_away, "callerInJob": True, "callerJobKillOnClose": False,
+              "elevated": False, "session": 1}
+    assert not _schema_accepts(SCHEMA["$defs"]["launch"], in_job)
