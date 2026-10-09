@@ -53,7 +53,7 @@ def _medium(token):
         raise c.WinError(c.get_last_error())
 
 
-def _lua_token():
+def _lua_token(medium=True):
     """CreateRestrictedToken(LUA_TOKEN | DISABLE_MAX_PRIVILEGE) with the
     Administrators alias made deny-only: the UAC-style filtered token."""
     k.GetCurrentProcess.restype = w.HANDLE
@@ -72,23 +72,44 @@ def _lua_token():
                                    c.byref(token)):
         raise c.WinError(c.get_last_error())
     k.CloseHandle(base)
-    _medium(token)
+    if medium:
+        _medium(token)
     return token
 
 
+CHOSEN = {}
+
+
+def _candidates():
+    return (("lua-high", lambda: _lua_token(medium=False)), ("lua-medium", _lua_token), ("safer", _safer_token))
+
+
 def _unelevated_token():
-    errors = []
-    for make in (_safer_token, _lua_token):
+    """The first candidate token that is measured unelevated AND can start a
+    Python probe on this host (logged in DIAGNOSTICS)."""
+    import sys
+
+    if "name" in CHOSEN:
+        return dict(_candidates())[CHOSEN["name"]]()
+    for name, make in _candidates():
         try:
             token = make()
         except OSError as exc:
-            errors.append(f"{make.__name__}: {exc}")
+            DIAGNOSTICS.append(f"{name}: {exc}")
             continue
-        if not _elevated(token):
-            return token
-        errors.append(f"{make.__name__}: TokenElevation still 1")
-        k.CloseHandle(token)
-    raise RuntimeError("no unelevated token: " + "; ".join(errors))
+        if _elevated(token):
+            DIAGNOSTICS.append(f"{name}: TokenElevation 1")
+            k.CloseHandle(token)
+            continue
+        code, out = _launch(token, [sys.executable, "-c", "print('probe')"], None, None, 60)
+        DIAGNOSTICS.append(f"{name}: probe exit {code:#x} {out[:80]!r}")
+        if code == 0:
+            CHOSEN["name"] = name
+            return make()
+    raise RuntimeError("no usable unelevated token: " + "; ".join(DIAGNOSTICS))
+
+
+DIAGNOSTICS = []
 
 
 def _safer_token():
@@ -107,9 +128,16 @@ def _safer_token():
 
 def run_unelevated(argv, *, env=None, cwd=None, timeout=300):
     """(exit code, stdout bytes) of ``argv`` run with an unelevated token."""
+    return _launch(_unelevated_token(), argv, env, cwd, timeout)
+
+
+def _launch(token, argv, env, cwd, timeout):
     a.CreateProcessAsUserW.argtypes = [w.HANDLE, w.LPCWSTR, w.LPWSTR, c.c_void_p, c.c_void_p, w.BOOL, w.DWORD,
                                        c.c_void_p, w.LPCWSTR, c.POINTER(SI), c.POINTER(PI)]
-    token = _unelevated_token()
+    k.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+    k.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+    k.GetExitCodeProcess.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
+    k.CloseHandle.argtypes = [w.HANDLE]
     out = tempfile.TemporaryFile()
     os.set_inheritable(out.fileno(), True)
     handle = msvcrt.get_osfhandle(out.fileno())
@@ -123,19 +151,21 @@ def run_unelevated(argv, *, env=None, cwd=None, timeout=300):
         block = c.create_unicode_buffer("\0".join(f"{kk}={v}" for kk, v in sorted(env.items())) + "\0\0")
     pi = PI()
     cmd = c.create_unicode_buffer(subprocess.list2cmdline(argv))
-    if not a.CreateProcessAsUserW(token, argv[0], cmd, None, None, True, 0x08000000 | 0x400,
-                                  c.cast(block, c.c_void_p) if block is not None else None, cwd,
-                                  c.byref(si), c.byref(pi)):
-        raise c.WinError(c.get_last_error())
     try:
-        if k.WaitForSingleObject(pi.hProcess, int(timeout * 1000)) != 0:
-            k.TerminateProcess(pi.hProcess, 99)
-            raise TimeoutError("unelevated child timed out")
-        code = w.DWORD()
-        k.GetExitCodeProcess(pi.hProcess, c.byref(code))
+        if not a.CreateProcessAsUserW(token, argv[0], cmd, None, None, True, 0x08000000 | 0x400,
+                                      c.cast(block, c.c_void_p) if block is not None else None, cwd,
+                                      c.byref(si), c.byref(pi)):
+            raise c.WinError(c.get_last_error())
+        try:
+            if k.WaitForSingleObject(pi.hProcess, int(timeout * 1000)) != 0:
+                k.TerminateProcess(pi.hProcess, 99)
+                raise TimeoutError("unelevated child timed out")
+            code = w.DWORD()
+            k.GetExitCodeProcess(pi.hProcess, c.byref(code))
+        finally:
+            k.CloseHandle(pi.hThread)
+            k.CloseHandle(pi.hProcess)
     finally:
-        k.CloseHandle(pi.hThread)
-        k.CloseHandle(pi.hProcess)
         k.CloseHandle(token)
     out.seek(0)
     return code.value, out.read()
@@ -196,7 +226,8 @@ def _serve(request_path):
     k.IsProcessInJob(k.GetCurrentProcess(), None, cc.byref(in_job))
     try:
         code, out = run_unelevated(req["argv"], env=req["env"], cwd=req["cwd"])
-        data = {"code": code, "stdout": out.decode("utf-8", "replace"), "serverInJob": bool(in_job.value)}
+        data = {"code": code, "stdout": out.decode("utf-8", "replace"), "serverInJob": bool(in_job.value),
+                "token": DIAGNOSTICS}
     except Exception as exc:  # noqa: BLE001 - reported to the waiting test
         data = {"code": None, "stdout": "", "error": repr(exc), "serverInJob": bool(in_job.value)}
     tmp = req["result"] + ".tmp"

@@ -83,8 +83,12 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
             code, out, meta = run_outside_job(argv, env=env, cwd=str(tmp_path))
             assert meta is not None, "the interactive shell did not run the outside-job harness"
             assert meta.get("serverInJob") is False, meta
+            print("outside-job token selection:", meta.get("token"))
         else:
             code, out = run_unelevated(argv, env=env, cwd=str(tmp_path))
+            from unelevated import DIAGNOSTICS
+
+            print("token selection:", DIAGNOSTICS)
         text = out.decode("utf-8", "replace")
         print(f"$ ({where['mode']}, unelevated) pocketshell gateway agent {' '.join(args)} --json -> exit {code}")
         print(text)
