@@ -13,6 +13,7 @@ registers a real task on the windows-latest CI runner.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -535,8 +536,16 @@ class FakeApi:
         return list(self.procs)
 
 
+_STATE_CODES = {"Unknown": 0, "Disabled": 1, "Queued": 2, "Ready": 3, "Running": 4}
+
+
 class FakeWindows:
-    """Fake schtasks/helper/powershell; keeps the 'registered' XML."""
+    """Fake schtasks / Task Scheduler COM (via powershell) / helper.
+
+    Keeps the 'registered' XML and a task state; knobs simulate query
+    failures, a failing or non-starting /Run, and a registration whose
+    readback differs from what was requested.
+    """
 
     def __init__(self, *, registered=None, create_rc=0, version=VERSION_OK, show_rc=0):
         self.calls: list[list[str]] = []
@@ -546,6 +555,16 @@ class FakeWindows:
         self.show_rc = show_rc
         self.xml_seen = None
         self.xml_path = None
+        self.state = "Ready"
+        self.query_error = False          # access denied on every query
+        self.query_error_after_delete = False
+        self.run_rc = 0
+        self.run_starts = True            # /Run success moves the task to Running
+        self.mutate_on_create = None      # callable(xml) -> registered readback
+        self.deleted = False
+
+    def _query_failed(self):
+        return self.query_error or (self.query_error_after_delete and self.deleted)
 
     def __call__(self, argv, **kwargs):
         argv = list(argv)
@@ -554,6 +573,8 @@ class FakeWindows:
         if exe.endswith("schtasks.exe"):
             verb = argv[1]
             if verb == "/Query":
+                if self._query_failed():
+                    return ChildResult(1, b"", b"ERROR: Access is denied.\r\n")
                 if self.registered is None:
                     return ChildResult(1, b"", b"ERROR: The system cannot find the file specified.\r\n")
                 return ChildResult(0, self.registered.encode("utf-16"), b"")
@@ -562,13 +583,41 @@ class FakeWindows:
                 self.xml_seen = Path(self.xml_path).read_bytes()
                 if self.create_rc:
                     return ChildResult(self.create_rc, b"", b"ERROR: Access is denied.\r\n")
-                self.registered = self.xml_seen.decode("utf-16")
+                xml = self.xml_seen.decode("utf-16")
+                self.registered = self.mutate_on_create(xml) if self.mutate_on_create else xml
+                self.state = "Disabled" if "<Enabled>false</Enabled>" in xml else "Ready"
                 return ChildResult(0, b"SUCCESS", b"")
+            if verb == "/Run":
+                if self.run_rc:
+                    return ChildResult(self.run_rc, b"", b"ERROR: Access is denied.\r\n")
+                if self.run_starts:
+                    self.state = "Running"
+                return ChildResult(0, b"SUCCESS", b"")
+            if verb == "/End":
+                if self.state == "Running":
+                    self.state = "Ready"
             if verb == "/Delete":
                 self.registered = None
+                self.deleted = True
             return ChildResult(0, b"", b"")
         if exe.endswith("powershell.exe"):
-            return ChildResult(0, b'{"State":"Running","LastTaskResult":267009,"LastRunTime":"x"}', b"")
+            script = argv[-1]
+            if "Schedule.Service" in script:  # COM query
+                if self._query_failed():
+                    out = {"found": False, "hresult": "0x80070005", "message": "Access is denied.\x1b[2J"}
+                elif self.registered is None:
+                    out = {"found": False, "hresult": "0x80070002", "message": "not found"}
+                else:
+                    out = {
+                        "found": True,
+                        "state": _STATE_CODES[self.state],
+                        "last_result": 267009,
+                        "xml": base64.b64encode(self.registered.encode("utf-8")).decode(),
+                    }
+                return ChildResult(0, json.dumps(out).encode(), b"")
+            if self._query_failed():
+                return ChildResult(1, b"", b"Access is denied.")
+            return ChildResult(0, json.dumps({"State": self.state}).encode(), b"")
         if argv[1:] == ["version", "--json"]:
             return ChildResult(0, self.version, b"")
         if argv[1] == "show":
@@ -710,6 +759,7 @@ def test_windows_uninstall_only_deletes_the_task(fake_windows):
 
 def test_windows_status_reports_process_session_and_show(fake_windows):
     fake_windows.registered = _xml()
+    fake_windows.state = "Running"
     api = FakeApi(procs=[
         {"pid": 11944, "session_id": 0, "path": WIN_HELPER},
         {"pid": 7, "session_id": 1, "path": "C:\\other\\pocketshell-link.exe"},
@@ -736,7 +786,7 @@ def test_windows_status_exit_codes(fake_windows, monkeypatch):
     result = _windows_cli(monkeypatch, "status")
     assert result.exit_code == 4
     fake_windows.registered = _xml()
-    monkeypatch.setattr(win, "task_state", lambda runner=None: {"State": "Ready"})
+    fake_windows.state = "Ready"
     result = _windows_cli(monkeypatch, "status", "--json")
     assert result.exit_code == 3, result.output
     assert json.loads(result.stdout)["running"] is False
