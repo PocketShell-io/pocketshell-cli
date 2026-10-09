@@ -71,6 +71,10 @@ class Paths:
             raise FileNotFoundError(path)
         return path
 
+    def directory_anchored(self, path, owner_sid):
+        self._refuse(path, False)
+        return path
+
     def inventory(self, path, owner_sid, *, private=True):
         self._refuse(path, private)
         prefix = self.key(path) + "\\"
@@ -251,41 +255,128 @@ def test_install_refuses_a_missing_server():
         install(staged_paths(), server="")
 
 
-# --- verify-paths (pure) -------------------------------------------------------------------
+# --- verify-paths protocol v2 (pure) ------------------------------------------------------
+
+PRIV = "C:\\x\\managed-runtime"
+RES = "C:\\Program Files\\PocketShell\\resources"
 
 
-def test_verify_paths_returns_handle_bytes_and_digest():
+def vp(paths, requests, **kw):
+    args = dict(owner_sid=USER_SID, operation_id="op-1", private_roots=[PRIV], resources_roots=[RES],
+                requests=requests, paths=paths, current_sid=USER_SID)
+    args.update(kw)
+    return inst.verify_paths(**args)
+
+
+def verify_fixture():
     paths = Paths()
-    paths.put("C:\\x\\managed-runtime\\authority.json", b"{}")
-    paths.mkdir("C:\\x\\managed-runtime")
-    reply, code = inst.verify_paths(owner_sid=USER_SID, files=["C:\\x\\managed-runtime\\authority.json"],
-                                    directories=["C:\\x\\managed-runtime"], paths=paths, current_sid=USER_SID)
-    assert code == 0 and reply["ok"]
-    f = reply["results"][0]
-    assert f["sha256"] == sha(b"{}") and base64.b64decode(f["bytesBase64"]) == b"{}"
-    assert sorted(f) == sorted(SCHEMA["$defs"]["verifyPathsReply"]["properties"]["results"]["items"]["oneOf"][0]
-                               ["required"])
+    paths.put(PRIV + "\\authority.json", b"{}")
+    paths.put(PRIV + "\\releases\\r\\pocketshell.exe", b"MZ" * 40000)
+    paths.put(RES + "\\host-runtime-catalog.json", b"[]")
+    paths.mkdir(PRIV)
+    return paths
 
 
-def test_verify_paths_refuses_another_owner_and_unprotected_objects():
-    paths = Paths()
-    paths.put("C:\\x\\a.json", b"{}")
-    reply, code = inst.verify_paths(owner_sid=USER_SID, files=["C:\\x\\a.json"], paths=paths,
-                                    current_sid="S-1-5-21-1-2-3-4")
-    assert code == 1 and not reply["ok"]
-    paths.unprotected.add(paths.key("C:\\x\\a.json"))
-    reply, code = inst.verify_paths(owner_sid=USER_SID, files=["C:\\x\\a.json"], paths=paths, current_sid=USER_SID)
-    assert code == 1 and "owner-only" in reply["results"][0]["problem"]
-    reply, code = inst.verify_paths(owner_sid=USER_SID, anchored=["C:\\x\\a.json"], paths=paths,
-                                    current_sid=USER_SID)
-    assert code == 0  # digest-anchored: no ACL shape required
+def test_verify_v2_correlated_documents_and_hash_only_binaries():
+    paths = verify_fixture()
+    reqs = [("document", PRIV + "\\authority.json"), ("binary", PRIV + "\\releases\\r\\pocketshell.exe"),
+            ("document", RES + "\\host-runtime-catalog.json"), ("directory", PRIV)]
+    reply, code = vp(paths, reqs)
+    assert code == 0 and reply["ok"] and reply["operationId"] == "op-1"
+    assert [(r["index"], r["kind"], r["path"]) for r in reply["results"]] == [(i, k, p) for i, (k, p) in
+                                                                               enumerate(reqs)]
+    doc, binary, cat, _d = reply["results"]
+    assert base64.b64decode(doc["bytesBase64"]) == b"{}" and doc["root"] == PRIV
+    assert binary["bytesBase64"] is None and binary["sha256"] == sha(b"MZ" * 40000) and binary["size"] == 80000
+    assert cat["root"] == RES
+    item_schema = SCHEMA["$defs"]["verifyReply"]["properties"]["results"]["items"]
+    for r in reply["results"]:
+        assert sorted(r) == sorted(item_schema["required"])
 
 
-def test_verify_paths_refuses_relative_and_nothing():
-    reply, code = inst.verify_paths(owner_sid=USER_SID, files=["a.json"], paths=Paths(), current_sid=USER_SID)
+def test_verify_v2_private_vs_resources_policy():
+    paths = verify_fixture()
+    paths.unprotected.add(paths.key(PRIV + "\\authority.json"))
+    paths.unprotected.add(paths.key(RES + "\\host-runtime-catalog.json"))
+    reply, code = vp(paths, [("document", PRIV + "\\authority.json"),
+                             ("document", RES + "\\host-runtime-catalog.json")])
     assert code == 1
-    reply, code = inst.verify_paths(owner_sid=USER_SID, paths=Paths(), current_sid=USER_SID)
-    assert code == 1 and reply["results"] == []
+    assert "owner-only" in reply["results"][0]["problem"] and reply["results"][1]["ok"]
+
+
+@pytest.mark.parametrize("requests,code", [
+    ([("document", "C:\\Users\\owner\\.ssh\\id_ed25519")], 1),          # outside every root
+    ([("document", PRIV + "\\releases\\r\\pocketshell.exe")], 1),      # bytes only for .json
+    ([("document", PRIV + "\\authority.json")] * 2, 2),                   # duplicate
+    ([("binary", PRIV + "\\..\\secret.json")], 1),                       # traversal
+    ([("binary", PRIV + "\\authority.json:evil")], 1),                     # ADS
+    ([("frobnicate", PRIV)], 2),                                         # unknown kind
+    ([], 2),                                                             # nothing requested
+])
+def test_verify_v2_refusals(requests, code):
+    reply, got = vp(verify_fixture(), requests)
+    assert got == code and not reply["ok"]
+
+
+def test_verify_v2_refuses_large_documents_owner_and_root_problems():
+    paths = verify_fixture()
+    paths.put(PRIV + "\\big.json", b"x" * (64 * 1024 + 1))
+    reply, code = vp(paths, [("document", PRIV + "\\big.json")])
+    assert code == 1 and "64 KiB" in reply["results"][0]["problem"]
+    assert vp(paths, [("directory", PRIV)], current_sid="S-1-5-21-1-2-3-4")[1] == 1
+    assert vp(paths, [("directory", PRIV)], operation_id="")[1] == 2
+    assert vp(paths, [("directory", PRIV)], resources_roots=[PRIV + "\\releases"])[1] == 2  # overlap
+    assert vp(paths, [("directory", PRIV)], private_roots=["relative"])[1] == 2
+
+
+# --- path syntax guards (code AND schema, the same expressions) ----------------------------
+
+BAD_ABS = ["C:\\a\\..\\b", "C:\\a\\.\\b", "C:\\a:stream", "C:\\a\\b.", "C:\\a\\b ", "\\\\server\\share\\x",
+           "\\\\?\\C:\\x", "C:\\a\\CON", "C:\\a\\nul.txt", "C:\\a\\\\b", "a\\b", "C:a\\b", "C:\\a\\b*"]
+GOOD_ABS = ["C:\\Users\\owner\\AppData\\Roaming\\PocketShell", "D:/a/b.json", "C:\\a\\con2\\x.json"]
+BAD_REL = ["../x", "a/../b", "./a", "a/./b", "a/CON", "a/nul.txt", "a.", "a/b.", "a:b", "a//b", "/a", "a\\b"]
+GOOD_REL = ["pocketshell.exe", "python/Lib/site-packages/a.py", "a/con2/b"]
+
+
+def test_path_guards_code_and_schema_agree():
+    import re
+
+    schema_abs = re.compile(SCHEMA["$defs"]["absPath"]["pattern"])
+    schema_rel = re.compile(SCHEMA["$defs"]["relPath"]["pattern"])
+    for p in BAD_ABS:
+        assert not inst._abs(p) and not schema_abs.match(p), p
+    for p in GOOD_ABS:
+        assert inst._abs(p) and schema_abs.match(p), p
+    for p in BAD_REL:
+        assert not inst.REL_RE.match(p) and not schema_rel.match(p), p
+    for p in GOOD_REL:
+        assert inst.REL_RE.match(p) and schema_rel.match(p), p
+
+
+@pytest.mark.parametrize("bad", ["../escape.dll", "python/../x.py", "a/CON.dll", "a:stream", "trail.", "x/./y"])
+def test_catalog_refuses_unsafe_relative_paths(bad):
+    c = make_catalog()
+    c["files"].append({"path": bad, "sha256": "0" * 64, "role": "module"})
+    with pytest.raises(inst.InstallError):
+        inst.parse_catalog(json.dumps(c).encode())
+
+
+@pytest.mark.parametrize("field,value", [("manifest", "C:\\x\\..\\m.json"), ("configDir", "C:\\keys:ads"),
+                                         ("manifest", "\\\\host\\share\\m.json")])
+def test_install_refuses_unsafe_binding_paths(field, value):
+    with pytest.raises(inst.InstallError, match="plain drive-absolute"):
+        install(staged_paths(), binding={**public_binding(), field: value})
+
+
+def test_schema_accepts_the_canonical_public_server():
+    """consumer review: the real provisioning receipt carries wss://gateway.pocketshell.io."""
+    import re
+
+    pattern = re.compile(SCHEMA["$defs"]["receipt"]["properties"]["binding"]["properties"]["server"]["pattern"])
+    assert pattern.match("wss://gateway.pocketshell.io")
+    assert inst.SERVER_RE.match("wss://gateway.pocketshell.io")
+    for bad in ("https://gateway.pocketshell.io", "ws://gateway.pocketshell.io", "wss://user@gw", "wss://gw/x?y"):
+        assert not pattern.match(bad) and not inst.SERVER_RE.match(bad), bad
 
 
 # --- CLI glue (agent fixture) ---------------------------------------------------------------

@@ -23,7 +23,7 @@ from pocketshell.gateway.service_common import ServiceError, sanitize
 
 CATALOG_VERSION = 2
 RECEIPT_VERSION = 2
-VERIFY_VERSION = 1
+VERIFY_VERSION = 2
 API_NAME = "ordinary-v2"
 PLATFORM = "win32-x64"
 VERIFIER = "pocketshell gateway agent verify-paths"
@@ -38,7 +38,12 @@ ENV_KEYS = ("SystemDrive", "SystemRoot", "ProgramData", "USERPROFILE", "LOCALAPP
 SHA_RE = re.compile(r"^[a-f0-9]{64}$")
 COMMIT_RE = re.compile(r"^[a-f0-9]{40}$")
 RELEASE_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
-REL_RE = re.compile(r"^[A-Za-z0-9_.\-]+(/[A-Za-z0-9_.\-]+)*$")
+# Shared with the schema (ordinary-v2-authority.schema.json $defs absPath/relPath):
+# drive-absolute only (no UNC / \\?\ / device namespace), no ADS colon after the
+# drive, no '.'/'..' or empty components, no device names, no trailing dot/space
+# aliases, no wildcards or control characters.
+ABS_RE = re.compile('^(?!.*[\\\\/]\\.{1,2}(?:[\\\\/]|$))(?!.*[\\\\/](?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^\\\\/]*)?(?:[\\\\/]|$))(?!.*[. ](?:[\\\\/]|$))(?!.*[\\\\/]{2})[A-Za-z]:[\\\\/][^:*?\\"<>|\\u0000-\\u001f]*$')
+REL_RE = re.compile('^(?!(?:.*/)?\\.{1,2}(?:/|$))(?!(?:.*/)?(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^/]*)?(?:/|$))(?!.*\\.(?:/|$))[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)*$')
 SID_RE = re.compile(r"^S-1-5-21-[0-9]+(-[0-9]+){3}$")
 DEVICE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 SERVER_RE = re.compile(r"^wss://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$")
@@ -56,9 +61,7 @@ def _exact(obj, keys) -> bool:
 
 
 def _abs(path) -> bool:
-    return isinstance(path, str) and re.match(r"^[A-Za-z]:[\\/]", path) is not None and "\0" not in path \
-        and ":" not in path[2:] and not any(p in ("..", ".") or p.endswith((".", " "))
-                                            for p in re.split(r"[\\/]", path[3:]) if p)
+    return isinstance(path, str) and len(path) <= 4096 and ABS_RE.match(path) is not None
 
 
 def _same(a: str, b: str) -> bool:
@@ -109,8 +112,7 @@ def parse_catalog(data: bytes) -> dict:
     seen, roles = set(), {}
     for f in files:
         if not _exact(f, ["path", "sha256", "role"]) or not isinstance(f["path"], str) \
-                or not REL_RE.match(f["path"]) or any(p in (".", "..") or p.endswith(".")
-                                                      for p in f["path"].split("/")) \
+                or len(f["path"]) > 1024 or not REL_RE.match(f["path"]) \
                 or not isinstance(f["sha256"], str) or not SHA_RE.match(f["sha256"]) or f["role"] not in ROLES:
             raise bad(f"file entry {sanitize(str(f), 120)}")
         key = f["path"].lower()
@@ -248,6 +250,21 @@ class NativePaths:
         finally:
             self._close(pinned)
 
+    def directory_anchored(self, path: str, owner_sid: str) -> str:
+        """A resources directory: reparse-free by handle, ancestors without
+        foreign mutation authority; no owner-only requirement."""
+        from pathlib import Path
+
+        from pocketshell import windows_security as ws
+
+        p = ws._path(Path(path))
+        self._ancestors(str(p), owner_sid)
+        pinned = self._pinned(p, private_leaf=False)
+        try:
+            return self._final(pinned[-1]) or str(p)
+        finally:
+            self._close(pinned)
+
     def inventory(self, path: str, owner_sid: str, *, private: bool = True) -> list:
         """Every regular file under a directory, by handle; any reparse entry
         refuses, and with ``private`` any non-private object refuses."""
@@ -341,50 +358,94 @@ def known_folders() -> dict:
 # --- verify-paths -------------------------------------------------------------------------
 
 
-def verify_paths(*, owner_sid: str, files=(), anchored=(), directories=(), inventories=(), max_bytes=MAX_DOC,
+OPERATION_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+VERIFY_KINDS = ("document", "binary", "directory", "inventory")
+MAX_REQUESTS = 512
+MAX_DOCUMENT = 64 * 1024          # bytes returned per document (the adapter's bound)
+MAX_REPLY = 1024 * 1024           # the verifier's own channel, independent of the agent adapter
+
+
+def _under(path: str, root: str) -> bool:
+    p, r = ntpath.normcase(ntpath.normpath(path)), ntpath.normcase(ntpath.normpath(root))
+    return p == r or p.startswith(r.rstrip("\\") + "\\")
+
+
+def verify_paths(*, owner_sid: str, operation_id: str, private_roots=(), resources_roots=(), requests=(),
                  paths, current_sid: str) -> tuple:
-    """(reply, exit code): 0 all ok, 1 refusal."""
-    results = []
+    """Verifier protocol v2 (agreement v3.1 §11.4): (reply, exit code) with
+    0 = every request verified, 1 = refusal, 2 = malformed request.
+
+    Each request is (kind, path). A path must lie in exactly one declared
+    root: under a PRIVATE root it must have the owner-only protected shape;
+    under a RESOURCES root (the Desktop install) it is read reparse-free by
+    handle and anchored by digest only. ``document`` returns bounded bytes
+    (.json, <= 64 KiB); ``binary`` returns size + sha256 only (never bytes).
+    Results correspond 1:1, in order, to the requests (``index``)."""
+    def reply(ok, results, problem=None):
+        doc = {"version": VERIFY_VERSION, "operationId": operation_id, "ownerSid": owner_sid, "ok": ok,
+               "results": results}
+        if problem:
+            doc["problem"] = problem
+        return doc
+
+    if not isinstance(operation_id, str) or not OPERATION_RE.match(operation_id):
+        return reply(False, [], "--operation-id is required ([A-Za-z0-9._-]{1,64})"), 2
     if not SID_RE.match(owner_sid or "") or owner_sid != current_sid:
-        return {"version": VERIFY_VERSION, "ownerSid": owner_sid, "ok": False, "results": [],
-                "problem": "--owner-sid is not the measured current user"}, 1
-    for path, private in [*((p, True) for p in files), *((p, False) for p in anchored)]:
-        item = {"kind": "file", "path": path, "canonicalPath": None, "ok": False, "size": None, "sha256": None,
-                "bytesBase64": None, "problem": None}
+        return reply(False, [], "--owner-sid is not the measured current user"), 1
+    roots = [(r, True) for r in private_roots] + [(r, False) for r in resources_roots]
+    if not roots or any(not _abs(r) for r, _ in roots):
+        return reply(False, [], "at least one drive-absolute --private-root/--resources-root is required"), 2
+    for i, (r1, _p1) in enumerate(roots):
+        for r2, _p2 in roots[i + 1:]:
+            if _under(r1, r2) or _under(r2, r1):
+                return reply(False, [], "declared roots must not overlap"), 2
+    if not requests or len(requests) > MAX_REQUESTS:
+        return reply(False, [], f"1..{MAX_REQUESTS} requests are required"), 2
+    seen = set()
+    for kind, path in requests:
+        key = (kind, ntpath.normcase(ntpath.normpath(path)) if isinstance(path, str) else path)
+        if kind not in VERIFY_KINDS or key in seen:
+            return reply(False, [], "unknown or duplicate request"), 2
+        seen.add(key)
+    results = []
+    for index, (kind, path) in enumerate(requests):
+        item = {"index": index, "kind": kind, "path": path, "root": None, "ok": False, "canonicalPath": None,
+                "size": None, "sha256": None, "bytesBase64": None, "files": None, "problem": None}
         try:
             if not _abs(path):
-                raise ServiceError("not an absolute local path")
-            got = paths.file(path, owner_sid, private=private, max_bytes=max_bytes)
-            if not got["canonicalPath"] or not _same(got["canonicalPath"], path):
-                raise ServiceError("the opened object is not the requested path")
-            item.update(canonicalPath=got["canonicalPath"], size=got["size"], sha256=got["sha256"], ok=True,
-                        bytesBase64=None if got["bytes"] is None else base64.b64encode(got["bytes"]).decode())
-        except Exception as exc:  # noqa: BLE001 - every failure is a refusal
+                raise ServiceError("not a plain drive-absolute path")
+            owners = [(r, private) for r, private in roots if _under(path, r)]
+            if len(owners) != 1:
+                raise ServiceError("the path is not inside exactly one declared root")
+            root, private = owners[0]
+            item["root"] = root
+            if kind in ("document", "binary"):
+                if kind == "document" and not path.lower().endswith(".json"):
+                    raise ServiceError("only .json documents return bytes; use binary")
+                got = paths.file(path, owner_sid, private=private,
+                                 max_bytes=MAX_DOCUMENT if kind == "document" else 0)
+                if not got["canonicalPath"] or not _same(got["canonicalPath"], path):
+                    raise ServiceError("the opened object is not the requested path")
+                if kind == "document" and got["bytes"] is None:
+                    raise ServiceError("document larger than 64 KiB")
+                item.update(canonicalPath=got["canonicalPath"], size=got["size"], sha256=got["sha256"],
+                            bytesBase64=base64.b64encode(got["bytes"]).decode() if kind == "document" else None)
+            elif kind == "directory":
+                canonical = paths.directory(path, owner_sid) if private else paths.directory_anchored(path, owner_sid)
+                if not _same(canonical, path):
+                    raise ServiceError("the opened directory is not the requested path")
+                item["canonicalPath"] = canonical
+            else:
+                item["files"] = paths.inventory(path, owner_sid, private=private)
+            item["ok"] = True
+        except Exception as exc:  # noqa: BLE001 - every failure is a refusal of that request
             item["problem"] = sanitize(str(exc) or type(exc).__name__, 600)
         results.append(item)
-    for path in directories:
-        item = {"kind": "directory", "path": path, "canonicalPath": None, "ok": False, "problem": None}
-        try:
-            if not _abs(path):
-                raise ServiceError("not an absolute local path")
-            canonical = paths.directory(path, owner_sid)
-            if not _same(canonical, path):
-                raise ServiceError("the opened directory is not the requested path")
-            item.update(canonicalPath=canonical, ok=True)
-        except Exception as exc:  # noqa: BLE001
-            item["problem"] = sanitize(str(exc) or type(exc).__name__, 600)
-        results.append(item)
-    for path in inventories:
-        item = {"kind": "inventory", "path": path, "ok": False, "files": [], "problem": None}
-        try:
-            if not _abs(path):
-                raise ServiceError("not an absolute local path")
-            item.update(files=paths.inventory(path, owner_sid), ok=True)
-        except Exception as exc:  # noqa: BLE001
-            item["problem"] = sanitize(str(exc) or type(exc).__name__, 600)
-        results.append(item)
-    ok = bool(results) and all(r["ok"] for r in results)
-    return {"version": VERIFY_VERSION, "ownerSid": owner_sid, "ok": ok, "results": results}, 0 if ok else 1
+    ok = all(r["ok"] for r in results)
+    doc = reply(ok, results)
+    if len(json.dumps(doc)) > MAX_REPLY:
+        return reply(False, [], "the reply would exceed 1 MiB; split the request"), 1
+    return doc, 0 if ok else 1
 
 
 # --- install -------------------------------------------------------------------------------
@@ -417,6 +478,13 @@ def install_runtime(*, user_data: str, catalog_path: str, staged: str, binding: 
         raise InstallError("binding-mismatch", "the enrolled helper reports no public wss:// server")
     if not DEVICE_RE.match(binding.get("deviceId") or ""):
         raise InstallError("binding-mismatch", "the binding has no usable device id")
+    if not _abs(binding.get("manifest")) or not _abs(binding.get("configDir")):
+        raise InstallError("binding-mismatch", "the binding manifest/configDir is not a plain drive-absolute path")
+    for key, value in folders.items():
+        if key == "SystemDrive" and not re.match(r"^[A-Za-z]:$", value or ""):
+            raise InstallError("environment", "SystemDrive is not a drive")
+        if key != "SystemDrive" and not _abs(value):
+            raise InstallError("environment", f"{key} is not a plain drive-absolute path")
 
     # 1) the staged closure, exactly
     try:

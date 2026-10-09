@@ -60,8 +60,9 @@ class AgentApi(EndpointApi):
     caller_job = None
     terminate_fails = False
 
-    def spawn_hidden(self, argv, cwd, env):
-        self.spawns.append({"argv": list(argv), "cwd": cwd, "env": dict(env) if env is not None else None})
+    def spawn_hidden(self, argv, cwd, env, *, image_sha256=None):
+        self.spawns.append({"argv": list(argv), "cwd": cwd, "env": dict(env) if env is not None else None,
+                            "imageSHA256": image_sha256})
         if self.caller_job is not None:
             raise win.CallerJobError("the child is inside a job object (it could not break away from the "
                                      "caller's job; KILL_ON_JOB_CLOSE "
@@ -622,3 +623,51 @@ def test_a3_malformed_custody_record_is_failed_and_retained(agent, record, paylo
     result, data = run("start", "--json", "--timeout", "0.2")
     assert result.exit_code == 1 and data["error"]["code"] == "custody-unverifiable"
     assert len(agent["api"].spawns) == n
+
+
+# --- v3.1 (consumer review): stopped requires the listener proven absent --------------
+
+
+def test_v31_no_generation_but_port_served_is_not_stopped(agent):
+    bind()
+    agent["api"].listeners[22024] = [("127.0.0.1", 4242)]  # served, no CURRENT/READY, no custody
+    result, data = run("status", "--json")
+    assert data["endpoint"]["state"] != "stopped" and data["state"] != "stopped"
+    assert result.exit_code == 3
+    assert any("22024" in p for p in data["endpoint"]["problems"])
+
+
+def test_v31_listener_query_failure_is_not_stopped(agent, monkeypatch):
+    bind()
+
+    def boom(port):
+        raise ServiceError("GetExtendedTcpTable failed")
+
+    monkeypatch.setattr(agent["api"], "listener_pids", boom)
+    result, data = run("status", "--json")
+    assert data["state"] != "stopped" and result.exit_code in (1, 3)
+
+
+def test_v31_spawns_hold_and_pin_their_images(agent):
+    bind()
+    run("start", "--json")
+    link = [x for x in agent["api"].spawns if x["argv"][0] == WIN_HELPER][0]
+    assert link["imageSHA256"] == QUALIFIED  # the bound helper digest, re-hashed from the held handle
+
+
+def test_v31_partial_start_with_unverifiable_custody_is_failed_not_starting(agent, monkeypatch):
+    """exit 5 'starting' only when nothing is unknown; unknown custody => failed."""
+    bind()
+    agent["g"].ready_on_run = False
+    real = agent["api"].spawn_hidden
+
+    def spawn(argv, cwd, env, *, image_sha256=None):
+        meta = real(argv, cwd, env, image_sha256=image_sha256)
+        if argv[0] == WIN_HELPER:
+            agent["api"].denied_birth = frozenset({meta["pid"]})
+        return meta
+
+    monkeypatch.setattr(agent["api"], "spawn_hidden", spawn)
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert result.exit_code == 5 and data["error"]["code"] == "start-deadline"
+    assert data["state"] == "failed" and data["outbound"]["state"] == "unknown"

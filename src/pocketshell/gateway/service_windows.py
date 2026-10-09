@@ -711,7 +711,74 @@ class WindowsApi:
             raise ServiceError("cannot read this process's session id")
         return int(session.value)
 
-    def spawn_hidden(self, argv: list, cwd: str, env: Optional[dict]) -> dict:
+    def spawn_hidden(self, argv: list, cwd: str, env: Optional[dict], *,
+                     image_sha256: Optional[str] = None) -> dict:
+        """Hold the image THROUGH the spawn (v3.1): ``argv[0]`` is opened by
+        handle (no reparse point, FILE_SHARE_READ only: writers, renames and
+        deletes are refused while held), its bytes are hashed from THAT handle
+        and compared with ``image_sha256`` when given; the suspended child's
+        kernel image path must then resolve to the SAME file (volume serial +
+        file index) before it is resumed. The handle is released afterwards."""
+        held, identity = self._hold_image(str(argv[0]), image_sha256)
+        try:
+            return self._spawn_measured(argv, cwd, env, held_identity=identity)
+        finally:
+            import ctypes as c
+
+            c.WinDLL("kernel32").CloseHandle(c.c_void_p(held))
+
+    @staticmethod
+    def _file_identity(handle) -> tuple:
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        class Info(c.Structure):
+            _fields_ = [("attributes", w.DWORD), ("created", w.FILETIME), ("accessed", w.FILETIME),
+                        ("written", w.FILETIME), ("volume", w.DWORD), ("size_high", w.DWORD),
+                        ("size_low", w.DWORD), ("links", w.DWORD), ("index_high", w.DWORD),
+                        ("index_low", w.DWORD)]
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.GetFileInformationByHandle.argtypes = [w.HANDLE, c.c_void_p]
+        info = Info()
+        if not k.GetFileInformationByHandle(handle, c.byref(info)):
+            raise ServiceError("cannot identify the image file")
+        return info.attributes, (info.volume, info.index_high, info.index_low)
+
+    def _hold_image(self, path: str, image_sha256: Optional[str]) -> tuple:
+        import ctypes as c
+        import hashlib as h
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.CreateFileW.restype = w.HANDLE
+        k.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
+        k.ReadFile.argtypes = [w.HANDLE, c.c_void_p, w.DWORD, c.POINTER(w.DWORD), c.c_void_p]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        # GENERIC_READ; FILE_SHARE_READ only; OPEN_EXISTING; OPEN_REPARSE_POINT | SEQUENTIAL_SCAN
+        handle = k.CreateFileW(path, 0x80000000, 1, None, 3, 0x00200000 | 0x08000000, None)
+        if handle in (None, w.HANDLE(-1).value):
+            raise ServiceError(f"cannot hold {sanitize(path)} (error {c.get_last_error()})")
+        try:
+            attributes, identity = self._file_identity(handle)
+            if attributes & 0x400 or attributes & 0x10:
+                raise ServiceError(f"{sanitize(path)} is a reparse point or directory")
+            if image_sha256 is not None:
+                digest, buf, got = h.sha256(), c.create_string_buffer(1 << 20), w.DWORD()
+                while True:
+                    if not k.ReadFile(handle, buf, 1 << 20, c.byref(got), None):
+                        raise ServiceError(f"cannot read {sanitize(path)}")
+                    if not got.value:
+                        break
+                    digest.update(buf.raw[:got.value])
+                if digest.hexdigest() != image_sha256:
+                    raise ServiceError(f"{sanitize(path)} does not match its pinned sha256")
+            return handle, identity
+        except BaseException:
+            k.CloseHandle(handle)
+            raise
+
+    def _spawn_measured(self, argv: list, cwd: str, env: Optional[dict], *, held_identity) -> dict:
         """Start ``argv`` directly (no shell, no window) in the caller's session,
         SUSPENDED, and MEASURE the child before resuming it (the native owner's
         5844 launcher order): token user = ours, not elevated, session = ours,
@@ -745,6 +812,8 @@ class WindowsApi:
         k.CreateProcessW.argtypes = [w.LPCWSTR, w.LPWSTR, c.c_void_p, c.c_void_p, w.BOOL, w.DWORD,
                                      c.c_void_p, w.LPCWSTR, c.POINTER(SI), c.POINTER(PI)]
         k.IsProcessInJob.argtypes = [w.HANDLE, w.HANDLE, c.POINTER(w.BOOL)]
+        k.CreateFileW.restype = w.HANDLE
+        k.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
         k.ResumeThread.argtypes = [w.HANDLE]
         k.ResumeThread.restype = w.DWORD  # (DWORD)-1 = failure; a c_int -1 would never equal 0xFFFFFFFF
         k.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
@@ -807,6 +876,15 @@ class WindowsApi:
             if not k.QueryFullProcessImageNameW(pi.hProcess, 0, image, c.byref(n)) or \
                     not _same_path(image.value, str(argv[0])):
                 raise ServiceError("the child's image is not the requested executable")
+            # the kernel's image file must be the very file held (and hashed) above
+            probe = k.CreateFileW(image.value, 0x80, 7, None, 3, 0x00200000 | 0x02000000, None)
+            if probe in (None, w.HANDLE(-1).value):
+                raise ServiceError("cannot identify the child's image file")
+            try:
+                if self._file_identity(probe)[1] != held_identity:
+                    raise ServiceError("the child's image file is not the held, verified file")
+            finally:
+                k.CloseHandle(probe)
             mine = (self.current_sid(), self.current_session())
             if child_sid != mine[0] or elevation.value or session.value != mine[1]:
                 raise ServiceError(

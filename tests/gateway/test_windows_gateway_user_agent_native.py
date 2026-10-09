@@ -199,3 +199,30 @@ def test_process_identity_is_tri_state():
     assert api.process_identity(child.pid)["state"] == "absent"
     # the System process (pid 4) exists but its image is not ours to read
     assert api.process_identity(4)["state"] in ("present", "unknown")
+
+
+def test_held_image_refuses_writers_renames_and_a_wrong_digest(tmp_path):
+    """v3.1: the image is held (FILE_SHARE_READ only) from hashing through spawn."""
+    import ctypes as c
+    import hashlib
+    import shutil
+
+    from pocketshell.gateway.service_common import ServiceError
+
+    api = win.WindowsApi()
+    image = tmp_path / "held.exe"
+    shutil.copyfile(os.path.join(os.environ["SystemRoot"], "System32", "PING.EXE"), image)
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    with pytest.raises(ServiceError, match="does not match its pinned sha256"):
+        api.spawn_hidden([str(image), "-n", "1", "127.0.0.1"], str(tmp_path), None, image_sha256="0" * 64)
+    handle, _identity = api._hold_image(str(image), digest)
+    try:
+        with pytest.raises(PermissionError):
+            open(image, "r+b")
+        with pytest.raises(PermissionError):
+            os.replace(image, tmp_path / "moved.exe")
+        with pytest.raises(PermissionError):
+            os.unlink(image)
+    finally:
+        c.WinDLL("kernel32").CloseHandle(c.c_void_p(handle))
+    os.replace(image, tmp_path / "moved.exe")  # released: allowed again

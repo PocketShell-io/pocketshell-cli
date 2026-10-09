@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "pocketshell:ordinary-v2-authority:v3-proposed",
-  "title": "PocketShell ordinary-v2 installed-runtime authority (user-background-api-agreement v3, PROPOSED)",
+  "$id": "pocketshell:ordinary-v2-authority:v3.1-proposed",
+  "title": "PocketShell ordinary-v2 installed-runtime authority (user-background-api-agreement v3.1, PROPOSED)",
   "$defs": {
     "sha256": {
       "type": "string",
@@ -21,13 +21,15 @@
     },
     "absPath": {
       "type": "string",
-      "pattern": "^[A-Za-z]:[\\\\/][^\\u0000\\r\\n]*$",
-      "maxLength": 4096
+      "maxLength": 4096,
+      "pattern": "^(?!.*[\\\\/]\\.{1,2}(?:[\\\\/]|$))(?!.*[\\\\/](?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^\\\\/]*)?(?:[\\\\/]|$))(?!.*[. ](?:[\\\\/]|$))(?!.*[\\\\/]{2})[A-Za-z]:[\\\\/][^:*?\\\"<>|\\u0000-\\u001f]*$",
+      "$comment": "Drive-absolute only. Refuses UNC, \\\\?\\ and device namespaces, an NTFS ADS colon after the drive, '.', '..' and empty components, device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9), trailing dot/space aliases, wildcards and control characters. Producer and consumer ALSO enforce these in code, plus case-collision checks within one closure."
     },
     "relPath": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_.\\-]+(/[A-Za-z0-9_.\\-]+)*$",
-      "maxLength": 1024
+      "maxLength": 1024,
+      "pattern": "^(?!(?:.*/)?\\.{1,2}(?:/|$))(?!(?:.*/)?(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^/]*)?(?:/|$))(?!.*\\.(?:/|$))[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)*$",
+      "$comment": "Forward-slash relative path under releases/<release>. Refuses '.', '..' and empty components, device names, trailing dots, ':' and backslashes."
     },
     "birth": {
       "type": "string",
@@ -281,7 +283,8 @@
             },
             "server": {
               "type": "string",
-              "pattern": "^wss://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$"
+              "pattern": "^wss://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$",
+              "$comment": "Copied verbatim from the enrolled helper's `show` line `server:`, with no normalization. The canonical value is wss://gateway.pocketshell.io."
             }
           }
         },
@@ -415,7 +418,7 @@
       }
     },
     "attestation": {
-      "$comment": "Additive to the JSON-v1 agent document. Live (ready/starting) requirements; session must equal owner.session; outbound.helperSHA256 must equal the catalog helper sha256.",
+      "$comment": "Additive to the JSON-v1 agent document. Live (ready/starting) requirements; session must equal owner.session; outbound.helperSHA256 must equal the catalog helper sha256. PROPOSED fragment (open).",
       "type": "object",
       "required": [
         "endpoint",
@@ -488,7 +491,7 @@
       }
     },
     "stoppedAttestation": {
-      "$comment": "An accepted stopped document: both absenceVerified true (custody proven gone, port not served).",
+      "$comment": "PROPOSED, not emitted until the agreement is accepted. An accepted stopped document needs both absenceVerified true. That requires a successful protected enumeration of every custody record (primary and recovery), every recorded identity proven gone, and the listener proven absent.",
       "type": "object",
       "required": [
         "endpoint",
@@ -527,18 +530,23 @@
         }
       }
     },
-    "verifyPathsReply": {
+    "verifyReply": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "version",
+        "operationId",
         "ownerSid",
         "ok",
         "results"
       ],
       "properties": {
         "version": {
-          "const": 1
+          "const": 2
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
         },
         "ownerSid": {
           "$ref": "#/$defs/sid"
@@ -548,143 +556,251 @@
         },
         "results": {
           "type": "array",
+          "maxItems": 512,
           "items": {
-            "oneOf": [
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "kind",
-                  "path",
-                  "canonicalPath",
-                  "ok",
-                  "size",
-                  "sha256",
-                  "bytesBase64",
-                  "problem"
-                ],
-                "properties": {
-                  "kind": {
-                    "const": "file"
-                  },
-                  "path": {
-                    "$ref": "#/$defs/absPath"
-                  },
-                  "canonicalPath": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "ok": {
-                    "type": "boolean"
-                  },
-                  "size": {
-                    "type": [
-                      "integer",
-                      "null"
-                    ],
-                    "minimum": 0
-                  },
-                  "sha256": {
-                    "oneOf": [
-                      {
-                        "$ref": "#/$defs/sha256"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "bytesBase64": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "problem": {
-                    "type": [
-                      "string",
-                      "null"
-                    ],
-                    "maxLength": 600
-                  }
-                }
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "index",
+              "kind",
+              "path",
+              "root",
+              "ok",
+              "canonicalPath",
+              "size",
+              "sha256",
+              "bytesBase64",
+              "files",
+              "problem"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 511
               },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "kind",
-                  "path",
-                  "canonicalPath",
-                  "ok",
-                  "problem"
-                ],
-                "properties": {
-                  "kind": {
-                    "const": "directory"
-                  },
-                  "path": {
-                    "$ref": "#/$defs/absPath"
-                  },
-                  "canonicalPath": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "ok": {
-                    "type": "boolean"
-                  },
-                  "problem": {
-                    "type": [
-                      "string",
-                      "null"
-                    ],
-                    "maxLength": 600
-                  }
-                }
+              "kind": {
+                "enum": [
+                  "document",
+                  "binary",
+                  "directory",
+                  "inventory"
+                ]
               },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "kind",
-                  "path",
-                  "ok",
-                  "files",
-                  "problem"
-                ],
-                "properties": {
-                  "kind": {
-                    "const": "inventory"
-                  },
-                  "path": {
+              "path": {
+                "$ref": "#/$defs/absPath"
+              },
+              "root": {
+                "oneOf": [
+                  {
                     "$ref": "#/$defs/absPath"
                   },
-                  "ok": {
-                    "type": "boolean"
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "canonicalPath": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "sha256": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/sha256"
                   },
-                  "files": {
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "bytesBase64": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 87384,
+                "$comment": "Non-null only for kind=document: a .json file of at most 65536 bytes. Never set for binaries."
+              },
+              "files": {
+                "oneOf": [
+                  {
                     "type": "array",
+                    "maxItems": 4096,
                     "items": {
                       "$ref": "#/$defs/relPath"
                     }
                   },
-                  "problem": {
-                    "type": [
-                      "string",
-                      "null"
-                    ],
-                    "maxLength": 600
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "problem": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 600
+              }
+            }
+          }
+        },
+        "problem": {
+          "type": "string",
+          "maxLength": 600
+        }
+      },
+      "$comment": "Results correspond 1:1 and in order to the requests (index). The consumer refuses a missing, extra, duplicate, reordered or unrequested result, an operationId mismatch, and any reply over 1 MiB. Exit 0 = every request verified, 1 = refusal, 2 = malformed request."
+    },
+    "agentDocumentV1": {
+      "type": "object",
+      "required": [
+        "version",
+        "operationId",
+        "mode",
+        "state",
+        "owner",
+        "binding",
+        "endpoint",
+        "outbound",
+        "error"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "mode": {
+          "const": "active-console"
+        },
+        "state": {
+          "enum": [
+            "ready",
+            "starting",
+            "failed",
+            "stopped",
+            "unavailable"
+          ]
+        },
+        "endpoint": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "state",
+                "problems"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "ready",
+                    "not-ready",
+                    "stopped"
+                  ]
+                },
+                "problems": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
                   }
                 }
               }
-            ]
-          }
+            }
+          ]
+        },
+        "outbound": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "state",
+                "pid",
+                "creationFILETIME",
+                "helperSHA256"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "running",
+                    "stopped",
+                    "unknown"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "code",
+                "message"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                "recovery": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "pid",
+                    "creationFILETIME",
+                    "image",
+                    "record"
+                  ],
+                  "properties": {
+                    "pid": {
+                      "$ref": "#/$defs/pid"
+                    },
+                    "creationFILETIME": {
+                      "$ref": "#/$defs/birth"
+                    },
+                    "image": {
+                      "$ref": "#/$defs/absPath"
+                    },
+                    "record": {
+                      "enum": [
+                        "guardian.json",
+                        "link.json"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ]
         }
-      }
+      },
+      "$comment": "OPEN (additive) by design: JSON v1 adds fields over time. The state and exit mapping is frozen in agreement \u00a711.6. These are fragments; the consumer's own closed parser decides acceptance."
     }
-  }
+  },
+  "$comment": "Closed (additionalProperties false): catalog, receipt and its sub-objects, launch, verifyReply. Open, additive fragments: attestation, stoppedAttestation, agentDocumentV1."
 }

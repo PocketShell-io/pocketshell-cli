@@ -81,41 +81,51 @@ def test_install_and_verify_paths_on_real_acls(layout):
     release = os.path.join(root, "releases", "ci-native-1")
     authority = os.path.join(root, "authority.json")
 
-    reply, code = inst.verify_paths(owner_sid=sid, files=[authority], directories=[root, release],
-                                    inventories=[release], anchored=[layout["catalog"]], paths=paths,
-                                    current_sid=sid)
+    resources = os.path.dirname(layout["catalog"])
+
+    def vp(requests, **kw):
+        args = dict(owner_sid=sid, operation_id="ci-1", private_roots=[root], resources_roots=[resources],
+                    requests=requests, paths=paths, current_sid=sid)
+        args.update(kw)
+        return inst.verify_paths(**args)
+
+    reqs = [("document", authority), ("directory", root), ("directory", release), ("inventory", release),
+            ("document", layout["catalog"]), ("binary", os.path.join(release, "pocketshell.exe"))]
+    reply, code = vp(reqs)
     print(json.dumps({**reply, "results": [{k: v for k, v in r.items() if k != "bytesBase64"}
                                            for r in reply["results"]]}, indent=1))
     assert code == 0 and reply["ok"], reply
     assert json.loads(base64.b64decode(reply["results"][0]["bytesBase64"])) == receipt
-    inventory = next(r for r in reply["results"] if r["kind"] == "inventory")
-    assert sorted(inventory["files"]) == sorted(FILES)
-    cat = next(r for r in reply["results"] if r["path"] == layout["catalog"])
-    assert cat["sha256"] == receipt["catalogSHA256"]
+    assert sorted(reply["results"][3]["files"]) == sorted(FILES)
+    assert reply["results"][4]["sha256"] == receipt["catalogSHA256"]
+    assert reply["results"][5]["bytesBase64"] is None and reply["results"][5]["sha256"] == sha(b"cli-trampoline")
 
-    # the staged (inherited-DACL) tree is NOT private: refused as --file, fine as anchored
+    # the staged (inherited-DACL) tree is NOT private: refused under a private root
     staged_file = os.path.join(layout["staged"], "pocketshell.exe")
-    reply, code = inst.verify_paths(owner_sid=sid, files=[staged_file], paths=paths, current_sid=sid)
+    reply, code = vp([("binary", staged_file)], private_roots=[layout["staged"]], resources_roots=[])
     assert code == 1, reply
     print("staged as private:", reply["results"][0]["problem"])
-    reply, code = inst.verify_paths(owner_sid=sid, anchored=[staged_file], paths=paths, current_sid=sid)
-    assert code == 0
+    reply, code = vp([("binary", staged_file)], private_roots=[root], resources_roots=[resources])
+    assert code == 0, reply  # resources policy: anchored by digest
+
+    # a file outside every declared root is refused (no arbitrary byte exposure)
+    reply, code = vp([("document", os.path.join(os.environ["SystemRoot"], "win.ini"))])
+    assert code == 1
 
     # a foreign grant on the receipt is refused (test-only icacls on the disposable runner)
     subprocess.run(["icacls", authority, "/grant", "*S-1-1-0:R"], check=True, capture_output=True)
-    reply, code = inst.verify_paths(owner_sid=sid, files=[authority], paths=paths, current_sid=sid)
+    reply, code = vp([("document", authority)])
     assert code == 1 and "outside your account" in reply["results"][0]["problem"], reply
 
     # a junction inside the private tree is refused by the inventory
     junction = os.path.join(release, "python", "evil")
     subprocess.run(["cmd", "/c", "mklink", "/J", junction, os.environ["SystemRoot"]], check=True,
                    capture_output=True)
-    reply, code = inst.verify_paths(owner_sid=sid, inventories=[release], paths=paths, current_sid=sid)
+    reply, code = vp([("inventory", release)])
     assert code == 1 and "reparse" in reply["results"][0]["problem"], reply
 
     # another owner SID is refused outright
-    reply, code = inst.verify_paths(owner_sid="S-1-5-21-1-2-3-4", files=[authority], paths=paths,
-                                    current_sid=sid)
+    reply, code = vp([("document", authority)], owner_sid="S-1-5-21-1-2-3-4")
     assert code == 1
 
 

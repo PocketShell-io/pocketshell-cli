@@ -612,20 +612,26 @@ def agent_install(user_data, catalog, staged, dry_run, as_json, operation_id):
 
 
 @agent_group.command("verify-paths")
+@click.option("--operation-id", "operation_id", required=True, metavar="ID", help="Echoed for correlation.")
 @click.option("--owner-sid", required=True, metavar="SID", help="The expected owner (the current user).")
-@click.option("--file", "files", multiple=True, metavar="PATH", help="Private file: owner-only, by handle.")
-@click.option("--anchored-file", "anchored", multiple=True, metavar="PATH",
-              help="Digest-anchored file (no ACL shape required; reparse-free, by handle).")
-@click.option("--directory", "directories", multiple=True, metavar="DIR", help="Private directory.")
-@click.option("--inventory", "inventories", multiple=True, metavar="DIR", help="List a private tree.")
-@click.option("--max-bytes", type=int, default=1048576, help="Return bytes for files up to this size.")
+@click.option("--private-root", "private_roots", multiple=True, metavar="DIR",
+              help="Owner-only protected root (e.g. <userData>\\managed-runtime).")
+@click.option("--resources-root", "resources_roots", multiple=True, metavar="DIR",
+              help="Shipped resources root (digest-anchored, reparse-free).")
+@click.option("--document", "documents", multiple=True, metavar="PATH", help=".json, bytes returned (<=64 KiB).")
+@click.option("--binary", "binaries", multiple=True, metavar="PATH", help="size + sha256 only.")
+@click.option("--directory", "directories", multiple=True, metavar="DIR")
+@click.option("--inventory", "inventories", multiple=True, metavar="DIR")
 @_JSON
-def agent_verify_paths(owner_sid, files, anchored, directories, inventories, max_bytes, as_json):
-    """Trusted native path verifier for the Desktop app (exit 0 all ok, 1 refusal)."""
+def agent_verify_paths(operation_id, owner_sid, private_roots, resources_roots, documents, binaries, directories,
+                       inventories, as_json):
+    """Reference path verifier, protocol v2 (exit 0 all ok, 1 refusal, 2 malformed request)."""
     api, _runner = _api_runner()
-    _emit_raw(*_agent.verify_paths_command(owner_sid=owner_sid, files=files, anchored=anchored,
-                                           directories=directories, inventories=inventories,
-                                           max_bytes=max_bytes, api=api))
+    requests = [*(("document", p) for p in documents), *(("binary", p) for p in binaries),
+                *(("directory", p) for p in directories), *(("inventory", p) for p in inventories)]
+    _emit_raw(*_agent.verify_paths_command(owner_sid=owner_sid, operation_id=operation_id,
+                                           private_roots=private_roots, resources_roots=resources_roots,
+                                           requests=requests, api=api))
 
 
 gateway_group.add_command(agent_group)

@@ -231,14 +231,14 @@ def load_binding(*, api, runner, revalidate: bool):
 LAUNCH_KEYS = ("inJob", "callerJobKillOnClose", "brokeAway", "elevated", "session")
 
 
-def _spawn(api, argv, cwd, env) -> dict:
+def _spawn(api, argv, cwd, env, image_sha256=None) -> dict:
     """Hidden direct spawn; the child's job membership is MEASURED, never
     assumed (see WindowsApi.spawn_hidden): a child that could not break away
     from a KILL_ON_JOB_CLOSE caller job is refused."""
     from pocketshell.gateway import service_windows as win
 
     try:
-        meta = api.spawn_hidden(argv, cwd, env)
+        meta = api.spawn_hidden(argv, cwd, env, image_sha256=image_sha256)
     except win.CallerJobError as exc:
         raise AgentError("caller-job", str(exc)) from None
     if meta.get("elevated") is not False:
@@ -443,7 +443,11 @@ def _endpoint_status(m, host_key, api, runner, session: int) -> dict:
     out["guardianLaunch"] = None if not meta or meta is MALFORMED else {
         "pid": meta.get("pid"), "creationFILETIME": meta.get("creationFILETIME"),
         "running": {ALIVE: True, GONE: False}.get(_identity_state(meta, m.python, api))}
-    if not ready["ok"] and ready.get("pid") and not api.listener_pids(m.port):
+    try:
+        served = api.listener_pids(m.port)
+    except Exception:  # noqa: BLE001 - an unverifiable listener is never "absent"
+        served = None
+    if not ready["ok"] and ready.get("pid") and served == []:
         try:
             daemon_absent = api.process_identity(ready["pid"]).get("state") == "absent"
         except Exception:  # noqa: BLE001 - unverifiable is not absent
@@ -457,6 +461,10 @@ def _endpoint_status(m, host_key, api, runner, session: int) -> dict:
         if rec is MALFORMED or _identity_state(rec, m.python, api) != GONE:
             pid = "?" if rec is MALFORMED else rec["pid"]
             custody.append(f"recovery custody {name} names guardian process {pid}, not proven gone")
+    if out["state"] == "stopped" and served != []:
+        # "stopped" also needs the loopback listener PROVEN absent
+        custody.append(f"127.0.0.1:{m.port} is served ({sanitize(str(served), 120)})" if served
+                       else f"the 127.0.0.1:{m.port} listener cannot be verified")
     out["custodyProblems"] = custody
     if custody:
         out["problems"] = [*out["problems"], *custody]
@@ -585,8 +593,9 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
             if api.listener_pids(m.port):
                 raise AgentError("port-busy", f"127.0.0.1:{m.port} is served by another process; not starting")
             if _identity_state(_guardian_launch(), m.python, api) != ALIVE:
+                pinned = {k.casefold(): v for k, v in m.pins.items()}.get(m.python.casefold())
                 launch = _spawn(api, [m.python, *ep.BOOTSTRAP_FLAGS, m.guardian, "--manifest", m.path],
-                                m.root, dict(m.environment))
+                                m.root, dict(m.environment), pinned)
                 _record_launch("guardian.json", launch, m.python, api)  # custody BEFORE any wait
             while True:
                 ready = wep.readiness(m, host_key, api, runner, not_generation=previous,
@@ -597,7 +606,7 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
         link = _link_status(b, api)
         if link["state"] != "running":
             launch = _spawn(api, [b["helper"], "run", "--config-dir", b["configDir"]],
-                            ntpath.dirname(b["helper"]), None)
+                            ntpath.dirname(b["helper"]), None, b["helperSHA256"])
             _record_launch("link.json", {**launch, "helper": b["helper"]}, b["helper"], api)
             settle = min(LINK_SETTLE_SECONDS, max(0.0, deadline - time.monotonic()))
             if settle and sys.platform == "win32" and os.name == "nt":
@@ -605,10 +614,11 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
         owner, endpoint, outbound, state, code = _collect(b, m, host_key, api, runner)
         doc = _document(operation_id, state=state, binding=b, owner=owner, endpoint=endpoint, outbound=outbound)
         if code != EXIT_READY:
-            doc["state"] = "starting" if endpoint["state"] != "ready" else "failed"
+            doc["state"] = "starting" if state != "failed" and endpoint["state"] != "ready" else "failed"
             doc["error"] = {"code": "start-deadline",
                             "message": f"not ready within {timeout:g}s: "
-                                       + "; ".join(endpoint["problems"] or [f"outbound {outbound['state']}"])}
+                                       + "; ".join([*endpoint["problems"], *outbound.get("problems", [])]
+                                                   or [f"outbound {outbound['state']}"])}
             return doc, EXIT_START_DEADLINE
         return doc, EXIT_READY
     return _guarded(operation_id, run)
@@ -703,21 +713,20 @@ def install_command(*, user_data, catalog, staged, dry_run, api, runner, operati
     return doc(True, receipt), EXIT_READY
 
 
-def verify_paths_command(*, owner_sid, files, anchored, directories, inventories, max_bytes, api,
+def verify_paths_command(*, owner_sid, operation_id, private_roots, resources_roots, requests, api,
                          paths=None) -> tuple:
-    """`gateway agent verify-paths`: the trusted native path verifier."""
+    """`gateway agent verify-paths` (verifier protocol v2, PROPOSED v3.1): the
+    reference/oracle implementation of the path verifier. It is NOT the
+    bootstrap trust root (an installed loader cannot attest itself; §11.3)."""
     from pocketshell.gateway import service_agent_install as inst
 
     if sys.platform != "win32":
-        return {"version": inst.VERIFY_VERSION, "ownerSid": owner_sid, "ok": False, "results": [],
-                "problem": "Windows-only"}, EXIT_ERROR
-    if not 0 <= max_bytes <= inst.MAX_DOC:
-        return {"version": inst.VERIFY_VERSION, "ownerSid": owner_sid, "ok": False, "results": [],
-                "problem": "--max-bytes must be in [0, 1048576]"}, EXIT_USAGE
+        return {"version": inst.VERIFY_VERSION, "operationId": operation_id, "ownerSid": owner_sid, "ok": False,
+                "results": [], "problem": "Windows-only"}, EXIT_ERROR
     try:
         current = api.current_sid()
     except Exception:  # noqa: BLE001
         current = None
-    return inst.verify_paths(owner_sid=owner_sid, files=files, anchored=anchored, directories=directories,
-                             inventories=inventories, max_bytes=max_bytes, paths=paths or inst.NativePaths(api),
-                             current_sid=current)
+    return inst.verify_paths(owner_sid=owner_sid, operation_id=operation_id, private_roots=private_roots,
+                             resources_roots=resources_roots, requests=requests,
+                             paths=paths or inst.NativePaths(api), current_sid=current)
