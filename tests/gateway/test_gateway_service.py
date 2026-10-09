@@ -17,6 +17,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -896,3 +897,58 @@ def test_windows_running_task_is_running(fake_windows, monkeypatch):
     fake_windows.state = "Running"
     monkeypatch.setattr(win, "WindowsApi", lambda: FakeApi(procs=[]))
     assert _windows_cli(monkeypatch, "status").exit_code == 0
+
+
+# --- review PR21-4: the registered principal / cwd are verified before /Run ----------
+
+
+class NamedApi(FakeApi):
+    """Resolves account names the way LookupAccountNameW would."""
+
+    names = {"laptop\\alexey": USER_SID, "laptop\\other": OTHER_SID}
+
+    def account_sid(self, name):
+        try:
+            return self.names[name.lower()]
+        except KeyError:
+            raise ServiceError(f"cannot resolve account {name}") from None
+
+
+_BAD_READBACKS = {
+    "wrong sid": lambda x: x.replace(USER_SID, OTHER_SID),
+    "other account name": lambda x: x.replace(USER_SID, "LAPTOP\\other"),
+    "interactive": lambda x: x.replace("<LogonType>S4U</LogonType>", "<LogonType>InteractiveToken</LogonType>"),
+    "password": lambda x: x.replace("<LogonType>S4U</LogonType>", "<LogonType>Password</LogonType>"),
+    "highest": lambda x: x.replace("LeastPrivilege", "HighestAvailable"),
+    "wrong cwd": lambda x: x.replace(
+        "<WorkingDirectory>" + WIN_HELPER.rsplit("\\", 1)[0], "<WorkingDirectory>C:\\Windows\\Temp"
+    ),
+    "no cwd": lambda x: re.sub(r"\s*<WorkingDirectory>[^<]*</WorkingDirectory>", "", x),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_BAD_READBACKS))
+def test_windows_bad_readback_refuses_before_run_and_rolls_back(fake_windows, name):
+    fake_windows.mutate_on_create = _BAD_READBACKS[name]
+    plan = win.plan_install(WIN_HELPER, WIN_CONFIG, force=False, start=True, api=NamedApi())
+    with pytest.raises(ServiceError, match="does not match"):
+        win.apply_install(plan, api=NamedApi())
+    verbs = _verbs(fake_windows)
+    assert "/Run" not in verbs
+    assert verbs[-2:] == ["/Delete", "QUERY"] or verbs[-1] == "/Delete"
+    assert fake_windows.registered is None  # rolled back
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda x: x.replace("<RunLevel>LeastPrivilege</RunLevel>", ""),  # export omits the default
+        lambda x: x.replace(USER_SID, "LAPTOP\\alexey"),  # same SID, name form
+    ],
+    ids=["omitted-runlevel", "account-name-same-sid"],
+)
+def test_windows_equivalent_readback_is_accepted(fake_windows, mutate):
+    fake_windows.mutate_on_create = mutate
+    plan = win.plan_install(WIN_HELPER, WIN_CONFIG, force=False, start=True, api=NamedApi())
+    win.apply_install(plan, api=NamedApi())
+    assert "/Run" in _verbs(fake_windows)

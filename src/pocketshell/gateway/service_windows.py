@@ -457,6 +457,27 @@ class WindowsApi:
         finally:
             k.LocalFree(sd)
 
+    def account_sid(self, name: str) -> str:
+        """SID of an account name (LookupAccountNameW), for readback."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        a = c.WinDLL("advapi32", use_last_error=True)
+        a.LookupAccountNameW.argtypes = [
+            w.LPCWSTR, w.LPCWSTR, c.c_void_p, c.POINTER(w.DWORD), w.LPWSTR,
+            c.POINTER(w.DWORD), c.POINTER(c.c_int),
+        ]
+        sid_size, dom_size, use = w.DWORD(0), w.DWORD(0), c.c_int()
+        a.LookupAccountNameW(None, name, None, c.byref(sid_size), None, c.byref(dom_size), c.byref(use))
+        if not sid_size.value:
+            raise ServiceError(f"cannot resolve the account {sanitize(name)}")
+        sid = c.create_string_buffer(sid_size.value)
+        domain = c.create_unicode_buffer(max(dom_size.value, 1))
+        if not a.LookupAccountNameW(None, name, sid, c.byref(sid_size), domain,
+                                    c.byref(dom_size), c.byref(use)):
+            raise ServiceError(f"cannot resolve the account {sanitize(name)}")
+        return self._sid_text(c.cast(sid, c.c_void_p))
+
     def processes(self, image_name: str) -> list:
         """[{pid, session_id, path}] of processes named ``image_name``."""
         import ctypes as c
@@ -631,6 +652,7 @@ class WindowsPlan:
     replace: bool
     start: bool
     show: str
+    logon_type: str = DEFAULT_LOGON_TYPE
 
     def commands(self, xml_path: str = "<private temp dir>\\GatewayLink.xml") -> list:
         commands = []
@@ -695,12 +717,50 @@ def plan_install(
             "replace it (or `pocketshell gateway service uninstall` first)"
         )
     return WindowsPlan(
-        binary, config_dir, user_sid, xml, action_argv(binary, config_dir), exists, start, show
+        binary, config_dir, user_sid, xml, action_argv(binary, config_dir), exists, start, show,
+        logon_type,
     )
 
 
-def apply_install(plan: WindowsPlan, runner: Optional[Runner] = None) -> list:
+def readback_problems(fields: dict, plan: WindowsPlan, api: WindowsApi) -> list:
+    """Differences between the REGISTERED task and the requested one.
+
+    Checked before the task is ever started: one direct Exec of the exact
+    helper argv, the working directory, and the same-user, non-interactive
+    principal (the current user's SID — an account-name form is accepted
+    only if it resolves to that SID —, the requested logon type, and
+    LeastPrivilege, which an export may omit as the schema default).
+    """
+    problems = []
+    expected_args = action_argv(plan.helper, plan.config_dir)[1:]
+    if fields["exec_count"] != 1 or fields["action_count"] != 1:
+        problems.append("not exactly one Exec action")
+    if not _same_path(fields["command"], plan.helper):
+        problems.append("command is not the requested helper")
+    if parse_arguments(fields["arguments"]) != expected_args:
+        problems.append("arguments are not `run --config-dir <dir>`")
+    if not _same_path(fields["working_directory"], ntpath.dirname(plan.helper)):
+        problems.append("working directory is not the helper's directory")
+    user = fields["user_id"] or ""
+    if user != plan.user_sid:
+        try:
+            resolved = api.account_sid(user) if user else None
+        except ServiceError:
+            resolved = None
+        if resolved != plan.user_sid:
+            problems.append(f"principal {sanitize(user, 100) or '(none)'} is not your SID {plan.user_sid}")
+    if fields["logon_type"] != plan.logon_type:
+        problems.append(f"logon type {sanitize(str(fields['logon_type']), 40)} is not {plan.logon_type}")
+    if fields["run_level"] != "LeastPrivilege":
+        problems.append(f"run level {sanitize(str(fields['run_level']), 40)} is not LeastPrivilege")
+    return problems
+
+
+def apply_install(
+    plan: WindowsPlan, runner: Optional[Runner] = None, api: Optional[WindowsApi] = None
+) -> list:
     runner = runner or run_child
+    api = api or WindowsApi()
     warnings = []
     tmpdir = tempfile.mkdtemp(prefix="pocketshell-task-")
     xml_path = os.path.join(tmpdir, "GatewayLink.xml")
@@ -719,19 +779,18 @@ def apply_install(plan: WindowsPlan, runner: Optional[Runner] = None) -> list:
     registered = query_task_xml(runner)
     if registered is None:
         raise ServiceError(f"{TASK_NAME} is not visible after registration")
-    fields = parse_task_xml(registered)
-    expected_args = action_argv(plan.helper, plan.config_dir)[1:]
-    if (
-        fields["exec_count"] != 1
-        or fields["action_count"] != 1
-        or (fields["command"] or "").lower() != plan.helper.lower()
-        or parse_arguments(fields["arguments"]) != expected_args
-        or fields["user_id"] is None
-    ):
+    try:
+        problems = readback_problems(parse_task_xml(registered), plan, api)
+    except ServiceError as exc:
+        problems = [str(exc)]
+    if problems:
+        # Never start a task that is not what was requested: roll it back.
+        removed = runner(schtasks("/Delete", "/TN", TASK_NAME, "/F")).returncode == 0
         raise ServiceError(
-            f"{TASK_NAME} was registered but its action does not match the "
-            "requested direct helper launch; run `pocketshell gateway service "
-            "uninstall` and investigate"
+            f"{TASK_NAME} was registered but does not match the requested "
+            f"same-user direct launch ({'; '.join(problems)}); it was "
+            + ("removed again and never started" if removed else
+               "NOT removed — run `pocketshell gateway service uninstall`")
         )
     if plan.start:
         result = runner(schtasks("/Run", "/TN", TASK_NAME))
