@@ -539,6 +539,15 @@ def resolve_helper(explicit: Optional[str], runner: Optional[Runner] = None) -> 
 # --- native Windows queries (ctypes; imported lazily) ------------------------
 
 
+class SpawnCleanupError(ServiceError):
+    """A refused, still-suspended child could not be proven terminated; its
+    exact identity is carried as recovery custody."""
+
+    def __init__(self, message: str, *, recovery: dict):
+        super().__init__(message)
+        self.recovery = recovery
+
+
 class TargetJobError(ServiceError):
     """The launched TARGET (guardian/link) is not measured outside every job."""
 
@@ -872,6 +881,7 @@ class WindowsApi:
             if not ok:
                 raise ServiceError(f"cannot start {sanitize(str(argv[0]))} (error {c.get_last_error()})")
         resumed = False
+        cause = None
         try:
             # child token: our user, not elevated, our session
             token = w.HANDLE()
@@ -935,12 +945,35 @@ class WindowsApi:
             resumed = True
             return {"pid": int(pi.dwProcessId), "creationFILETIME": birth, **verdict,
                     "elevated": False, "session": int(session.value)}
+        except BaseException as exc:
+            cause = exc
+            raise
         finally:
-            if not resumed:
-                k.TerminateProcess(pi.hProcess, 1)  # the exact, still-suspended child we created
-                k.WaitForSingleObject(pi.hProcess, 5000)
+            if not resumed and not self._terminate_suspended(k, pi.hProcess):
+                # dd792b5 R3: the refused child could not be PROVEN gone. Its
+                # handles stay held by this process (never silently released)
+                # and its exact identity is returned as recovery custody.
+                self._retained_handles.extend([pi.hThread, pi.hProcess])
+                times = [w.FILETIME() for _ in range(4)]
+                birth = str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime) \
+                    if k.GetProcessTimes(pi.hProcess, *[c.byref(t) for t in times]) else None
+                raise SpawnCleanupError(
+                    f"the suspended child {pi.dwProcessId} was refused "
+                    f"({sanitize(str(cause or 'before resume'), 300)}) and its termination "
+                    "could not be confirmed; it may still exist (suspended)",
+                    recovery={"pid": int(pi.dwProcessId), "creationFILETIME": birth, "image": str(argv[0])})
             k.CloseHandle(pi.hThread)
             k.CloseHandle(pi.hProcess)
+
+    _retained_handles: list = []
+
+    @staticmethod
+    def _terminate_suspended(k, handle) -> bool:
+        """End the exact suspended child through its own handle and PROVE it:
+        TerminateProcess must succeed and the wait must observe the exit."""
+        if not k.TerminateProcess(handle, 1):
+            return False
+        return k.WaitForSingleObject(handle, 5000) == 0
 
     def terminate_exact(self, pid: int, birth: str, image: str) -> bool:
         """Terminate ONLY the process whose pid, creation FILETIME and image all

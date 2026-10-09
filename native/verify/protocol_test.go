@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func TestAbsoluteMirrorsTheSchema(t *testing.T) {
@@ -168,5 +170,53 @@ func TestReleaseRequiresEOF(t *testing.T) {
 	code, ev = holdRun(t, `{"op":"release","operationId":"o"}`+"\n"+`{"op":"release","operationId":"o"}`+"\n")
 	if code != 2 || ev[len(ev)-1]["event"] != "refused" {
 		t.Fatalf("data after release: %d %v", code, ev)
+	}
+}
+
+// --- dd792b5 review R1: scanner errors after release are NOT end-of-input -------------
+
+func holdRunReader(t *testing.T, in io.Reader) (int, []map[string]any) {
+	t.Helper()
+	outR, outW, _ := os.Pipe()
+	code := hold(config{OperationID: "o", HoldSeconds: 5}, &held{}, in, outW)
+	outW.Close()
+	data, _ := io.ReadAll(outR)
+	var events []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var e map[string]any
+		json.Unmarshal([]byte(line), &e)
+		events = append(events, e)
+	}
+	return code, events
+}
+
+func TestOversizedLineAfterReleaseIsRefused(t *testing.T) {
+	in := `{"op":"release","operationId":"o"}` + "\n" + strings.Repeat("x", 5000) + "\n"
+	code, ev := holdRunReader(t, strings.NewReader(in))
+	if code != 2 || ev[len(ev)-1]["event"] != "refused" {
+		t.Fatalf("oversized after release: %d %v", code, ev)
+	}
+}
+
+func TestReadErrorAfterReleaseIsRefused(t *testing.T) {
+	in := io.MultiReader(strings.NewReader(`{"op":"release","operationId":"o"}`+"\n"),
+		iotest.ErrReader(errors.New("pipe broken")))
+	code, ev := holdRunReader(t, in)
+	if code != 2 || ev[len(ev)-1]["event"] != "refused" {
+		t.Fatalf("read error after release: %d %v", code, ev)
+	}
+}
+
+func TestOversizedLineWhileHeldIsRefused(t *testing.T) {
+	code, ev := holdRunReader(t, strings.NewReader(strings.Repeat("y", 5000)+"\n"))
+	if code != 2 || ev[len(ev)-1]["event"] != "refused" {
+		t.Fatalf("oversized while held: %d %v", code, ev)
+	}
+}
+
+func TestShortReleaseThenRealEOFIsReleased(t *testing.T) {
+	code, ev := holdRunReader(t, strings.NewReader(`{"op":"release","operationId":"o"}`+"\n"))
+	if code != 0 || ev[len(ev)-1]["event"] != "released" {
+		t.Fatalf("release+EOF: %d %v", code, ev)
 	}
 }

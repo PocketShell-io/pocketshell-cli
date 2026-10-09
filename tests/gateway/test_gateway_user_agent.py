@@ -766,3 +766,36 @@ def test_v33_stop_is_never_clean_while_collect_is_not_stopped(agent, monkeypatch
     result, data = run("stop", "--json")
     assert result.exit_code == 1 and data["state"] == "failed", data
     assert data["endpoint"]["absenceVerified"] is False
+
+
+# --- dd792b5 review R3: refused cleanup of a suspended child keeps custody -------------
+
+
+def test_r3_failed_cleanup_of_a_refused_child_is_recovery_custody(agent, monkeypatch):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    bind()
+    agent["g"].ready_on_run = False
+    real = agent["api"].spawn_hidden
+
+    def spawn(argv, cwd, env, *, image_sha256=None):
+        if argv[0] == PYTHON:
+            meta = real(argv, cwd, env, image_sha256=image_sha256)  # the child exists...
+            raise win.SpawnCleanupError(  # ...was refused, and its termination failed
+                "the target was refused (target-job) and its termination failed (access denied)",
+                recovery={"pid": meta["pid"], "creationFILETIME": meta["creationFILETIME"], "image": PYTHON})
+        return real(argv, cwd, env, image_sha256=image_sha256)
+
+    monkeypatch.setattr(agent["api"], "spawn_hidden", spawn)
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert result.exit_code == 1 and data["error"]["code"] == "spawn-cleanup-failed", data
+    rec = data["error"]["recovery"]
+    assert rec["record"] == "guardian.json" and rec["image"] == PYTHON
+    assert json.loads(agent_mod._read_private(agent_mod._path(f"recovery-guardian-{rec['pid']}.json"))) == rec
+    monkeypatch.setattr(agent["api"], "spawn_hidden", real)
+    result, data = run("status", "--json")
+    assert data["state"] == "failed" and result.exit_code == 3
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert data["error"]["code"] == "custody-recovery"
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and (rec["pid"], rec["creationFILETIME"], PYTHON) in agent["api"].terminated

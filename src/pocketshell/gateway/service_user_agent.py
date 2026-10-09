@@ -231,7 +231,7 @@ def load_binding(*, api, runner, revalidate: bool):
 LAUNCH_KEYS = ("inJob", "callerJobKillOnClose", "brokeAway", "callerInJob", "elevated", "session")
 
 
-def _spawn(api, argv, cwd, env, image_sha256=None) -> dict:
+def _spawn(api, argv, cwd, env, image_sha256=None, record="guardian.json") -> dict:
     """Hidden direct spawn; the child's job membership is MEASURED, never
     assumed (see WindowsApi.spawn_hidden): a child that could not break away
     from a KILL_ON_JOB_CLOSE caller job is refused."""
@@ -241,6 +241,9 @@ def _spawn(api, argv, cwd, env, image_sha256=None) -> dict:
         meta = api.spawn_hidden(argv, cwd, env, image_sha256=image_sha256)
     except win.TargetJobError as exc:
         raise AgentError("target-job", str(exc)) from None
+    except win.SpawnCleanupError as exc:
+        # the refused child may still exist: never lose its exact identity
+        _retain_recovery(record, exc.recovery, "spawn-cleanup-failed", str(exc))
     if meta.get("elevated") is not False:
         raise AgentError("error", "the spawned child token is elevated or unknown; refusing")
     return meta
@@ -378,6 +381,21 @@ def _release_custody(name, meta, image, api, errors, what) -> None:
     detail = "is still running" if state == ALIVE else "cannot be verified (it may still be running)"
     errors.append(f"the {what} process {meta['pid']} (birth {meta['creationFILETIME']}) {detail}; "
                   "its identity is retained for a retry")
+
+
+def _retain_recovery(name, recovery, code, message) -> None:
+    """Persist a recovery identity (recovery-<stem>-<pid>.json) and fail with
+    it in the error, so status/start/stop keep custody."""
+    rec = {"pid": recovery.get("pid"), "creationFILETIME": recovery.get("creationFILETIME"),
+           "image": recovery.get("image"), "record": name}
+    where = "the recovery identity is only in this error"
+    try:
+        stem = name.rsplit(".", 1)[0]
+        _write_private(_path(f"recovery-{stem}-{rec['pid']}.json"), json.dumps(rec).encode())
+        where = f"recovery-{stem}-{rec['pid']}.json keeps the identity"
+    except Exception:  # noqa: BLE001
+        pass
+    raise AgentError(code, f"{message}; {where}", recovery=rec)
 
 
 def _launch(meta) -> Optional[dict]:
@@ -620,7 +638,7 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
         link = _link_status(b, api)
         if link["state"] != "running":
             launch = _spawn(api, [b["helper"], "run", "--config-dir", b["configDir"]],
-                            ntpath.dirname(b["helper"]), None, b["helperSHA256"])
+                            ntpath.dirname(b["helper"]), None, b["helperSHA256"], record="link.json")
             _record_launch("link.json", {**launch, "helper": b["helper"]}, b["helper"], api)
             settle = min(LINK_SETTLE_SECONDS, max(0.0, deadline - time.monotonic()))
             if settle and sys.platform == "win32" and os.name == "nt":

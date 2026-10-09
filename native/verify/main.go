@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"time"
 )
@@ -18,7 +20,7 @@ func emit(out *os.File, v any) {
 	out.Write(append(b, '\n'))
 }
 
-func run(args []string, in *os.File, out *os.File) int {
+func run(args []string, in io.Reader, out *os.File) int {
 	cfg, err := parseArgs(args)
 	refuse := func(code int, problem string) int {
 		emit(out, reply{Version: protocolVersion, OperationID: cfg.OperationID, OwnerSID: cfg.OwnerSID,
@@ -68,15 +70,23 @@ func run(args []string, in *os.File, out *os.File) int {
 	return hold(cfg, keep, in, out)
 }
 
-func hold(cfg config, keep *held, in *os.File, out *os.File) int {
-	lines := make(chan []byte)
+func hold(cfg config, keep *held, in io.Reader, out *os.File) int {
+	// Each item is one complete line, or the scanner's TERMINAL status:
+	// {eof:true} only for a genuine clean end-of-input; {err} for an
+	// over-long line (bufio.ErrTooLong) or a read failure. A closed channel
+	// is never interpreted as EOF on its own.
+	lines := make(chan input, 1)
 	go func() {
 		s := bufio.NewScanner(in)
 		s.Buffer(make([]byte, 4096), 4096)
 		for s.Scan() {
-			lines <- append([]byte(nil), s.Bytes()...)
+			lines <- input{line: append([]byte(nil), s.Bytes()...)}
 		}
-		close(lines)
+		if err := s.Err(); err != nil {
+			lines <- input{err: err}
+		} else {
+			lines <- input{eof: true}
+		}
 	}()
 	ev := func(name string, pid *int, matches *bool, problem error) {
 		e := event{Version: protocolVersion, OperationID: cfg.OperationID, Event: name, PID: pid, ImageMatches: matches}
@@ -92,13 +102,18 @@ func hold(cfg config, keep *held, in *os.File, out *os.File) int {
 			keep.closeAll()
 			ev("timeout", nil, nil, errors.New("hold timed out; handles released"))
 			return 5
-		case line, open := <-lines:
-			if !open {
+		case item := <-lines:
+			if item.err != nil {
+				keep.closeAll()
+				ev("refused", nil, nil, fmt.Errorf("unreadable hold input: %v", item.err))
+				return 2
+			}
+			if item.eof {
 				keep.closeAll()
 				ev("closed", nil, nil, errors.New("controller closed stdin; handles released"))
 				return 4
 			}
-			m, err := parseMessage(line, cfg.OperationID)
+			m, err := parseMessage(item.line, cfg.OperationID)
 			if err != nil {
 				keep.closeAll()
 				ev("refused", nil, nil, err)
@@ -124,20 +139,31 @@ func hold(cfg config, keep *held, in *os.File, out *os.File) int {
 // awaitEOF: after `release` the only acceptable input is end-of-file. Then
 // the handles are closed and `released` is reported (exit 0). Further data
 // is refused (exit 2); the hold timer still applies (exit 5).
-func awaitEOF(cfg config, keep *held, lines chan []byte, timer *time.Timer,
+func awaitEOF(cfg config, keep *held, lines chan input, timer *time.Timer,
 	ev func(string, *int, *bool, error)) int {
 	select {
 	case <-timer.C:
 		keep.closeAll()
 		ev("timeout", nil, nil, errors.New("no end-of-input after release; handles released"))
 		return 5
-	case _, open := <-lines:
+	case item := <-lines:
 		keep.closeAll()
-		if open {
+		switch {
+		case item.err != nil:
+			ev("refused", nil, nil, fmt.Errorf("unreadable input after release: %v", item.err))
+			return 2
+		case !item.eof:
 			ev("refused", nil, nil, errors.New("data after release"))
 			return 2
 		}
 		ev("released", nil, nil, nil)
 		return 0
 	}
+}
+
+// input is one hold-channel item: a line, or the scanner's terminal status.
+type input struct {
+	line []byte
+	eof  bool
+	err  error
 }
