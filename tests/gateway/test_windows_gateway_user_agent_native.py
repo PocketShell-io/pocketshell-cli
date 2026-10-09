@@ -103,6 +103,7 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
     code, data = agent("status")
     assert code == 4 and data["state"] == "stopped"
 
+    accepted_job = False
     code, data = agent("start", "--timeout", "60")
     if code == 1 and data and data["error"]["code"] == "caller-job":
         # measured, honest refusal inside the runner's step job (KILL_ON_JOB_CLOSE,
@@ -115,8 +116,14 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
         assert code == 4, data
         code, data = agent("start", "--timeout", "60")
         if code == 1 and data and data["error"]["code"] == "caller-job":
-            pytest.skip("no job-free launch path on this runner (seclogon job too): start refused as designed; "
-                        "measured refusal recorded above")
+            # no job-free launch path exists on this runner (measured twice).
+            # Exercise READY/STOP with the TEST-ONLY seam that accepts the job
+            # while reporting it (product default refuses).
+            print("MEASURED: the seclogon path is jobbed too; continuing with the test-only acceptJob seam")
+            where["mode"] = "in-runner-job"
+            seams.write_text(json.dumps({**json.loads(seams.read_text()), "acceptJob": True}))
+            code, data = agent("start", "--timeout", "60")
+            accepted_job = True
     if code != 0:
         for p in sorted(Path(endpoint["state"]).rglob("*.json")):
             print(p, p.read_text(encoding="utf-8", errors="replace")[:1500])
@@ -129,6 +136,10 @@ def test_ordinary_user_agent_round_trip(layout, monkeypatch, tmp_path):
     assert e["launch"]["elevated"] is False and data["outbound"]["launch"]["elevated"] is False
     assert e["launch"]["inJob"] == _in_job(e["guardian"]["pid"])
     assert data["outbound"]["launch"]["inJob"] == _in_job(data["outbound"]["pid"])
+    if accepted_job:
+        assert e["launch"]["inJob"] is True and e["launch"]["brokeAway"] is False  # reported, never claimed
+    else:
+        assert e["launch"]["inJob"] is False
     print("launch metadata:", e["launch"], data["outbound"]["launch"])
     assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
 

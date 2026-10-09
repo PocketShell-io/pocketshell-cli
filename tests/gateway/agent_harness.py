@@ -15,6 +15,7 @@ seams = json.load(open(sys.argv[1], encoding="utf-8"))
 win.ALLOWED_HELPER_SHA256 = frozenset(seams["helper"])
 ep.ALLOWED_ENDPOINT_MANIFEST_SHA256 = frozenset(seams["manifest"])
 ep.ALLOWED_GUARDIAN_SOURCES = frozenset(tuple(t) for t in seams["sources"])
+win.ACCEPT_JOB_MEMBERSHIP_FOR_TESTS = bool(seams.get("acceptJob"))
 
 from pocketshell.cli import cli  # noqa: E402
 

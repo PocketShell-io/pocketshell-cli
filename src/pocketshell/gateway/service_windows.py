@@ -539,6 +539,13 @@ def resolve_helper(explicit: Optional[str], runner: Optional[Runner] = None) -> 
 # --- native Windows queries (ctypes; imported lazily) ------------------------
 
 
+# Test-only seam (module constant; no CLI flag or environment reads it): the
+# windows-latest runner cannot create a job-free child at all (measured), so the
+# native CI round trip sets this to exercise READY/STOP while REPORTING the job
+# membership. Product default: refuse any job.
+ACCEPT_JOB_MEMBERSHIP_FOR_TESTS = False
+
+
 class CallerJobError(ServiceError):
     """A spawned child stayed in the caller's KILL_ON_JOB_CLOSE job."""
 
@@ -780,7 +787,7 @@ class WindowsApi:
                 else:
                     flags = c.c_uint32.from_buffer(info, 16).value  # BasicLimitInformation.LimitFlags
                     kill_on_close = bool(flags & 0x2000)
-            if in_job.value:
+            if in_job.value and not ACCEPT_JOB_MEMBERSHIP_FOR_TESTS:
                 # the nearest (NULL = our) job cannot prove the KILL semantics of
                 # every ancestor job: ANY membership is refused, never reported
                 # as independence
