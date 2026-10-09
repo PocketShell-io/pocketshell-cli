@@ -21,6 +21,7 @@ from typing import Callable, Optional
 from pocketshell.gateway import helper as gateway_helper
 from pocketshell.gateway.service_common import (
     ChildResult,
+    NotStartedError,
     ServiceError,
     ServiceStatus,
     check_enrollment,
@@ -175,14 +176,11 @@ def plan_install(
             f"{sanitize(path)} already exists; pass --force to replace it "
             "(or `pocketshell gateway service uninstall` first)"
         )
-    commands = [systemctl_argv("daemon-reload")]
-    if not start:
-        commands.append(systemctl_argv("enable", UNIT_NAME))
-    elif os.path.lexists(path):
-        commands.append(systemctl_argv("enable", UNIT_NAME))
-        commands.append(systemctl_argv("restart", UNIT_NAME))
-    else:
-        commands.append(systemctl_argv("enable", "--now", UNIT_NAME))
+    commands = [systemctl_argv("daemon-reload"), systemctl_argv("enable", UNIT_NAME)]
+    if start:
+        # a separate step, so a failed start is reported as such (exit 5)
+        verb = "restart" if os.path.lexists(path) else "start"
+        commands.append(systemctl_argv(verb, UNIT_NAME))
     return LinuxPlan(binary, config_dir, path, unit_text, commands, show)
 
 
@@ -225,7 +223,15 @@ def apply_install(plan: LinuxPlan, runner: Optional[Runner] = None) -> list:
             f"{sanitize(exc.strerror or type(exc).__name__)}"
         ) from None
     for argv in plan.commands:
-        _check(runner(argv), argv)
+        result = runner(argv)
+        if argv[2] in ("start", "restart") and result.returncode != 0:
+            detail = sanitize(decode(result.stderr or result.stdout), 600)
+            raise NotStartedError(
+                f"{UNIT_NAME} is written and enabled but NOT started: `{' '.join(argv)}` "
+                f"failed (exit {result.returncode})" + (f": {detail}" if detail else "")
+                + f". See `journalctl --user -u {UNIT_NAME}`."
+            )
+        _check(result, argv)
     warnings = []
     if linger_enabled() is False:
         warnings.append(

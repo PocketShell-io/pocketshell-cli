@@ -43,6 +43,7 @@ from pocketshell.gateway import helper as gateway_helper
 from pocketshell.gateway import service_common as common
 from pocketshell.gateway.service_common import (
     ChildResult,
+    NotStartedError,
     ServiceError,
     ServiceStatus,
     decode,
@@ -60,6 +61,8 @@ DEFAULT_LOGON_TYPE = "S4U"
 # A fixed past start boundary: the TimeTrigger exists only for its 5-minute
 # repetition (the watchdog); the boot trigger is what starts it after reboot.
 WATCHDOG_START_BOUNDARY = "2026-01-01T00:00:00"
+# how long install waits for the task's own state to report Running
+START_CONFIRM_SECONDS = 15.0
 
 # ---------------------------------------------------------------------------
 # Reviewed Windows helper allow-list (artifact trust gate).
@@ -793,10 +796,42 @@ def apply_install(
                "NOT removed — run `pocketshell gateway service uninstall`")
         )
     if plan.start:
-        result = runner(schtasks("/Run", "/TN", TASK_NAME))
-        if result.returncode != 0:
-            warnings.append(str(_fail(result, f"starting {TASK_NAME}")))
+        _start_and_confirm(runner)
     return warnings
+
+
+def _start_and_confirm(runner: Runner) -> None:
+    """``/Run``, then require the task's own state to reach Running."""
+    result = runner(schtasks("/Run", "/TN", TASK_NAME))
+    if result.returncode != 0:
+        detail = sanitize(decode(result.stderr or result.stdout), 600)
+        raise NotStartedError(
+            f"{TASK_NAME} is registered but NOT started: /Run failed "
+            f"(exit {result.returncode})" + (f": {detail}" if detail else "")
+            + ". It will still start at boot or from its 5-minute watchdog; "
+            "check `pocketshell gateway service status`."
+        )
+    deadline = time.monotonic() + START_CONFIRM_SECONDS
+    state, last = "Unknown", None
+    while True:
+        try:
+            info = query_task(runner)
+        except ServiceError as exc:
+            raise NotStartedError(
+                f"{TASK_NAME} is registered but its start could not be confirmed: {exc}"
+            ) from None
+        if info is not None:
+            state, last = info.state, info.last_result
+            if state == "Running":
+                return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    raise NotStartedError(
+        f"{TASK_NAME} is registered but NOT started: its state is {state} "
+        f"after {START_CONFIRM_SECONDS:g}s (last result {last}); check "
+        "`pocketshell gateway service status`"
+    )
 
 
 def uninstall(*, runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) -> str:

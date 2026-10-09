@@ -108,7 +108,12 @@ _CONFIG_DIR_HELP = (
 def install(
     config_dir: Optional[str], helper: Optional[str], dry_run: bool, force: bool, no_start: bool
 ) -> None:
-    """Install (and start) the durable host agent for an enrolled config dir."""
+    """Install (and start) the durable host agent for an enrolled config dir.
+
+    Exit status: 0 installed and started (or registered with --no-start),
+    5 installed but NOT started (start failed or not confirmed; the
+    unit/task is kept), 1 refused or failed (nothing started).
+    """
     platform = _platform()
     config_dir = config_dir or common.default_config_dir()
     if platform == "linux":

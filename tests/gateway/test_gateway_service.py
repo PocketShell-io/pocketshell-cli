@@ -184,7 +184,8 @@ def test_install_writes_unit_and_enables(pin_helper, enrolled, systemctl):
     assert not [p for p in unit.parent.iterdir() if p.name.startswith(".pocketshell")]
     assert systemctl.calls == [
         ["systemctl", "--user", "daemon-reload"],
-        ["systemctl", "--user", "enable", "--now", linux.UNIT_NAME],
+        ["systemctl", "--user", "enable", linux.UNIT_NAME],
+        ["systemctl", "--user", "start", linux.UNIT_NAME],
     ]
     assert _snapshot(enrolled) == before
 
@@ -232,7 +233,8 @@ def test_dry_run_writes_nothing(pin_helper, enrolled, systemctl):
     )
     assert result.exit_code == 0, result.output
     assert linux.render_unit(helper, str(enrolled)) in result.stdout
-    assert "systemctl --user enable --now pocketshell-gateway.service" in result.stdout
+    assert "systemctl --user enable pocketshell-gateway.service" in result.stdout
+    assert "systemctl --user start pocketshell-gateway.service" in result.stdout
     assert json.dumps([helper, "run", "--config-dir", str(enrolled)]) in result.stdout
     assert not Path(linux.unit_dir()).exists()
     assert systemctl.calls == []
@@ -952,3 +954,53 @@ def test_windows_equivalent_readback_is_accepted(fake_windows, mutate):
     plan = win.plan_install(WIN_HELPER, WIN_CONFIG, force=False, start=True, api=NamedApi())
     win.apply_install(plan, api=NamedApi())
     assert "/Run" in _verbs(fake_windows)
+
+
+# --- review PR21-2: a failed start is reported, not "(started)" ----------------------
+
+
+def _install_cli(monkeypatch, *extra):
+    return _windows_cli(monkeypatch, "install", "--helper", WIN_HELPER, "--config-dir", WIN_CONFIG, *extra)
+
+
+def test_windows_failed_run_is_registered_not_started(fake_windows, monkeypatch):
+    fake_windows.run_rc = 1
+    result = _install_cli(monkeypatch)
+    assert result.exit_code == common.EXIT_NOT_STARTED == 5, result.output
+    assert "(started)" not in result.output
+    assert "NOT started" in result.output and "Access is denied" in result.output
+    assert fake_windows.registered is not None  # registration kept
+
+
+def test_windows_run_that_never_reaches_running_is_not_started(fake_windows, monkeypatch):
+    fake_windows.run_starts = False
+    monkeypatch.setattr(win, "START_CONFIRM_SECONDS", 0.2)
+    result = _install_cli(monkeypatch)
+    assert result.exit_code == 5, result.output
+    assert "(started)" not in result.output and "NOT started" in result.output
+
+
+def test_windows_started_install_exits_zero(fake_windows, monkeypatch):
+    result = _install_cli(monkeypatch)
+    assert result.exit_code == 0, result.output
+    assert "(started)" in result.output
+
+
+def test_windows_no_start_is_a_successful_disabled_registration(fake_windows, monkeypatch):
+    result = _install_cli(monkeypatch, "--no-start")
+    assert result.exit_code == 0, result.output
+    assert "DISABLED" in result.output and "(started)" not in result.output
+    assert "/Run" not in _verbs(fake_windows)
+
+
+@POSIX
+def test_linux_failed_start_is_enabled_not_started(pin_helper, enrolled, monkeypatch):
+    pin_helper(_SHOW_HELPER)
+    fake = Systemctl(fail=("start", "restart"))
+    monkeypatch.setattr(linux, "run_child", fake)
+    monkeypatch.setattr(linux, "linger_enabled", lambda user=None: True)
+    result = CliRunner().invoke(cli, ["gateway", "service", "install", "--config-dir", str(enrolled)])
+    assert result.exit_code == 5, result.output
+    assert "NOT started" in result.stderr and "started)" not in result.stdout
+    assert _unit_file().exists()
+    assert ["systemctl", "--user", "enable", linux.UNIT_NAME] in fake.calls

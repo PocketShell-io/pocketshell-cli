@@ -30,6 +30,8 @@ KEY_FILE = "device_ed25519.pem"
 EXIT_RUNNING = 0
 EXIT_NOT_RUNNING = 3
 EXIT_NOT_INSTALLED = 4
+# install: registered/enabled, but starting it failed or was not confirmed
+EXIT_NOT_STARTED = 5
 
 
 class ServiceError(Exception):
@@ -40,6 +42,12 @@ class ServiceError(Exception):
 
 class NotEnrolledError(ServiceError):
     exit_code = 1
+
+
+class NotStartedError(ServiceError):
+    """Installed and kept, but not (confirmed) started: a distinct result."""
+
+    exit_code = EXIT_NOT_STARTED
 
 
 @dataclass
