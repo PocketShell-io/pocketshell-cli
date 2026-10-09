@@ -27,6 +27,9 @@ import pytest
 from pocketshell.gateway import sshcmd, winssh
 from pocketshell.gateway.endpoint import resolve_endpoint
 
+# Imported before any fake_account fixture replaces pocketshell.account.
+import test_gateway_proxy  # noqa: E402
+
 WIN = "win32"
 SSH_EXE = r"C:\Windows\System32\OpenSSH\ssh.exe"
 
@@ -465,3 +468,74 @@ def test_run_ssh_ignores_sigint_and_returns_child_status(tmp_path):
     time.sleep(0.2)
     proc.send_signal(signal.SIGINT)
     assert proc.wait(10) == 7
+
+
+def _proxy_fakes():
+    return test_gateway_proxy.DEVICE, test_gateway_proxy.FakeGateway, test_gateway_proxy.ready
+
+
+# --------------------------------------------------------------------------
+# Byte transparency of the bridge (window-size changes, escapes, CR/LF, ^Z)
+
+
+def test_bridge_passes_terminal_and_resize_traffic_untouched(fake_account):
+    """Resize is ssh.exe/ConPTY end to end (an encrypted SSH channel
+    request); the proxy only ever sees bytes. Whatever they are — escape
+    sequences, CR/LF, Ctrl+Z, NUL — they pass unchanged both ways, in
+    ≤ 32 KiB messages, on the Windows code path too."""
+    import threading
+
+    from pocketshell.gateway import proxy as gw_proxy
+
+    DEVICE, FakeGateway, ready = _proxy_fakes()
+    escapes = b"\x1b[8;50;132t\x1b[?1049h\x1b]0;title\x07\x1b[6n\r\n\x1a\x00\x03\x1c\xff"
+    down = (escapes + bytes(range(256))) * 300
+    up = (bytes(range(255, -1, -1)) + escapes) * 300
+
+    def script(ws, gw):
+        ws.send(ready())
+        for i in range(0, len(down), 32768):
+            ws.send(down[i:i + 32768])
+        gw.drain(ws)
+
+    gw = FakeGateway(script)
+    try:
+        in_r, in_w = os.pipe()
+        out_r, out_w = os.pipe()
+        got = bytearray()
+        result = {}
+
+        def reader():
+            while True:
+                chunk = os.read(out_r, 65536)
+                if not chunk:
+                    return
+                got.extend(chunk)
+
+        def run():
+            result["code"] = gw_proxy.run_proxy(
+                DEVICE, gw.endpoint, fake_account.module.mint_gateway_token,
+                stdin_fd=in_r, stdout_fd=out_w, handshake_timeout=5, platform=WIN,
+            )
+            os.close(out_w)
+
+        rt = threading.Thread(target=reader, daemon=True)
+        rt.start()
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        view = memoryview(up)
+        while view:
+            view = view[os.write(in_w, view):]
+        deadline = time.monotonic() + 10
+        while len(got) < len(down) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        os.close(in_w)
+        t.join(15)
+        rt.join(5)
+        gw.done.wait(5)
+        assert result.get("code") == gw_proxy.EXIT_OK
+        assert bytes(got) == down
+        assert b"".join(gw.received) == up
+        assert all(len(m) <= 32 * 1024 for m in gw.received)
+    finally:
+        gw.close()
