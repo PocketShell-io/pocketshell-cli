@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 import pytest
 from click.testing import CliRunner
@@ -99,6 +100,22 @@ def agent(fake_windows, monkeypatch, tmp_path):
     monkeypatch.setattr(win, "WindowsApi", lambda: api)
     monkeypatch.setattr(wep, "POLL_SECONDS", 0.01)
     monkeypatch.setattr(wep, "STOP_CONFIRM_SECONDS", 0.3)
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    def write(path, data):  # the private store, without the native DACL layer (unit level)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(data)
+
+    def read(path, limit=65536):
+        try:
+            with open(path, "rb") as handle:
+                return handle.read(limit)
+        except FileNotFoundError:
+            return None
+
+    monkeypatch.setattr(agent_mod, "_write_private", write)
+    monkeypatch.setattr(agent_mod, "_read_private", read)
     monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "profile"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))

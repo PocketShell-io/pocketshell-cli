@@ -124,8 +124,12 @@ class _OperationLock:
         self.fd = None
 
     def __enter__(self):
-        os.makedirs(agent_dir(), exist_ok=True)
-        self.fd = os.open(_path("agent.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        lock = _path("agent.lock")
+        if not os.path.lexists(lock):
+            # created through the private store, so the agent directory and the
+            # lock get the owner-only protected DACL (Windows) / 0700+0600
+            _write_private(lock, b"")
+        self.fd = os.open(lock, os.O_RDWR)
         try:
             if os.name == "nt":
                 import msvcrt
