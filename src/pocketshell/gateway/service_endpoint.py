@@ -1,231 +1,339 @@
-"""Private loopback SSH endpoint for ``gateway service install --with-endpoint``.
+"""Private loopback SSH endpoint: the productized guardian's interface.
 
-The outbound link task alone is not a usable Windows host: every gateway
-stream is bridged to the enrolled loopback sshd. When that sshd is a private
-endpoint (e.g. a pinned MSYS build supervised by its own guardian), it needs a
-durable owner of its own. This module describes it as a reviewed **endpoint
-manifest** and turns it into a second managed task,
-``\\PocketShell\\GatewayEndpoint``, with the same rules as the link task: the
-current user's SID, S4U, LeastPrivilege, session 0, one direct Exec of the
-guardian (no shell, no cmd.exe), boot trigger + 5-minute IgnoreNew watchdog.
+``gateway service install --with-endpoint MANIFEST`` gives the enrolled
+loopback sshd its own durable owner: a managed task that launches the
+protected Python interpreter running the endpoint's ``guardian.py --manifest
+<protected absolute manifest>`` DIRECTLY (no shell, no cmd.exe), as the
+current user (S4U, session 0, LeastPrivilege).
 
-What is launched belongs to the endpoint maintainer (the manifest); how it is
-launched belongs to this CLI. Nothing here builds, copies, edits or stops the
-endpoint's own files, keys, config or processes.
+The guardian (maintained by the Windows endpoint author, not this CLI) owns
+the daemon: it validates its own token/session, creates a private desktop on
+its non-visible window station, starts the daemon NO_WINDOW + suspended +
+Job-before-resume, and holds the exact daemon PID + decimal creation FILETIME
+as its stop authority. This module only speaks the agreed file protocol
+(endpoint-guardian-api-agreement.md, schema 1):
 
-Manifest (JSON, UTF-8, at most 64 KiB), schema 1::
+    <state>/.lock                            exclusive, held by the live guardian
+    <state>/CURRENT.json                     written by the guardian, atomically,
+                                             only after its owned daemon is READY
+    <state>/generations/<generation>/READY.json   guardian
+    <state>/generations/<generation>/STOP.json    THIS CLI (stop request)
+    <state>/generations/<generation>/CLOSED.json  guardian (final result)
 
-    {
-      "schema": 1,
-      "name": "quiet-sshd-v26a",
-      "guardian": {
-        "command": "C:\\\\...\\\\guardian.exe",
-        "sha256": "<64 hex>",
-        "arguments": ["...", "..."],
-        "working_directory": "C:\\\\..."
-      },
-      "pinned_files": [{"path": "C:\\\\...\\\\sshd.exe", "sha256": "<64 hex>"}],
-      "listen": "127.0.0.1:22024",
-      "host_key_fingerprint": "SHA256:..."
-    }
+Status and stop always go CURRENT.json -> generation -> READY.json, check the
+manifest binding and the exact held daemon PID + birth string, and stop only
+through STOP.json — never by a numeric kill.
 
-Trust: the sha256 of the manifest FILE must be on the reviewed
-:data:`ALLOWED_ENDPOINT_MANIFEST_SHA256` list (a source constant, initially
-empty: no endpoint is trusted until its manifest is reviewed). That binds the
-guardian digest, its argv, its working directory, every pinned file and the
-endpoint identity; each declared digest is then re-checked against the files
-on disk. ``listen`` must equal the enrolled ``local ssh`` and
-``host_key_fingerprint`` the enrolled pinned host key (both from the helper's
-own ``show``), so the endpoint task can only serve the device it belongs to.
+The manifest is the guardian's own closed schema (``version`` 1). Trust is
+two reviewed source constants, both EMPTY until reviewed: the per-host
+manifest file digest and the guardian source digest.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import re
-import socket
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass, field
+from typing import Callable, Optional
 
 from pocketshell.gateway.service_common import ServiceError, has_control_chars, parse_show, sanitize
 
 ENDPOINT_LEAF = "GatewayEndpoint"
-ENDPOINT_BOOT_DELAY = "PT10S"  # the link task keeps PT30S: soft ordering only
+ENDPOINT_BOOT_DELAY = "PT10S"  # the link keeps PT30S (soft ordering only)
 MAX_MANIFEST_BYTES = 64 * 1024
-MAX_ARGUMENTS = 32
-MAX_PINNED_FILES = 64
-BANNER_TIMEOUT_SECONDS = 3.0
+MAX_PROTOCOL_BYTES = 64 * 1024
+MAX_STOP_BYTES = 4096
+GUARDIAN_SCRIPT = "guardian.py"
+INSTANCE_RE = re.compile(r"[A-Za-z0-9]{1,32}")
+GENERATION_RE = re.compile(r"[0-9a-f]{32}")
+FILETIME_RE = re.compile(r"[1-9][0-9]{0,19}")
 
-# Reviewed endpoint manifests (sha256 of the manifest file). Adding one is a
-# reviewed source change, never a flag or environment variable. EMPTY until
-# the endpoint maintainer's manifest for quiet-sshd-v26a has been reviewed.
+# Reviewed per-host guardian manifests (sha256 of the manifest FILE) and
+# reviewed guardian sources (sha256 of guardian.py). Adding one is a reviewed
+# source change, never a flag or environment variable. EMPTY until the
+# productized guardian and the laptop manifest have been reviewed.
 ALLOWED_ENDPOINT_MANIFEST_SHA256: frozenset = frozenset()
+ALLOWED_GUARDIAN_SOURCE_SHA256: frozenset = frozenset()
 
-_HEX64 = re.compile(r"[0-9a-f]{64}")
-_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-_FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
-_TOP_KEYS = {"schema", "name", "guardian", "pinned_files", "listen", "host_key_fingerprint"}
-_GUARDIAN_KEYS = {"command", "sha256", "arguments", "working_directory"}
+# The guardian's closed manifest schema (policy.validate_manifest, version 1).
+MANIFEST_KEYS = frozenset(
+    {"version", "ownerSID", "root", "state", "config", "port", "daemon", "python", "pins", "environment"}
+)
+ENVIRONMENT_KEYS = frozenset(
+    {"SystemRoot", "WINDIR", "SystemDrive", "ProgramData", "USERPROFILE", "HOME", "TEMP", "TMP"}
+)
+_OWNER_SID = re.compile(r"S-1-5-21-\d+-\d+-\d+-\d+")
+_HEX64 = re.compile(r"[a-f0-9]{64}")
+
+
+def leaf_for(instance: Optional[str]) -> str:
+    """Task leaf: GatewayEndpoint, or GatewayEndpointQ<instance> for an
+    isolated qualification task (never the production name)."""
+    if instance is None:
+        return ENDPOINT_LEAF
+    if not INSTANCE_RE.fullmatch(instance):
+        raise ServiceError("--instance must be 1-32 letters/digits")
+    return ENDPOINT_LEAF + "Q" + instance
 
 
 @dataclass(frozen=True)
-class EndpointManifest:
-    name: str
-    command: str
-    command_sha256: str
-    arguments: tuple
-    working_directory: str
-    pinned_files: tuple  # ((path, sha256), ...)
-    listen_host: str
-    listen_port: int
-    host_key_fingerprint: str
-    manifest_sha256: str
-
-    @property
-    def listen(self) -> str:
-        return f"{self.listen_host}:{self.listen_port}"
+class GuardianManifest:
+    path: str
+    sha256: str
+    owner_sid: str
+    root: str
+    state: str
+    config: str
+    port: int
+    daemon: str
+    python: str
+    guardian: str
+    pins: dict = field(hash=False)
+    environment: dict = field(hash=False)
 
 
-def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ServiceError(f"endpoint manifest: {message}")
+def _fail(message: str) -> ServiceError:
+    return ServiceError(f"endpoint manifest: {message}")
 
 
-def parse_manifest(data: bytes, *, validate_path: Callable[[str, str], str]) -> EndpointManifest:
-    """Strictly parse a manifest (structure only; trust is checked separately)."""
-    _require(len(data) <= MAX_MANIFEST_BYTES, "larger than 64 KiB")
+def _absolute(value, what: str) -> str:
+    """policy.absolute: a local drive path, no traversal/device/ADS/quotes."""
+    if not isinstance(value, str) or not re.match(r"^[A-Za-z]:[\\/]", value) or any(
+        ch in value for ch in ("\x00", "\r", "\n", '"')
+    ):
+        raise _fail(f"{what} must be an absolute local drive path")
+    if value.startswith(("\\\\", "//")) or any(
+        part in ("..", ".") for part in re.split(r"[\\/]", value)[1:]
+    ):
+        raise _fail(f"{what}: traversal or device path refused")
+    if ":" in value[2:]:
+        raise _fail(f"{what}: alternate data stream refused")
+    if has_control_chars(value) or "%" in value:
+        raise _fail(f"{what} contains a control character or '%'")
+    return ntpath.normpath(value)
+
+
+def _below(value, root: str, what: str) -> str:
+    value = _absolute(value, what)
+    if ntpath.commonpath([value.casefold(), root.casefold()]) != root.casefold() or (
+        value.casefold() == root.casefold()
+    ):
+        raise _fail(f"{what} escapes the protected root")
+    return value
+
+
+def parse_manifest(data: bytes, manifest_path: str) -> GuardianManifest:
+    """The guardian's closed schema, checked exactly as the guardian does,
+    plus the service convention: exactly one pinned ``guardian.py``."""
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise _fail("larger than 64 KiB")
     try:
-        doc = json.loads(data.decode("utf-8"))
+        m = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        raise ServiceError("endpoint manifest: not UTF-8 JSON") from None
-    _require(isinstance(doc, dict), "not a JSON object")
-    unknown = set(doc) - _TOP_KEYS
-    _require(not unknown, f"unknown key(s) {sorted(unknown)}")
-    _require(doc.get("schema") == 1, "schema must be 1")
-    name = doc.get("name")
-    _require(isinstance(name, str) and bool(_NAME.fullmatch(name)), "name must match [A-Za-z0-9._-]{1,64}")
-
-    guardian = doc.get("guardian")
-    _require(isinstance(guardian, dict), "guardian must be an object")
-    unknown = set(guardian) - _GUARDIAN_KEYS
-    _require(not unknown, f"unknown guardian key(s) {sorted(unknown)}")
-    command = guardian.get("command")
-    _require(isinstance(command, str), "guardian.command must be a string")
-    command = validate_path(command, "endpoint guardian command")
-    _require(command.lower().endswith(".exe"), "guardian.command must be an absolute .exe")
-    digest = guardian.get("sha256")
-    _require(isinstance(digest, str) and bool(_HEX64.fullmatch(digest)), "guardian.sha256 must be 64 lowercase hex")
-    arguments = guardian.get("arguments", [])
-    _require(isinstance(arguments, list) and len(arguments) <= MAX_ARGUMENTS,
-             f"guardian.arguments must be a list of at most {MAX_ARGUMENTS} strings")
-    for arg in arguments:
-        _require(isinstance(arg, str), "guardian.arguments must be strings")
-        _require(not has_control_chars(arg) and '"' not in arg and "%" not in arg,
-                 "a guardian argument contains a double quote, '%' or a control character")
-    cwd = guardian.get("working_directory")
-    _require(isinstance(cwd, str), "guardian.working_directory must be a string")
-    cwd = validate_path(cwd, "endpoint working directory")
-
-    pinned = doc.get("pinned_files", [])
-    _require(isinstance(pinned, list) and len(pinned) <= MAX_PINNED_FILES,
-             f"pinned_files must be a list of at most {MAX_PINNED_FILES} entries")
-    pins = []
-    for entry in pinned:
-        _require(isinstance(entry, dict) and set(entry) == {"path", "sha256"},
-                 "each pinned file is exactly {path, sha256}")
-        _require(isinstance(entry["path"], str), "pinned path must be a string")
-        _require(isinstance(entry["sha256"], str) and bool(_HEX64.fullmatch(entry["sha256"])),
-                 "pinned sha256 must be 64 lowercase hex")
-        pins.append((validate_path(entry["path"], "pinned endpoint file"), entry["sha256"]))
-
-    listen = doc.get("listen")
-    _require(isinstance(listen, str), "listen must be a string")
-    host, _, port = listen.rpartition(":")
-    _require(host == "127.0.0.1", "listen must be 127.0.0.1:<port> (loopback IPv4 only)")
-    _require(port.isdigit() and 1 <= int(port) <= 65535 and str(int(port)) == port, "listen port is invalid")
-    fingerprint = doc.get("host_key_fingerprint")
-    _require(isinstance(fingerprint, str) and bool(_FINGERPRINT.fullmatch(fingerprint)),
-             "host_key_fingerprint must be an OpenSSH SHA256:... fingerprint")
-    return EndpointManifest(
-        name=name,
-        command=command,
-        command_sha256=digest,
-        arguments=tuple(arguments),
-        working_directory=cwd,
-        pinned_files=tuple(pins),
-        listen_host=host,
-        listen_port=int(port),
-        host_key_fingerprint=fingerprint,
-        manifest_sha256=hashlib.sha256(data).hexdigest(),
+        raise _fail("not UTF-8 JSON") from None
+    if not isinstance(m, dict) or set(m) != MANIFEST_KEYS or m.get("version") != 1:
+        raise _fail("the closed guardian schema (version 1, exactly its ten keys) is required")
+    if not isinstance(m["ownerSID"], str) or not _OWNER_SID.fullmatch(m["ownerSID"]):
+        raise _fail("ownerSID must be an own-account SID (S-1-5-21-…)")
+    root = _absolute(m["root"], "root")
+    state = _below(m["state"], root, "state")
+    config = _below(m["config"], root, "config")
+    daemon = _below(m["daemon"], root, "daemon")
+    python = _absolute(m["python"], "python")
+    _below(manifest_path, root, "the manifest itself")
+    if type(m["port"]) is not int or not 1024 <= m["port"] <= 65535:
+        raise _fail("port must be an unprivileged integer 1024-65535")
+    pins = m["pins"]
+    if not isinstance(pins, dict) or not pins:
+        raise _fail("pins (the exact file closure) are required")
+    normalized: dict = {}
+    for path, digest in pins.items():
+        key = _absolute(path, "pinned path")
+        if key.casefold() in {k.casefold() for k in normalized} or not isinstance(digest, str) or not _HEX64.fullmatch(digest):
+            raise _fail("pins must be unique paths with lowercase sha256")
+        normalized[key] = digest
+    folded = {k.casefold(): k for k in normalized}
+    for required in (daemon, python, config):
+        if required.casefold() not in folded:
+            raise _fail(f"startup file {sanitize(required)} lacks a pin")
+    guardians = [k for k in normalized if ntpath.basename(k).casefold() == GUARDIAN_SCRIPT]
+    if len(guardians) != 1:
+        raise _fail(f"exactly one pinned {GUARDIAN_SCRIPT} is required (the task launches it)")
+    env = m["environment"]
+    if not isinstance(env, dict) or set(env) != ENVIRONMENT_KEYS or any(
+        not isinstance(v, str) or any(c in v for c in "\x00\r\n") for v in env.values()
+    ):
+        raise _fail("the closed fixed environment (exactly its eight keys) is required")
+    if (
+        env["SystemDrive"] != "C:"
+        or env["SystemRoot"].casefold() != "c:/windows"
+        or env["WINDIR"].casefold() != "c:/windows"
+        or env["ProgramData"].casefold() != "c:/programdata"
+    ):
+        raise _fail("the qualified system paths are required")
+    _below(env["TEMP"], state, "TEMP")
+    _below(env["TMP"], state, "TMP")
+    _absolute(env["USERPROFILE"], "USERPROFILE")
+    _absolute(env["HOME"], "HOME")
+    return GuardianManifest(
+        path=_absolute(manifest_path, "manifest path"),
+        sha256=hashlib.sha256(data).hexdigest(),
+        owner_sid=m["ownerSID"],
+        root=root,
+        state=state,
+        config=config,
+        port=m["port"],
+        daemon=daemon,
+        python=python,
+        guardian=guardians[0],
+        pins=normalized,
+        environment=dict(env),
     )
 
 
-def check_trust(manifest: EndpointManifest, *, file_sha256: Callable[[str], str]) -> None:
-    """Reviewed manifest digest, then every declared digest against the disk."""
-    if manifest.manifest_sha256 not in ALLOWED_ENDPOINT_MANIFEST_SHA256:
+def check_trust(m: GuardianManifest, *, file_sha256: Callable[[str], str]) -> None:
+    """Reviewed manifest digest, reviewed guardian source, every pin on disk."""
+    if m.sha256 not in ALLOWED_ENDPOINT_MANIFEST_SHA256:
         raise ServiceError(
-            f"endpoint manifest sha256 {manifest.manifest_sha256[:12]}… is not a reviewed "
-            "endpoint manifest (ALLOWED_ENDPOINT_MANIFEST_SHA256)"
+            f"endpoint manifest sha256 {m.sha256[:12]}… is not a reviewed manifest "
+            "(ALLOWED_ENDPOINT_MANIFEST_SHA256)"
         )
-    if file_sha256(manifest.command) != manifest.command_sha256:
-        raise ServiceError("the endpoint guardian's sha256 does not match its manifest")
-    for path, digest in manifest.pinned_files:
+    if m.pins[m.guardian] not in ALLOWED_GUARDIAN_SOURCE_SHA256:
+        raise ServiceError(
+            f"the pinned {GUARDIAN_SCRIPT} is not a reviewed guardian source "
+            "(ALLOWED_GUARDIAN_SOURCE_SHA256)"
+        )
+    for path, digest in m.pins.items():
         if file_sha256(path) != digest:
-            raise ServiceError(f"pinned endpoint file {sanitize(path)} does not match its manifest digest")
+            raise ServiceError(f"pinned endpoint file {sanitize(path)} does not match the manifest")
 
 
-def check_binding(manifest: EndpointManifest, show_text: str) -> None:
-    """The endpoint must be the enrolled local sshd: same address, same host key."""
+def check_binding(m: GuardianManifest, show_text: str, user_sid: str, *, qualification: bool):
+    """The endpoint must serve THIS enrolled device as THIS user.
+
+    Returns the enrolled pinned host key (the readiness check later compares
+    the key the running daemon actually proves against it). The production
+    endpoint must also listen on the enrolled ``local ssh`` port; an isolated
+    qualification instance runs on its own port (e.g. 22025) instead.
+    """
     from pocketshell.gateway import pins as gateway_pins
 
-    fields = parse_show(show_text)
-    local = (fields.get("local ssh") or "").split()
-    if not local or local[0] != manifest.listen:
+    if m.owner_sid != user_sid:
         raise ServiceError(
-            f"the endpoint listens on {manifest.listen} but the enrolled local ssh is "
-            f"{sanitize(local[0] if local else '(none)', 80)}; it would not serve this device"
+            f"the manifest's ownerSID {m.owner_sid} is not your SID {user_sid}; run as the enrolling user"
         )
+    fields = parse_show(show_text)
     try:
         key = gateway_pins.parse_host_key(fields.get("pinned ssh host key", ""))
     except gateway_pins.PinError:
-        raise ServiceError("the enrollment has no usable pinned host key to bind the endpoint to") from None
-    if key.fingerprint != manifest.host_key_fingerprint:
+        raise ServiceError("the enrollment has no usable pinned host key to verify the endpoint against") from None
+    local = (fields.get("local ssh") or "").split()
+    expected = f"127.0.0.1:{m.port}"
+    if not qualification and (not local or local[0] != expected):
         raise ServiceError(
-            f"the endpoint host key {manifest.host_key_fingerprint} is not the enrolled "
-            f"pinned host key {key.fingerprint}"
+            f"the endpoint port {expected} is not the enrolled local ssh "
+            f"{sanitize(local[0] if local else '(none)', 80)}; it would not serve this device"
         )
+    if qualification and local and local[0] == expected:
+        raise ServiceError(
+            f"a qualification instance must not use the enrolled production port {expected}"
+        )
+    return key
 
 
-def endpoint_arguments(manifest: EndpointManifest, quote: Callable[[str], str]) -> str:
-    return " ".join(quote(arg) for arg in manifest.arguments)
+# --- protocol files ---------------------------------------------------------------
 
 
-def port_in_use(host: str, port: int) -> bool:
+def _json_object(data: bytes, what: str) -> dict:
+    if len(data) > MAX_PROTOCOL_BYTES:
+        raise ServiceError(f"{what} is larger than {MAX_PROTOCOL_BYTES} bytes")
     try:
-        with socket.create_connection((host, port), timeout=1.0):
-            return True
-    except OSError:
-        return False
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ServiceError(f"{what} is not UTF-8 JSON") from None
+    if not isinstance(value, dict):
+        raise ServiceError(f"{what} is not a JSON object")
+    return value
 
 
-def probe_banner(host: str, port: int) -> tuple:
-    """(ok, detail): connect, read the SSH identification line, close.
+def current_path(m: GuardianManifest) -> str:
+    return ntpath.join(m.state, "CURRENT.json")
 
-    Read-only: no key exchange, no authentication.
-    """
-    try:
-        with socket.create_connection((host, port), timeout=BANNER_TIMEOUT_SECONDS) as conn:
-            conn.settimeout(BANNER_TIMEOUT_SECONDS)
-            data = b""
-            while b"\n" not in data and len(data) < 256:
-                chunk = conn.recv(256 - len(data))
-                if not chunk:
-                    break
-                data += chunk
-    except OSError as exc:
-        return False, f"no SSH banner on {host}:{port} ({sanitize(exc.strerror or type(exc).__name__, 80)})"
-    line = data.split(b"\n", 1)[0].rstrip(b"\r")
-    if line.startswith(b"SSH-2.0-"):
-        return True, sanitize(line.decode("ascii", "replace"), 120)
-    return False, f"{host}:{port} did not answer with an SSH-2.0 banner"
+
+def generation_file(m: GuardianManifest, generation: str, name: str) -> str:
+    if not GENERATION_RE.fullmatch(generation):
+        raise ServiceError("invalid generation id")
+    return ntpath.join(m.state, "generations", generation, name)
+
+
+@dataclass(frozen=True)
+class Current:
+    generation: str
+    pid: int
+    birth: str
+    guardian_pid: int
+    guardian_birth: str
+    port: int
+    manifest_sha256: str
+
+
+def parse_current(data: bytes, m: GuardianManifest) -> Current:
+    """CURRENT.json, bound to this manifest (digest and port)."""
+    c = _json_object(data, "CURRENT.json")
+    if c.get("schema") != 1:
+        raise ServiceError("CURRENT.json: schema 1 required")
+    generation = c.get("generation")
+    if not isinstance(generation, str) or not GENERATION_RE.fullmatch(generation):
+        raise ServiceError("CURRENT.json: generation must be 32 lowercase hex")
+    for name in ("pid", "guardianPID", "port"):
+        if type(c.get(name)) is not int or c[name] <= 0:
+            raise ServiceError(f"CURRENT.json: {name} must be a positive integer")
+    for name in ("creationFILETIME", "guardianCreationFILETIME"):
+        if not isinstance(c.get(name), str) or not FILETIME_RE.fullmatch(c[name]):
+            raise ServiceError(f"CURRENT.json: {name} must be a decimal FILETIME string")
+    if c.get("manifestSHA256") != m.sha256:
+        raise ServiceError("CURRENT.json belongs to a different manifest")
+    if c["port"] != m.port:
+        raise ServiceError("CURRENT.json port differs from the manifest")
+    return Current(
+        generation, c["pid"], c["creationFILETIME"], c["guardianPID"],
+        c["guardianCreationFILETIME"], c["port"], c["manifestSHA256"],
+    )
+
+
+def check_ready(data: bytes, current: Current) -> None:
+    """READY.json of the CURRENT generation must name the same held daemon."""
+    r = _json_object(data, "READY.json")
+    expected = {
+        "generation": current.generation,
+        "pid": current.pid,
+        "creationFILETIME": current.birth,
+        "guardianPID": current.guardian_pid,
+        "manifestSHA256": current.manifest_sha256,
+        "port": current.port,
+    }
+    for name, value in expected.items():
+        if r.get(name) != value:
+            raise ServiceError(f"READY.json {name} does not match CURRENT.json")
+
+
+def stop_request(current: Current) -> bytes:
+    """The exact STOP.json body (policy.validate_stop: these four keys only)."""
+    body = {
+        "pid": current.pid,
+        "creationFILETIME": current.birth,
+        "manifestSHA256": current.manifest_sha256,
+        "stopOwnedJob": True,
+    }
+    data = json.dumps(body, sort_keys=True).encode("utf-8")
+    assert len(data) <= MAX_STOP_BYTES
+    return data
+
+
+def parse_closed(data: bytes, current: Current) -> dict:
+    closed = _json_object(data, "CLOSED.json")
+    if closed.get("generation", current.generation) != current.generation:
+        raise ServiceError("CLOSED.json belongs to another generation")
+    return closed

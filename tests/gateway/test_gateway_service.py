@@ -643,8 +643,18 @@ class FakeWindows:
             return ChildResult(0, b"", b"")
         if exe.endswith("powershell.exe"):
             script = argv[-1]
+            if "Schedule.Service" in script and ".Enabled=$" in script:  # COM enable/disable
+                leaf = re.search(r"GetTask\('([A-Za-z0-9]+)'\)", script).group(1)
+                task = self.tasks.get(leaf)
+                if self._query_failed() or not task:
+                    return ChildResult(0, b"error 0x80070005 Access is denied.", b"")
+                enabled = ".Enabled=$true" in script
+                task["enabled"] = enabled
+                if not enabled and task["state"] != "Running":
+                    task["state"] = "Disabled"
+                return ChildResult(0, b"ok\r\n", b"")
             if "Schedule.Service" in script:  # COM query
-                leaf = re.search(r"GetTask\('([A-Za-z]+)'\)", script).group(1)
+                leaf = re.search(r"GetTask\('([A-Za-z0-9]+)'\)", script).group(1)
                 task = self.tasks.get(leaf)
                 if self._query_failed():
                     out = {"found": False, "hresult": "0x80070005", "message": "Access is denied.\x1b[2J"}
@@ -675,7 +685,8 @@ def _task_verbs(fake):
         if c[0].lower().endswith("schtasks.exe"):
             out.append((c[1], FakeWindows._leaf(c)))
         elif c[0].lower().endswith("powershell.exe") and "Schedule.Service" in c[-1]:
-            out.append(("QUERY", re.search(r"GetTask\('([A-Za-z]+)'\)", c[-1]).group(1)))
+            if ".Enabled=$" not in c[-1]:
+                out.append(("QUERY", re.search(r"GetTask\('([A-Za-z0-9]+)'\)", c[-1]).group(1)))
     return out
 
 
@@ -685,7 +696,7 @@ def _verbs(fake):
     for c in fake.calls:
         if c[0].lower().endswith("schtasks.exe"):
             out.append(c[1])
-        elif c[0].lower().endswith("powershell.exe") and "Schedule.Service" in c[-1]:
+        elif c[0].lower().endswith("powershell.exe") and "Schedule.Service" in c[-1] and ".Enabled=$" not in c[-1]:
             out.append("QUERY")
     return out
 

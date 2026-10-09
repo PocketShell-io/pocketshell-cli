@@ -99,9 +99,24 @@ _CONFIG_DIR_HELP = (
     default=None,
     metavar="MANIFEST",
     help=(
-        "Windows only: also own the private loopback SSH endpoint described by "
-        "this reviewed manifest (a second task, \\PocketShell\\GatewayEndpoint, "
-        "started before the link)."
+        "Windows only: also own the private loopback SSH endpoint: a second task "
+        "(\\PocketShell\\GatewayEndpoint) launching the reviewed guardian with this "
+        "reviewed guardian manifest, confirmed READY (exact enrolled host key) before "
+        "the link is registered."
+    ),
+)
+@click.option(
+    "--endpoint-only",
+    is_flag=True,
+    help="With --with-endpoint: register only the endpoint task, never the link task.",
+)
+@click.option(
+    "--instance",
+    default=None,
+    metavar="NAME",
+    help=(
+        "With --endpoint-only: an ISOLATED qualification endpoint task "
+        "(GatewayEndpointQ<NAME>) on a non-production port."
     ),
 )
 @click.option("--dry-run", is_flag=True, help="Print the exact unit/task and commands; change nothing.")
@@ -120,6 +135,8 @@ def install(
     config_dir: Optional[str],
     helper: Optional[str],
     endpoint_manifest: Optional[str],
+    endpoint_only: bool,
+    instance: Optional[str],
     dry_run: bool,
     force: bool,
     no_start: bool,
@@ -135,7 +152,7 @@ def install(
     if platform == "linux":
         from pocketshell.gateway import service_linux as backend
 
-        if endpoint_manifest:
+        if endpoint_manifest or endpoint_only or instance:
             raise ServiceError(
                 "--with-endpoint is Windows-only; on Linux the local sshd is already a "
                 "durable system or user service"
@@ -160,7 +177,7 @@ def install(
 
         plan = backend.plan_install(
             helper, config_dir, force=force, start=not no_start,
-            endpoint_manifest=endpoint_manifest,
+            endpoint_manifest=endpoint_manifest, endpoint_only=endpoint_only, instance=instance,
         )
         device = common.parse_show(plan.show).get("device id", "?")
         if dry_run:
@@ -168,13 +185,18 @@ def install(
             if plan.endpoint is not None:
                 m = plan.endpoint.manifest
                 click.echo(
-                    f"# endpoint task {plan.endpoint.spec.name} ({m.name}, {m.listen}, host key "
-                    f"{m.host_key_fingerprint}, manifest sha256 {m.manifest_sha256}); "
+                    f"# endpoint task {plan.endpoint.name} (127.0.0.1:{m.port}, enrolled host key "
+                    f"{plan.endpoint.host_key.fingerprint}, manifest sha256 {m.sha256}); "
                     "definition (UTF-16):"
                 )
                 click.echo(plan.endpoint.xml, nl=False)
                 click.echo("# the endpoint task's process argv (direct, no shell):")
-                click.echo("  " + json.dumps([m.command, *m.arguments]))
+                click.echo("  " + json.dumps([m.python, m.guardian, "--manifest", m.path]))
+            if not plan.include_link:
+                click.echo("# then run (CREATE_NO_WINDOW):")
+                for argv in plan.commands():
+                    click.echo("  " + json.dumps(argv))
+                return
             click.echo(f"# task {backend.TASK_NAME}, principal {plan.user_sid}; definition (UTF-16):")
             click.echo(plan.xml, nl=False)
             click.echo("# then run (CREATE_NO_WINDOW):")
@@ -186,12 +208,14 @@ def install(
         warnings = backend.apply_install(plan)
         if plan.endpoint is not None:
             click.echo(
-                f"registered {plan.endpoint.spec.name} ({plan.endpoint.manifest.listen})"
-                + (" (registered DISABLED)" if no_start else " (started, SSH banner answered)")
+                f"registered {plan.endpoint.name} (127.0.0.1:{plan.endpoint.manifest.port})"
+                + (" (registered DISABLED)" if no_start
+                   else " (started; guardian READY, held daemon alive, enrolled host key proven)")
             )
-        click.echo(f"registered {backend.TASK_NAME} for device {device} as {plan.user_sid}"
-                   + (" (registered DISABLED; `install --force` enables and starts it)"
-                      if no_start else " (started)"))
+        if plan.include_link:
+            click.echo(f"registered {backend.TASK_NAME} for device {device} as {plan.user_sid}"
+                       + (" (registered DISABLED; `install --force` enables and starts it)"
+                          if no_start else " (started)"))
     for warning in warnings:
         click.echo(f"warning: {warning}", err=True)
 
@@ -205,32 +229,45 @@ def install(
         "task this command did not write (no 'Managed by' marker)."
     ),
 )
+@click.option("--instance", default=None, metavar="NAME", help="Windows: the qualification endpoint task.")
 @_guard
-def uninstall(force: bool) -> None:
-    """Stop and remove only the unit/task (never the config dir, key or registration)."""
+def uninstall(force: bool, instance: Optional[str]) -> None:
+    """Stop and remove only the unit/task (never the config dir, key or registration).
+
+    Windows endpoint task: disabled first, then stopped through the guardian's
+    STOP protocol (exact held daemon identity, never a kill), then deleted.
+    """
     if _platform() == "linux":
         from pocketshell.gateway import service_linux as backend
 
+        if instance:
+            raise ServiceError("--instance is Windows-only")
         click.echo(backend.uninstall(force=force))
     else:
         from pocketshell.gateway import service_windows as backend
 
-        click.echo(backend.uninstall(force=force))
+        click.echo(backend.uninstall(force=force, instance=instance))
 
 
 @service_group.command("status")
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+@click.option("--instance", default=None, metavar="NAME", help="Windows: the qualification endpoint task.")
 @_guard
-def status(as_json: bool) -> None:
+def status(as_json: bool, instance: Optional[str]) -> None:
     """Unit/task state, helper, config dir and enrolled `show` output.
 
     Exit status: 0 running, 3 installed but not running, 4 not installed.
     """
     if _platform() == "linux":
         from pocketshell.gateway import service_linux as backend
+
+        if instance:
+            raise ServiceError("--instance is Windows-only")
+        st = backend.status()
     else:
         from pocketshell.gateway import service_windows as backend
-    st = backend.status()
+
+        st = backend.status(instance=instance)
     if as_json:
         click.echo(json.dumps(st.as_dict(), indent=2))
     else:

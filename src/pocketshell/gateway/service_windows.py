@@ -525,6 +525,111 @@ class WindowsApi:
             raise ServiceError(f"cannot resolve the account {sanitize(name)}")
         return self._sid_text(c.cast(sid, c.c_void_p))
 
+    def process_birth(self, pid: int) -> Optional[str]:
+        """Decimal creation FILETIME of a LIVE process, else None (gone,
+        exited, or not openable). The identity is pid AND birth, never pid."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.restype = w.HANDLE
+        k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        k.GetProcessTimes.argtypes = [w.HANDLE] + [c.POINTER(w.FILETIME)] * 4
+        k.GetExitCodeProcess.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        handle = k.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            code = w.DWORD()
+            if not k.GetExitCodeProcess(handle, c.byref(code)) or code.value != 259:
+                return None  # exited (STILL_ACTIVE is 259)
+            times = [w.FILETIME() for _ in range(4)]
+            if not k.GetProcessTimes(handle, *[c.byref(t) for t in times]):
+                return None
+            return str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime)
+        finally:
+            k.CloseHandle(handle)
+
+    def listener_pids(self, port: int) -> list:
+        """[(address, pid)] of IPv4 TCP listeners on ``port``."""
+        import ctypes as c
+        import socket as s
+        from ctypes import wintypes as w
+
+        class Row(c.Structure):
+            _fields_ = [("state", w.DWORD), ("local", w.DWORD), ("lport", w.DWORD),
+                        ("remote", w.DWORD), ("rport", w.DWORD), ("pid", w.DWORD)]
+
+        ip = c.WinDLL("iphlpapi", use_last_error=True)
+        ip.GetExtendedTcpTable.argtypes = [c.c_void_p, c.POINTER(w.DWORD), w.BOOL, w.DWORD, c.c_int, w.DWORD]
+        size = w.DWORD(0)
+        ip.GetExtendedTcpTable(None, c.byref(size), False, 2, 3, 0)  # AF_INET, OWNER_PID_LISTENER
+        for _ in range(3):
+            buf = c.create_string_buffer(max(size.value, 4))
+            code = ip.GetExtendedTcpTable(buf, c.byref(size), False, 2, 3, 0)
+            if code == 0:
+                break
+            if code != 122:  # ERROR_INSUFFICIENT_BUFFER
+                raise ServiceError(f"cannot list TCP listeners (error {code})")
+        else:
+            raise ServiceError("cannot list TCP listeners (table keeps growing)")
+        count = w.DWORD.from_buffer(buf).value
+        rows = []
+        for i in range(count):
+            row = Row.from_buffer(buf, 4 + i * c.sizeof(Row))
+            if s.ntohs(row.lport & 0xFFFF) == port:
+                rows.append((s.inet_ntoa(int(row.local).to_bytes(4, "little")), int(row.pid)))
+        return rows
+
+    def write_owned_file(self, path: str, data: bytes, owner_sid: str) -> None:
+        """Create ``path`` (must not exist) owned by ``owner_sid`` with a
+        protected owner/SYSTEM/Administrators DACL, written to a temp name in
+        the same directory and renamed into place (readers never see a
+        partial file)."""
+        import ctypes as c
+        import secrets
+        from ctypes import wintypes as w
+
+        if not re.fullmatch(r"S-1-5-21-\d+-\d+-\d+-\d+", owner_sid):
+            raise ServiceError("unexpected owner SID")
+        a = c.WinDLL("advapi32", use_last_error=True)
+        k = c.WinDLL("kernel32", use_last_error=True)
+        a.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+            w.LPCWSTR, w.DWORD, c.POINTER(c.c_void_p), c.c_void_p]
+        k.CreateFileW.restype = w.HANDLE
+        k.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
+        k.WriteFile.argtypes = [w.HANDLE, c.c_char_p, w.DWORD, c.POINTER(w.DWORD), c.c_void_p]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        k.MoveFileExW.argtypes = [w.LPCWSTR, w.LPCWSTR, w.DWORD]
+        k.DeleteFileW.argtypes = [w.LPCWSTR]
+        k.LocalFree.argtypes = [c.c_void_p]
+
+        class SA(c.Structure):
+            _fields_ = [("length", w.DWORD), ("descriptor", c.c_void_p), ("inherit", w.BOOL)]
+
+        sd = c.c_void_p()
+        sddl = f"O:{owner_sid}D:P(A;;FA;;;{owner_sid})(A;;FA;;;SY)(A;;FA;;;BA)"
+        if not a.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, c.byref(sd), None):
+            raise ServiceError("cannot build the owner-only security descriptor")
+        tmp = path + "." + secrets.token_hex(8) + ".tmp"
+        try:
+            sa = SA(c.sizeof(SA), sd, False)
+            handle = k.CreateFileW(tmp, 0x40000000, 0, c.byref(sa), 1, 0x80, None)  # CREATE_NEW
+            if handle in (None, w.HANDLE(-1).value):
+                raise ServiceError(f"cannot create {sanitize(tmp)} (error {c.get_last_error()})")
+            try:
+                written = w.DWORD()
+                if not k.WriteFile(handle, data, len(data), c.byref(written), None) or written.value != len(data):
+                    raise ServiceError(f"cannot write {sanitize(tmp)}")
+            finally:
+                k.CloseHandle(handle)
+            if not k.MoveFileExW(tmp, path, 0x8):  # WRITE_THROUGH, never replace
+                raise ServiceError(f"cannot publish {sanitize(path)} (error {c.get_last_error()})")
+        finally:
+            k.DeleteFileW(tmp)
+            k.LocalFree(sd)
+
     def processes(self, image_name: str) -> list:
         """[{pid, session_id, path}] of processes named ``image_name``."""
         import ctypes as c
@@ -599,7 +704,7 @@ TASK_STATES = {0: "Unknown", 1: "Disabled", 2: "Queued", 3: "Ready", 4: "Running
 _NOT_FOUND_HRESULTS = {"0x80070002", "0x80070003"}
 
 def _query_script(leaf: str) -> str:
-    if not re.fullmatch(r"[A-Za-z]+", leaf):
+    if not re.fullmatch(r"[A-Za-z0-9]+", leaf):
         raise ServiceError("unexpected task name")
     return (
         "$ErrorActionPreference='Stop';"
@@ -697,14 +802,6 @@ def _fail(result: ChildResult, what: str, hint: str = "") -> ServiceError:
 
 
 @dataclass
-class EndpointPlan:
-    manifest: "ep.EndpointManifest"
-    spec: TaskSpec
-    xml: str
-    replace: bool
-
-
-@dataclass
 class WindowsPlan:
     helper: str
     config_dir: str
@@ -715,15 +812,17 @@ class WindowsPlan:
     start: bool
     show: str
     logon_type: str = DEFAULT_LOGON_TYPE
-    endpoint: Optional[EndpointPlan] = None
+    endpoint: Optional[object] = None  # service_windows_endpoint.EndpointPlan
+    include_link: bool = True
 
     def commands(self, xml_dir: str = "<private temp dir>") -> list:
         """The schtasks sequence: endpoint task first (when any), then link."""
         commands = []
         tasks = []
         if self.endpoint is not None:
-            tasks.append((self.endpoint.spec.name, self.endpoint.spec.leaf, self.endpoint.replace))
-        tasks.append((TASK_NAME, TASK_LEAF, self.replace))
+            tasks.append((self.endpoint.name, self.endpoint.leaf, False))
+        if self.include_link:
+            tasks.append((TASK_NAME, TASK_LEAF, self.replace))
         for name, leaf, replace in tasks:
             if replace:
                 commands.append(schtasks("/End", "/TN", name))
@@ -771,9 +870,18 @@ def plan_install(
     runner: Optional[Runner] = None,
     logon_type: str = DEFAULT_LOGON_TYPE,
     endpoint_manifest: Optional[str] = None,
+    endpoint_only: bool = False,
+    instance: Optional[str] = None,
 ) -> WindowsPlan:
     runner = runner or run_child
     api = api or WindowsApi()
+    if endpoint_only and not endpoint_manifest:
+        raise ServiceError("--endpoint-only needs --with-endpoint MANIFEST")
+    if instance is not None and not endpoint_only:
+        raise ServiceError(
+            "--instance is for an isolated qualification endpoint: use it with --endpoint-only "
+            "(it never touches the production GatewayLink task)"
+        )
     config_dir = validate_path(config_dir, "config dir")
     manifest_path = validate_path(endpoint_manifest, "endpoint manifest") if endpoint_manifest else None
     binary = resolve_helper(helper, runner)
@@ -781,87 +889,26 @@ def plan_install(
     user_sid = api.current_sid()
     check_owner(api, config_dir, user_sid)
     xml = build_task_xml(binary, config_dir, user_sid, logon_type=logon_type, enabled=start)
-    exists = query_task_xml(runner) is not None
-    if exists and not force:
-        raise ServiceError(
-            f"the scheduled task {TASK_NAME} already exists; pass --force to "
-            "replace it (or `pocketshell gateway service uninstall` first)"
-        )
+    exists = False
+    if not endpoint_only:
+        exists = query_task_xml(runner) is not None
+        if exists and not force:
+            raise ServiceError(
+                f"the scheduled task {TASK_NAME} already exists; pass --force to "
+                "replace it (or `pocketshell gateway service uninstall` first)"
+            )
     endpoint = None
     if manifest_path:
-        endpoint = plan_endpoint(
+        from pocketshell.gateway import service_windows_endpoint as wep
+
+        endpoint = wep.plan_endpoint(
             manifest_path, show, user_sid,
-            force=force, start=start, api=api, runner=runner, logon_type=logon_type,
+            instance=instance, start=start, api=api, runner=runner, logon_type=logon_type,
         )
     return WindowsPlan(
         binary, config_dir, user_sid, xml, action_argv(binary, config_dir), exists, start, show,
-        logon_type, endpoint,
+        logon_type, endpoint, not endpoint_only,
     )
-
-
-def endpoint_spec(manifest: "ep.EndpointManifest") -> TaskSpec:
-    return TaskSpec(
-        leaf=ep.ENDPOINT_LEAF,
-        command=manifest.command,
-        argv=manifest.arguments,
-        arguments=ep.endpoint_arguments(manifest, quote_arg),
-        working_directory=manifest.working_directory,
-        boot_delay=ep.ENDPOINT_BOOT_DELAY,
-        description=(
-            f"PocketShell private loopback SSH endpoint {manifest.name} on {manifest.listen} "
-            f"(guardian, direct launch): hidden, session 0, runs as the enrolling user. "
-            f"Manifest sha256 {manifest.manifest_sha256}. {MANAGED_MARKER}."
-        ),
-    )
-
-
-def read_manifest(path: str) -> bytes:
-    try:
-        with open(path, "rb") as handle:
-            return handle.read(ep.MAX_MANIFEST_BYTES + 1)
-    except OSError:
-        raise ServiceError(f"cannot read the endpoint manifest {sanitize(path)}") from None
-
-
-def plan_endpoint(
-    manifest_path: str,
-    show: str,
-    user_sid: str,
-    *,
-    force: bool,
-    start: bool,
-    api: WindowsApi,
-    runner: Runner,
-    logon_type: str,
-) -> EndpointPlan:
-    """Validate the manifest (reviewed digest, on-disk digests, binding to the
-    enrolled local sshd and host key, same-user ownership) and plan its task."""
-    manifest = ep.parse_manifest(read_manifest(manifest_path), validate_path=validate_path)
-    ep.check_trust(manifest, file_sha256=file_sha256)
-    ep.check_binding(manifest, show)
-    accepted = {user_sid} | _ELEVATED_CREATOR_OWNERS
-    for path in (manifest.command, manifest.working_directory):
-        owner = api.owner_sid(path)
-        if owner not in accepted:
-            raise ServiceError(
-                f"{sanitize(path)} is owned by {sanitize(owner)}, not by you "
-                f"({sanitize(user_sid)}); the endpoint task runs as you"
-            )
-    spec = endpoint_spec(manifest)
-    xml = build_spec_xml(spec, user_sid, logon_type=logon_type, enabled=start)
-    exists = query_task_xml(runner, ep.ENDPOINT_LEAF) is not None
-    if exists and not force:
-        raise ServiceError(
-            f"the scheduled task {spec.name} already exists; pass --force to "
-            "replace it (or `pocketshell gateway service uninstall` first)"
-        )
-    if start and not exists and ep.port_in_use(manifest.listen_host, manifest.listen_port):
-        raise ServiceError(
-            f"{manifest.listen} is already served by another process (e.g. the currently "
-            "held endpoint). Have its owner stop it through its own controlled-stop "
-            "mechanism first, or register with --no-start; this command never stops it."
-        )
-    return EndpointPlan(manifest, spec, xml, exists)
 
 
 def readback_problems(fields: dict, plan: "WindowsPlan", api: WindowsApi) -> list:
@@ -957,27 +1004,19 @@ def apply_install(
     api = api or WindowsApi()
     if plan.endpoint is not None:
         # The endpoint first: a link without its loopback sshd only yields
-        # "dial failed" routes. If the endpoint does not start, the link task
-        # is not registered at all (exit 5, the endpoint task is kept).
-        endpoint = plan.endpoint
+        # "dial failed" routes. If the endpoint is not READY (CURRENT.json,
+        # held daemon, exact host key), install exits 5 and the link task is
+        # not registered (the endpoint task is kept, inspect with `status`).
+        from pocketshell.gateway import service_windows_endpoint as wep
+
         _register(
-            endpoint.spec, endpoint.xml, replace=endpoint.replace,
+            plan.endpoint.spec, plan.endpoint.xml, replace=False,
             user_sid=plan.user_sid, logon_type=plan.logon_type, runner=runner, api=api,
         )
         if plan.start:
-            host, port = endpoint.manifest.listen_host, endpoint.manifest.listen_port
-            if endpoint.replace:
-                deadline = time.monotonic() + 10
-                while ep.port_in_use(host, port) and time.monotonic() < deadline:
-                    time.sleep(0.5)
-                if ep.port_in_use(host, port):
-                    raise NotStartedError(
-                        f"{endpoint.spec.name} is registered but NOT started: "
-                        f"{endpoint.manifest.listen} is still served after ending the old task"
-                    )
-            _start_and_confirm(
-                runner, ep.ENDPOINT_LEAF, ready=lambda: ep.probe_banner(host, port)
-            )
+            wep.start_and_confirm(plan.endpoint, runner, api)
+    if not plan.include_link:
+        return []
     _register(
         link_spec(plan.helper, plan.config_dir), plan.xml, replace=plan.replace,
         user_sid=plan.user_sid, logon_type=plan.logon_type, runner=runner, api=api,
@@ -1057,26 +1096,38 @@ def _uninstall_one(leaf: str, *, force: bool, runner: Runner, what: str) -> Opti
 
 
 def uninstall(
-    *, force: bool = False, runner: Optional[Runner] = None, api: Optional[WindowsApi] = None
+    *,
+    force: bool = False,
+    runner: Optional[Runner] = None,
+    api: Optional[WindowsApi] = None,
+    instance: Optional[str] = None,
 ) -> str:
     runner = runner or run_child
+    api = api or WindowsApi()
+    from pocketshell.gateway import service_windows_endpoint as wep
+
+    if instance is not None:
+        leaf = ep.leaf_for(instance)
+        note = wep.stop_and_remove(leaf, force=force, runner=runner, api=api)
+        if note is None:
+            return f"not installed ({TASK_FOLDER + leaf} does not exist); nothing to do"
+        return f"removed {TASK_FOLDER + leaf} ({note}); endpoint files untouched"
     # Link first (no new routes), then the endpoint it bridges to.
     fields = _uninstall_one(TASK_LEAF, force=force, runner=runner, what="link")
-    endpoint = _uninstall_one(ep.ENDPOINT_LEAF, force=force, runner=runner, what="endpoint")
-    if fields is None and endpoint is None:
+    endpoint_note = wep.stop_and_remove(ep.ENDPOINT_LEAF, force=force, runner=runner, api=api)
+    if fields is None and endpoint_note is None:
         return f"not installed ({TASK_NAME} does not exist); nothing to do"
     removed = []
     if fields is not None:
         removed.append(TASK_NAME)
-    if endpoint is not None:
-        removed.append(TASK_FOLDER + ep.ENDPOINT_LEAF)
+    if endpoint_note is not None:
+        removed.append(f"{TASK_FOLDER + ep.ENDPOINT_LEAF} ({endpoint_note})")
     message = (
         f"removed the scheduled task(s) {', '.join(removed)} (enrollment, config dir "
         "and endpoint files untouched)"
     )
     helper = fields.get("command") if fields is not None else None
     if helper:
-        api = api or WindowsApi()
         deadline = time.monotonic() + 10
         left = _matching(api, helper)
         while left and time.monotonic() < deadline:
@@ -1111,45 +1162,29 @@ def _matching(api: WindowsApi, helper: str) -> list:
     return [p for p in procs if _same_path(p.get("path"), helper)]
 
 
-def endpoint_status(runner: Runner, api: WindowsApi) -> Optional[dict]:
-    """The endpoint task, if registered: state, contract, banner, processes.
-
-    Running = the task's own state is Running AND the listen address answers
-    with an SSH banner. Guardian processes are diagnostics only.
-    """
-    info = query_task(runner, ep.ENDPOINT_LEAF)
-    if info is None:
-        return None
-    out = {"task": TASK_FOLDER + ep.ENDPOINT_LEAF, "state": info.state, "managed": False,
-           "command": None, "listen": None, "banner_ok": False, "banner": "not probed",
-           "processes": [], "running": False}
-    try:
-        fields = parse_task_xml(info.xml)
-    except ServiceError as exc:
-        out["error"] = str(exc)
-        return out
-    out["managed"] = MANAGED_MARKER in fields["description"]
-    out["command"] = fields["command"]
-    out["logon_type"] = fields["logon_type"]
-    out["run_level"] = fields["run_level"]
-    out["direct_launch"] = fields["exec_count"] == 1 and fields["action_count"] == 1
-    match = re.search(r" on (127\.0\.0\.1):(\d{1,5}) ", fields["description"])
-    if match:
-        host, port = match.group(1), int(match.group(2))
-        out["listen"] = f"{host}:{port}"
-        out["banner_ok"], out["banner"] = ep.probe_banner(host, port)
-    if fields["command"]:
-        out["processes"] = _matching(api, fields["command"])
-    out["running"] = info.state == "Running" and out["banner_ok"]
-    return out
-
-
-def status(runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) -> ServiceStatus:
+def status(
+    runner: Optional[Runner] = None,
+    api: Optional[WindowsApi] = None,
+    instance: Optional[str] = None,
+) -> ServiceStatus:
     runner = runner or run_child
     api = api or WindowsApi()
+    from pocketshell.gateway import service_windows_endpoint as wep
+
+    if instance is not None:
+        leaf = ep.leaf_for(instance)
+        st = ServiceStatus(platform="windows", name=TASK_FOLDER + leaf, installed=False)
+        endpoint = wep.endpoint_status(leaf, runner, api)
+        if endpoint is None:
+            return st
+        st.installed, st.managed = True, endpoint["managed"]
+        st.definition_path, st.state = endpoint["task"], endpoint["state"]
+        st.details["endpoint"] = endpoint
+        st.running = endpoint["running"]
+        return st
     st = ServiceStatus(platform="windows", name=TASK_NAME, installed=False)
     info = query_task(runner)
-    endpoint = endpoint_status(runner, api)
+    endpoint = wep.endpoint_status(ep.ENDPOINT_LEAF, runner, api)
     if endpoint is not None:
         st.details["endpoint"] = endpoint
     if info is None:
@@ -1207,9 +1242,10 @@ def status(runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) ->
     st.running = st.state == "Running"
     if endpoint is not None and not endpoint["running"]:
         st.running = False
+        problems = list(endpoint["contract"]) + list((endpoint["readiness"] or {}).get("problems", []))
         st.warnings.append(
             f"the endpoint task {endpoint['task']} is {endpoint['state']}"
-            + ("" if endpoint["banner_ok"] else f"; {endpoint['banner']}")
+            + (f": {'; '.join(problems)}" if problems else "")
         )
     if st.processes and not st.running:
         st.warnings.append(
