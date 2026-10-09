@@ -225,6 +225,9 @@ def install(
             )
         elif plan.endpoint is not None:
             click.echo(f"registered {plan.endpoint.name} (check-only, no triggers)")
+            for line in warnings:
+                click.echo(line)
+            warnings = []
         if plan.include_link:
             click.echo(f"registered {backend.TASK_NAME} for device {device} as {plan.user_sid}"
                        + (" (registered DISABLED; `install --force` enables and starts it)"
