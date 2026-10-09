@@ -441,10 +441,10 @@ def test_ignore_console_interrupts_survives_sigint():
         "print('alive', flush=True)\n"
     )
     proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE)
-    assert proc.stdout.readline() == b"ready\n"
+    assert proc.stdout.readline().strip() == b"ready"
     if os.name != "nt":
         proc.send_signal(signal.SIGINT)
-    assert proc.stdout.readline() == b"alive\n"
+    assert proc.stdout.readline().strip() == b"alive"
     assert proc.wait(10) == 0
 
 
