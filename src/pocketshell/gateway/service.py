@@ -93,6 +93,17 @@ _CONFIG_DIR_HELP = (
         "sha256 must be a reviewed build."
     ),
 )
+@click.option(
+    "--with-endpoint",
+    "endpoint_manifest",
+    default=None,
+    metavar="MANIFEST",
+    help=(
+        "Windows only: also own the private loopback SSH endpoint described by "
+        "this reviewed manifest (a second task, \\PocketShell\\GatewayEndpoint, "
+        "started before the link)."
+    ),
+)
 @click.option("--dry-run", is_flag=True, help="Print the exact unit/task and commands; change nothing.")
 @click.option("--force", is_flag=True, help="Replace an existing unit/task.")
 @click.option(
@@ -106,7 +117,12 @@ _CONFIG_DIR_HELP = (
 )
 @_guard
 def install(
-    config_dir: Optional[str], helper: Optional[str], dry_run: bool, force: bool, no_start: bool
+    config_dir: Optional[str],
+    helper: Optional[str],
+    endpoint_manifest: Optional[str],
+    dry_run: bool,
+    force: bool,
+    no_start: bool,
 ) -> None:
     """Install (and start) the durable host agent for an enrolled config dir.
 
@@ -119,6 +135,11 @@ def install(
     if platform == "linux":
         from pocketshell.gateway import service_linux as backend
 
+        if endpoint_manifest:
+            raise ServiceError(
+                "--with-endpoint is Windows-only; on Linux the local sshd is already a "
+                "durable system or user service"
+            )
         plan = backend.plan_install(helper, config_dir, force=force, start=not no_start)
         device = common.parse_show(plan.show).get("device id", "?")
         if dry_run:
@@ -137,10 +158,23 @@ def install(
     else:
         from pocketshell.gateway import service_windows as backend
 
-        plan = backend.plan_install(helper, config_dir, force=force, start=not no_start)
+        plan = backend.plan_install(
+            helper, config_dir, force=force, start=not no_start,
+            endpoint_manifest=endpoint_manifest,
+        )
         device = common.parse_show(plan.show).get("device id", "?")
         if dry_run:
             click.echo(f"# dry run: nothing registered or written. Enrolled device: {device}")
+            if plan.endpoint is not None:
+                m = plan.endpoint.manifest
+                click.echo(
+                    f"# endpoint task {plan.endpoint.spec.name} ({m.name}, {m.listen}, host key "
+                    f"{m.host_key_fingerprint}, manifest sha256 {m.manifest_sha256}); "
+                    "definition (UTF-16):"
+                )
+                click.echo(plan.endpoint.xml, nl=False)
+                click.echo("# the endpoint task's process argv (direct, no shell):")
+                click.echo("  " + json.dumps([m.command, *m.arguments]))
             click.echo(f"# task {backend.TASK_NAME}, principal {plan.user_sid}; definition (UTF-16):")
             click.echo(plan.xml, nl=False)
             click.echo("# then run (CREATE_NO_WINDOW):")
@@ -150,6 +184,11 @@ def install(
             click.echo("  " + json.dumps(plan.action_argv))
             return
         warnings = backend.apply_install(plan)
+        if plan.endpoint is not None:
+            click.echo(
+                f"registered {plan.endpoint.spec.name} ({plan.endpoint.manifest.listen})"
+                + (" (registered DISABLED)" if no_start else " (started, SSH banner answered)")
+            )
         click.echo(f"registered {backend.TASK_NAME} for device {device} as {plan.user_sid}"
                    + (" (registered DISABLED; `install --force` enables and starts it)"
                       if no_start else " (started)"))

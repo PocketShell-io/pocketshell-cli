@@ -545,77 +545,117 @@ _STATE_CODES = {"Unknown": 0, "Disabled": 1, "Queued": 2, "Ready": 3, "Running":
 class FakeWindows:
     """Fake schtasks / Task Scheduler COM (via powershell) / helper.
 
-    Keeps the 'registered' XML and a task state; knobs simulate query
-    failures, a failing or non-starting /Run, and a registration whose
-    readback differs from what was requested.
+    Keeps each registered task's XML and state (by task leaf name); knobs
+    simulate query failures, a failing or non-starting /Run, and a
+    registration whose readback differs from what was requested.
+    ``registered`` / ``state`` address the link task, as before.
     """
+
+    LINK = "GatewayLink"
 
     def __init__(self, *, registered=None, create_rc=0, version=VERSION_OK, show_rc=0):
         self.calls: list[list[str]] = []
+        self.tasks: dict = {}
         self.registered = registered
         self.create_rc = create_rc
         self.version = version
         self.show_rc = show_rc
+        self.show_out = SHOW_OUT
         self.xml_seen = None
         self.xml_path = None
-        self.state = "Ready"
         self.query_error = False          # access denied on every query
         self.query_error_after_delete = False
         self.run_rc = 0
+        self.run_rc_for = {}              # leaf -> rc
         self.run_starts = True            # /Run success moves the task to Running
         self.mutate_on_create = None      # callable(xml) -> registered readback
         self.deleted = False
+        self.on_run = {}                  # leaf -> callback
+
+    # link-task shorthands used by the earlier tests
+    @property
+    def registered(self):
+        task = self.tasks.get(self.LINK)
+        return task["xml"] if task else None
+
+    @registered.setter
+    def registered(self, xml):
+        if xml is None:
+            self.tasks.pop(self.LINK, None)
+        else:
+            self.tasks[self.LINK] = {"xml": xml, "state": self.tasks.get(self.LINK, {}).get("state", "Ready")}
+
+    @property
+    def state(self):
+        return self.tasks.get(self.LINK, {}).get("state", "Ready")
+
+    @state.setter
+    def state(self, value):
+        self.tasks.setdefault(self.LINK, {"xml": None, "state": value})["state"] = value
 
     def _query_failed(self):
         return self.query_error or (self.query_error_after_delete and self.deleted)
+
+    @staticmethod
+    def _leaf(argv):
+        return argv[argv.index("/TN") + 1].rsplit("\\", 1)[-1]
 
     def __call__(self, argv, **kwargs):
         argv = list(argv)
         self.calls.append(argv)
         exe = argv[0].lower()
         if exe.endswith("schtasks.exe"):
-            verb = argv[1]
+            verb, leaf = argv[1], self._leaf(argv)
+            task = self.tasks.get(leaf)
             if verb == "/Query":
                 if self._query_failed():
                     return ChildResult(1, b"", b"ERROR: Access is denied.\r\n")
-                if self.registered is None:
+                if not task or task["xml"] is None:
                     return ChildResult(1, b"", b"ERROR: The system cannot find the file specified.\r\n")
-                return ChildResult(0, self.registered.encode("utf-16"), b"")
+                return ChildResult(0, task["xml"].encode("utf-16"), b"")
             if verb == "/Create":
                 self.xml_path = argv[argv.index("/XML") + 1]
                 self.xml_seen = Path(self.xml_path).read_bytes()
                 if self.create_rc:
                     return ChildResult(self.create_rc, b"", b"ERROR: Access is denied.\r\n")
                 xml = self.xml_seen.decode("utf-16")
-                self.registered = self.mutate_on_create(xml) if self.mutate_on_create else xml
-                self.state = "Disabled" if "<Enabled>false</Enabled>" in xml else "Ready"
+                readback = self.mutate_on_create(xml) if self.mutate_on_create else xml
+                self.tasks[leaf] = {
+                    "xml": readback,
+                    "state": "Disabled" if "<Enabled>false</Enabled>" in xml else "Ready",
+                }
                 return ChildResult(0, b"SUCCESS", b"")
             if verb == "/Run":
-                if self.run_rc:
-                    return ChildResult(self.run_rc, b"", b"ERROR: Access is denied.\r\n")
-                if self.run_starts:
-                    self.state = "Running"
+                rc = self.run_rc_for.get(leaf, self.run_rc)
+                if rc:
+                    return ChildResult(rc, b"", b"ERROR: Access is denied.\r\n")
+                if self.run_starts and task:
+                    task["state"] = "Running"
+                    if leaf in self.on_run:
+                        self.on_run[leaf]()
                 return ChildResult(0, b"SUCCESS", b"")
             if verb == "/End":
-                if self.state == "Running":
-                    self.state = "Ready"
+                if task and task["state"] == "Running":
+                    task["state"] = "Ready"
             if verb == "/Delete":
-                self.registered = None
+                self.tasks.pop(leaf, None)
                 self.deleted = True
             return ChildResult(0, b"", b"")
         if exe.endswith("powershell.exe"):
             script = argv[-1]
             if "Schedule.Service" in script:  # COM query
+                leaf = re.search(r"GetTask\('([A-Za-z]+)'\)", script).group(1)
+                task = self.tasks.get(leaf)
                 if self._query_failed():
                     out = {"found": False, "hresult": "0x80070005", "message": "Access is denied.\x1b[2J"}
-                elif self.registered is None:
+                elif not task or task["xml"] is None:
                     out = {"found": False, "hresult": "0x80070002", "message": "not found"}
                 else:
                     out = {
                         "found": True,
-                        "state": _STATE_CODES[self.state],
+                        "state": _STATE_CODES[task["state"]],
                         "last_result": 267009,
-                        "xml": base64.b64encode(self.registered.encode("utf-8")).decode(),
+                        "xml": base64.b64encode(task["xml"].encode("utf-8")).decode(),
                     }
                 return ChildResult(0, json.dumps(out).encode(), b"")
             if self._query_failed():
@@ -624,8 +664,19 @@ class FakeWindows:
         if argv[1:] == ["version", "--json"]:
             return ChildResult(0, self.version, b"")
         if argv[1] == "show":
-            return ChildResult(self.show_rc, SHOW_OUT.encode() if not self.show_rc else b"", b"denied")
+            return ChildResult(self.show_rc, self.show_out.encode() if not self.show_rc else b"", b"denied")
         raise AssertionError(f"unexpected child {argv}")
+
+
+def _task_verbs(fake):
+    """(verb, leaf) for every schtasks call and COM query."""
+    out = []
+    for c in fake.calls:
+        if c[0].lower().endswith("schtasks.exe"):
+            out.append((c[1], FakeWindows._leaf(c)))
+        elif c[0].lower().endswith("powershell.exe") and "Schedule.Service" in c[-1]:
+            out.append(("QUERY", re.search(r"GetTask\('([A-Za-z]+)'\)", c[-1]).group(1)))
+    return out
 
 
 def _verbs(fake):
@@ -764,7 +815,10 @@ def test_windows_uninstall_only_deletes_the_task(fake_windows):
     fake_windows.registered = _xml()
     message = win.uninstall(api=FakeApi())
     assert "removed" in message and "untouched" in message
-    assert _verbs(fake_windows) == ["QUERY", "/End", "/Delete", "QUERY"]
+    assert _task_verbs(fake_windows) == [
+        ("QUERY", "GatewayLink"), ("/End", "GatewayLink"), ("/Delete", "GatewayLink"),
+        ("QUERY", "GatewayLink"), ("QUERY", "GatewayEndpoint"),
+    ]
     for argv in fake_windows.calls:
         assert WIN_CONFIG not in argv
     assert "nothing to do" in win.uninstall(api=FakeApi())
@@ -1050,3 +1104,12 @@ def test_control_pr21_2_unconfirmed_start_is_not_a_successful_start(fake_windows
     result = _install_cli(monkeypatch)
     assert "(started)" not in result.output
     assert result.exit_code != 0
+
+
+# --- durable endpoint: `install --with-endpoint MANIFEST` -----------------------------
+
+
+def test_with_endpoint_option_exists():
+    """RED control: absent before the endpoint commits (exit 2, no such option)."""
+    result = CliRunner().invoke(cli, ["gateway", "service", "install", "--help"])
+    assert "--with-endpoint" in result.output

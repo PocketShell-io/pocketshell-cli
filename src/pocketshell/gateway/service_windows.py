@@ -41,6 +41,7 @@ from typing import Callable, Optional
 
 from pocketshell.gateway import helper as gateway_helper
 from pocketshell.gateway import service_common as common
+from pocketshell.gateway import service_endpoint as ep
 from pocketshell.gateway.service_common import (
     ChildResult,
     NotStartedError,
@@ -696,6 +697,14 @@ def _fail(result: ChildResult, what: str, hint: str = "") -> ServiceError:
 
 
 @dataclass
+class EndpointPlan:
+    manifest: "ep.EndpointManifest"
+    spec: TaskSpec
+    xml: str
+    replace: bool
+
+
+@dataclass
 class WindowsPlan:
     helper: str
     config_dir: str
@@ -706,17 +715,24 @@ class WindowsPlan:
     start: bool
     show: str
     logon_type: str = DEFAULT_LOGON_TYPE
+    endpoint: Optional[EndpointPlan] = None
 
-    def commands(self, xml_path: str = "<private temp dir>\\GatewayLink.xml") -> list:
+    def commands(self, xml_dir: str = "<private temp dir>") -> list:
+        """The schtasks sequence: endpoint task first (when any), then link."""
         commands = []
-        if self.replace:
-            commands.append(schtasks("/End", "/TN", TASK_NAME))
-        create = schtasks("/Create", "/TN", TASK_NAME, "/XML", xml_path)
-        if self.replace:
-            create.append("/F")
-        commands.append(create)
-        if self.start:
-            commands.append(schtasks("/Run", "/TN", TASK_NAME))
+        tasks = []
+        if self.endpoint is not None:
+            tasks.append((self.endpoint.spec.name, self.endpoint.spec.leaf, self.endpoint.replace))
+        tasks.append((TASK_NAME, TASK_LEAF, self.replace))
+        for name, leaf, replace in tasks:
+            if replace:
+                commands.append(schtasks("/End", "/TN", name))
+            create = schtasks("/Create", "/TN", name, "/XML", f"{xml_dir}\\{leaf}.xml")
+            if replace:
+                create.append("/F")
+            commands.append(create)
+            if self.start:
+                commands.append(schtasks("/Run", "/TN", name))
         return commands
 
 
@@ -754,10 +770,12 @@ def plan_install(
     api: Optional[WindowsApi] = None,
     runner: Optional[Runner] = None,
     logon_type: str = DEFAULT_LOGON_TYPE,
+    endpoint_manifest: Optional[str] = None,
 ) -> WindowsPlan:
     runner = runner or run_child
     api = api or WindowsApi()
     config_dir = validate_path(config_dir, "config dir")
+    manifest_path = validate_path(endpoint_manifest, "endpoint manifest") if endpoint_manifest else None
     binary = resolve_helper(helper, runner)
     show = common.check_enrollment(binary, config_dir, runner)
     user_sid = api.current_sid()
@@ -769,10 +787,81 @@ def plan_install(
             f"the scheduled task {TASK_NAME} already exists; pass --force to "
             "replace it (or `pocketshell gateway service uninstall` first)"
         )
+    endpoint = None
+    if manifest_path:
+        endpoint = plan_endpoint(
+            manifest_path, show, user_sid,
+            force=force, start=start, api=api, runner=runner, logon_type=logon_type,
+        )
     return WindowsPlan(
         binary, config_dir, user_sid, xml, action_argv(binary, config_dir), exists, start, show,
-        logon_type,
+        logon_type, endpoint,
     )
+
+
+def endpoint_spec(manifest: "ep.EndpointManifest") -> TaskSpec:
+    return TaskSpec(
+        leaf=ep.ENDPOINT_LEAF,
+        command=manifest.command,
+        argv=manifest.arguments,
+        arguments=ep.endpoint_arguments(manifest, quote_arg),
+        working_directory=manifest.working_directory,
+        boot_delay=ep.ENDPOINT_BOOT_DELAY,
+        description=(
+            f"PocketShell private loopback SSH endpoint {manifest.name} on {manifest.listen} "
+            f"(guardian, direct launch): hidden, session 0, runs as the enrolling user. "
+            f"Manifest sha256 {manifest.manifest_sha256}. {MANAGED_MARKER}."
+        ),
+    )
+
+
+def read_manifest(path: str) -> bytes:
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(ep.MAX_MANIFEST_BYTES + 1)
+    except OSError:
+        raise ServiceError(f"cannot read the endpoint manifest {sanitize(path)}") from None
+
+
+def plan_endpoint(
+    manifest_path: str,
+    show: str,
+    user_sid: str,
+    *,
+    force: bool,
+    start: bool,
+    api: WindowsApi,
+    runner: Runner,
+    logon_type: str,
+) -> EndpointPlan:
+    """Validate the manifest (reviewed digest, on-disk digests, binding to the
+    enrolled local sshd and host key, same-user ownership) and plan its task."""
+    manifest = ep.parse_manifest(read_manifest(manifest_path), validate_path=validate_path)
+    ep.check_trust(manifest, file_sha256=file_sha256)
+    ep.check_binding(manifest, show)
+    accepted = {user_sid} | _ELEVATED_CREATOR_OWNERS
+    for path in (manifest.command, manifest.working_directory):
+        owner = api.owner_sid(path)
+        if owner not in accepted:
+            raise ServiceError(
+                f"{sanitize(path)} is owned by {sanitize(owner)}, not by you "
+                f"({sanitize(user_sid)}); the endpoint task runs as you"
+            )
+    spec = endpoint_spec(manifest)
+    xml = build_spec_xml(spec, user_sid, logon_type=logon_type, enabled=start)
+    exists = query_task_xml(runner, ep.ENDPOINT_LEAF) is not None
+    if exists and not force:
+        raise ServiceError(
+            f"the scheduled task {spec.name} already exists; pass --force to "
+            "replace it (or `pocketshell gateway service uninstall` first)"
+        )
+    if start and not exists and ep.port_in_use(manifest.listen_host, manifest.listen_port):
+        raise ServiceError(
+            f"{manifest.listen} is already served by another process (e.g. the currently "
+            "held endpoint). Have its owner stop it through its own controlled-stop "
+            "mechanism first, or register with --no-start; this command never stops it."
+        )
+    return EndpointPlan(manifest, spec, xml, exists)
 
 
 def readback_problems(fields: dict, plan: "WindowsPlan", api: WindowsApi) -> list:
@@ -866,6 +955,29 @@ def apply_install(
 ) -> list:
     runner = runner or run_child
     api = api or WindowsApi()
+    if plan.endpoint is not None:
+        # The endpoint first: a link without its loopback sshd only yields
+        # "dial failed" routes. If the endpoint does not start, the link task
+        # is not registered at all (exit 5, the endpoint task is kept).
+        endpoint = plan.endpoint
+        _register(
+            endpoint.spec, endpoint.xml, replace=endpoint.replace,
+            user_sid=plan.user_sid, logon_type=plan.logon_type, runner=runner, api=api,
+        )
+        if plan.start:
+            host, port = endpoint.manifest.listen_host, endpoint.manifest.listen_port
+            if endpoint.replace:
+                deadline = time.monotonic() + 10
+                while ep.port_in_use(host, port) and time.monotonic() < deadline:
+                    time.sleep(0.5)
+                if ep.port_in_use(host, port):
+                    raise NotStartedError(
+                        f"{endpoint.spec.name} is registered but NOT started: "
+                        f"{endpoint.manifest.listen} is still served after ending the old task"
+                    )
+            _start_and_confirm(
+                runner, ep.ENDPOINT_LEAF, ready=lambda: ep.probe_banner(host, port)
+            )
     _register(
         link_spec(plan.helper, plan.config_dir), plan.xml, replace=plan.replace,
         user_sid=plan.user_sid, logon_type=plan.logon_type, runner=runner, api=api,
@@ -948,11 +1060,21 @@ def uninstall(
     *, force: bool = False, runner: Optional[Runner] = None, api: Optional[WindowsApi] = None
 ) -> str:
     runner = runner or run_child
+    # Link first (no new routes), then the endpoint it bridges to.
     fields = _uninstall_one(TASK_LEAF, force=force, runner=runner, what="link")
-    if fields is None:
+    endpoint = _uninstall_one(ep.ENDPOINT_LEAF, force=force, runner=runner, what="endpoint")
+    if fields is None and endpoint is None:
         return f"not installed ({TASK_NAME} does not exist); nothing to do"
-    helper = fields.get("command")
-    message = f"removed the scheduled task {TASK_NAME} (enrollment and config dir untouched)"
+    removed = []
+    if fields is not None:
+        removed.append(TASK_NAME)
+    if endpoint is not None:
+        removed.append(TASK_FOLDER + ep.ENDPOINT_LEAF)
+    message = (
+        f"removed the scheduled task(s) {', '.join(removed)} (enrollment, config dir "
+        "and endpoint files untouched)"
+    )
+    helper = fields.get("command") if fields is not None else None
     if helper:
         api = api or WindowsApi()
         deadline = time.monotonic() + 10
@@ -989,11 +1111,52 @@ def _matching(api: WindowsApi, helper: str) -> list:
     return [p for p in procs if _same_path(p.get("path"), helper)]
 
 
+def endpoint_status(runner: Runner, api: WindowsApi) -> Optional[dict]:
+    """The endpoint task, if registered: state, contract, banner, processes.
+
+    Running = the task's own state is Running AND the listen address answers
+    with an SSH banner. Guardian processes are diagnostics only.
+    """
+    info = query_task(runner, ep.ENDPOINT_LEAF)
+    if info is None:
+        return None
+    out = {"task": TASK_FOLDER + ep.ENDPOINT_LEAF, "state": info.state, "managed": False,
+           "command": None, "listen": None, "banner_ok": False, "banner": "not probed",
+           "processes": [], "running": False}
+    try:
+        fields = parse_task_xml(info.xml)
+    except ServiceError as exc:
+        out["error"] = str(exc)
+        return out
+    out["managed"] = MANAGED_MARKER in fields["description"]
+    out["command"] = fields["command"]
+    out["logon_type"] = fields["logon_type"]
+    out["run_level"] = fields["run_level"]
+    out["direct_launch"] = fields["exec_count"] == 1 and fields["action_count"] == 1
+    match = re.search(r" on (127\.0\.0\.1):(\d{1,5}) ", fields["description"])
+    if match:
+        host, port = match.group(1), int(match.group(2))
+        out["listen"] = f"{host}:{port}"
+        out["banner_ok"], out["banner"] = ep.probe_banner(host, port)
+    if fields["command"]:
+        out["processes"] = _matching(api, fields["command"])
+    out["running"] = info.state == "Running" and out["banner_ok"]
+    return out
+
+
 def status(runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) -> ServiceStatus:
     runner = runner or run_child
+    api = api or WindowsApi()
     st = ServiceStatus(platform="windows", name=TASK_NAME, installed=False)
     info = query_task(runner)
+    endpoint = endpoint_status(runner, api)
+    if endpoint is not None:
+        st.details["endpoint"] = endpoint
     if info is None:
+        if endpoint is not None:
+            st.installed = True
+            st.state = "absent (endpoint task only)"
+            st.warnings.append(f"{TASK_NAME} is not installed but {endpoint['task']} is")
         return st
     registered = info.xml
     st.installed = True
@@ -1009,11 +1172,11 @@ def status(runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) ->
     args = parse_arguments(fields["arguments"])
     if "--config-dir" in args and args.index("--config-dir") + 1 < len(args):
         st.config_dir = args[args.index("--config-dir") + 1]
-    st.details = {
+    st.details.update({
         k: fields[k]
         for k in ("user_id", "logon_type", "run_level", "arguments", "working_directory",
                   "multiple_instances", "execution_time_limit", "watchdog_interval")
-    }
+    })
     st.details["direct_launch"] = (
         fields["exec_count"] == 1
         and fields["action_count"] == 1
@@ -1022,7 +1185,6 @@ def status(runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) ->
     )
     st.state = info.state
     st.details["last_task_result"] = info.last_result
-    api = api or WindowsApi()
     if st.helper:
         st.processes = _matching(api, st.helper)
         try:
@@ -1043,6 +1205,12 @@ def status(runner: Optional[Runner] = None, api: Optional[WindowsApi] = None) ->
     # may run another config/device, in another session, under another
     # supervisor.
     st.running = st.state == "Running"
+    if endpoint is not None and not endpoint["running"]:
+        st.running = False
+        st.warnings.append(
+            f"the endpoint task {endpoint['task']} is {endpoint['state']}"
+            + ("" if endpoint["banner_ok"] else f"; {endpoint['banner']}")
+        )
     if st.processes and not st.running:
         st.warnings.append(
             "process(es) from the task's helper path are running, but the task "
