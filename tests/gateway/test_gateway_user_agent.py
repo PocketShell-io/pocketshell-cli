@@ -64,7 +64,7 @@ class AgentApi(EndpointApi):
         self.spawns.append({"argv": list(argv), "cwd": cwd, "env": dict(env) if env is not None else None})
         if self.caller_job is not None and self.caller_job["killOnJobClose"]:
             raise win.CallerJobError("the child could not break away from the caller's job, which has "
-                               "KILL_ON_JOB_CLOSE; the suspended child was terminated before resume")
+                                     "KILL_ON_JOB_CLOSE; the suspended child was terminated before resume")
         job = {"inJob": self.caller_job is not None,
                "callerJobKillOnClose": bool(self.caller_job and self.caller_job["killOnJobClose"]),
                "brokeAway": self.caller_job is None, "elevated": False, "session": self.session}
