@@ -25,8 +25,17 @@ def test_native_windows_proxy_and_paths():
 
 
 def test_native_windows_proxy_refuses_command_expansion():
+    # Win32-OpenSSH starts the ProxyCommand with CreateProcessW, never
+    # cmd.exe (see pocketshell.gateway.winssh): '%' is doubled for ssh's
+    # own token expansion, '&'/'!' are inert. What could end the quote or
+    # be expanded by an MSYS /bin/sh is refused.
     from pocketshell.gateway import sshcmd
     from pocketshell.gateway.endpoint import resolve_endpoint
-    for value in (r'C:\Python\%USERPROFILE%\python.exe', r'C:\Python\bad&name.exe', r'C:\Python\bad!name.exe'):
+    ep = resolve_endpoint(None, False)
+    command = sshcmd.proxy_command('win-host', ep, python=r'C:\Python\%USERPROFILE%\python.exe')
+    assert command.startswith('"C:/Python/%%USERPROFILE%%/python.exe" -P -m pocketshell')
+    for value in (r'C:\Python\bad&name.exe', r'C:\Python\bad!name.exe'):
+        assert sshcmd.proxy_command('win-host', ep, python=value).startswith('"C:/Python/bad')
+    for value in (r'C:\Python\$HOME\python.exe', r'C:\Python\`x`\python.exe', 'C:\\Py\nthon.exe'):
         with pytest.raises(sshcmd.SshArgsError):
-            sshcmd.proxy_command('win-host', resolve_endpoint(None, False), python=value)
+            sshcmd.proxy_command('win-host', ep, python=value)
