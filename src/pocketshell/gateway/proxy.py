@@ -290,9 +290,20 @@ def run_proxy(
     stderr: Optional[TextIO] = None,
     handshake_timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
     connect: Optional[Callable] = None,
+    platform: Optional[str] = None,
 ) -> int:
     """Run the bridge; return the process exit status. Never raises for
-    expected conditions; writes one diagnostic line to ``stderr``."""
+    expected conditions; writes one diagnostic line to ``stderr``.
+
+    On Windows the proxy shares ssh.exe's console, so console Ctrl+C /
+    Ctrl+Break events reach it as well: they are ignored (ssh.exe owns
+    them); the bridge ends on stdin EOF, a WebSocket close or an error.
+    stdin is read by a blocking thread (no ``select`` on pipes) and every
+    chunk is written straight to the stdout descriptor (unbuffered)."""
+    if (sys.platform if platform is None else platform) == "win32":
+        from pocketshell.gateway.winssh import ignore_console_interrupts
+
+        ignore_console_interrupts()
     err = stderr if stderr is not None else sys.stderr
     try:
         return _run(
