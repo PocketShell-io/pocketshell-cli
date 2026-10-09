@@ -17,6 +17,7 @@ import click
 from pocketshell.gateway import client_cli as gateway_client_cli
 from pocketshell.gateway import endpoint as gateway_endpoint
 from pocketshell.gateway import helper as gateway_helper
+from pocketshell.gateway import service as gateway_service
 from pocketshell.gateway import tokens as gateway_tokens
 
 # The wrapper refuses to aim the DEV-ONLY `--dev-broker-issuer` override at
@@ -154,6 +155,9 @@ def _run_helper(argv: Sequence[str], ctx: click.Context) -> None:
     help=(
         "Gateway host agent: enroll this host and hold the reverse tunnel "
         "to the SSH gateway (hosts without inbound SSH).\n\n"
+        "Durable start on this host: `service install|status|uninstall` "
+        "(systemd --user unit on Linux, a hidden per-user scheduled task on "
+        "Windows).\n\n"
         "Client side (on the machine you connect from): `devices`, `pin`, "
         "`unpin`, `ssh` (and `proxy`, its ProxyCommand) reach an enrolled "
         "host with OpenSSH after `pocketshell login`.\n\n"
@@ -474,6 +478,7 @@ def show(ctx: click.Context, config_dir: Optional[str], host_key: bool) -> None:
 gateway_group.add_command(enroll)
 gateway_group.add_command(run)
 gateway_group.add_command(show)
+gateway_group.add_command(gateway_service.service_group)
 
 for _client_command in gateway_client_cli.CLIENT_COMMANDS:
     gateway_group.add_command(_client_command)

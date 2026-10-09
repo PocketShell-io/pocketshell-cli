@@ -349,26 +349,67 @@ Foreground process; stop with Ctrl+C or SIGTERM (clean exit 0). It reads the
 state written by `enroll` from the config dir. `--server` overrides the
 enrolled URL; `--verbose` turns on debug logging (to stderr).
 
-Run it under any supervisor. A reproducible **systemd user unit** (no root,
-runs as the same user who enrolled — so it sees the same config dir, the
-pinned host key, and the device key; the helper is pinned by absolute path
-so the unit cannot be satisfied by an arbitrary binary that happens to be on
-PATH; no `--ssh-host` override: the unit serves exactly the enrolled
-loopback sshd):
+### 4.1 Durable start: `pocketshell gateway service`
+
+The supported way to keep an **enrolled** agent running across logouts
+and reboots, without a visible window:
+
+```bash
+pocketshell gateway service install --dry-run   # print exactly what would be done
+pocketshell gateway service install             # write/register it and start it (exit 5: installed, NOT started)
+pocketshell gateway service status [--json]     # exit 0 running, 3 installed but stopped, 4 not installed
+pocketshell gateway service uninstall           # stop and remove ONLY the unit/task
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--config-dir DIR` | The enrolled state dir, passed to the helper explicitly (default: the helper's default dir). |
+| `--helper PATH` | Absolute `pocketshell-link`. Linux default: the normal resolution of §1.1 plus the `version --json` protocol gate. Windows: required (or `POCKETSHELL_GATEWAY_HELPER`). |
+| `--dry-run` | Print the unit file / task XML, the commands and the agent's exact argv; write and register nothing. |
+| `--force` | Replace an existing unit/task (otherwise refused). |
+| `--no-start` | Do not start it now. Linux: `enable` only (starts at the next boot/login). Windows: the task is registered **disabled** (the 5-minute watchdog would otherwise start it); `install --force` later enables and starts it. |
+
+What every platform shares:
+
+- **Requires an existing enrollment.** `install` checks that the config dir
+  holds `config.json` and the device key (existence only) and that the
+  helper's own `show --config-dir DIR` accepts it; otherwise it refuses
+  with "run `pocketshell gateway enroll` first". It never enrolls,
+  re-enrolls, reads the key, or writes into the config dir.
+- **The helper runs directly**: `<absolute helper> run --config-dir <DIR>`.
+  No shell, no `pocketshell` wrapper process, no `--ssh-host` override (the
+  enrolled loopback sshd is served).
+- **`uninstall` removes only the unit/task** — never the config dir, the
+  key, or the device registration (revoke a device separately). Running it
+  again is a no-op. A unit/task of the same name that this command did not
+  write (no "Managed by" marker) is refused unless `--force`.
+- **Exit status** of `install`: 0 installed and started (or registered with
+  `--no-start`), **5 installed but NOT started** (the start failed or was not
+  confirmed; the unit/task is kept), 1 refused/failed. `status`: 0 running,
+  3 installed but not running, 4 not installed, 1 the state could not be read.
+- `status` reports presence and state, the configured helper and config
+  dir, the helper's sha256, the running process id(s), and the helper's
+  non-secret `show` output. All child output is sanitized.
+
+#### Linux: systemd `--user` unit
+
+`install` atomically writes `~/.config/systemd/user/pocketshell-gateway.service`
+(`$XDG_CONFIG_HOME` respected; mode 0644, no secrets) and runs
+`systemctl --user daemon-reload`, `systemctl --user enable
+pocketshell-gateway.service` and then, as a separate step, `start`
+(`restart` when `--force` replaced an existing unit). If that start fails the
+unit stays written and enabled and `install` exits **5**. The unit:
 
 ```ini
-# ~/.config/systemd/user/pocketshell-gateway.service
+# Managed by `pocketshell gateway service install` — ...
 [Unit]
-Description=PocketShell gateway host agent (reverse tunnel)
+Description=PocketShell gateway host agent (pocketshell-link run)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%h/.local/bin/pocketshell gateway run --verbose
-Environment=POCKETSHELL_GATEWAY_HELPER=%h/.local/bin/pocketshell-link
-# XDG_CONFIG_HOME must match the enroll-time value; the default below is
-# what `gateway enroll` used when the variable was unset for that user.
-Environment=XDG_CONFIG_HOME=%h/.config
+Type=simple
+ExecStart="/home/me/.local/bin/pocketshell-link" run --config-dir "/home/me/.config/pocketshell-link"
 Restart=on-failure
 RestartSec=5
 
@@ -376,17 +417,113 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now pocketshell-gateway.service
-journalctl --user -u pocketshell-gateway.service -f
-```
+Paths are quoted for systemd's own parser (`%` and `$` escaped; `"`, `\`
+and control characters refused). A user unit only runs while the user has
+a session unless **lingering** is on; `install` warns when it is off:
+`sudo loginctl enable-linger $USER`. `uninstall` runs `systemctl --user
+disable --now`, deletes the file and reloads; it refuses to delete a
+`pocketshell-gateway.service` it did not write (no "Managed by" marker)
+unless `--force`. Logs: `journalctl --user -u pocketshell-gateway.service`.
 
-Adjust the two absolute paths (`ExecStart`, `POCKETSHELL_GATEWAY_HELPER`) to
-where `pocketshell` and the built `pocketshell-link` actually live for this
-user — `pocketshell gateway show` must run as this same user and print the
-enrolled state before you enable the unit; if it prints nothing, the unit
-would enroll nothing either.
+An older hand-written unit (`ExecStart=… pocketshell gateway run` with
+`Environment=POCKETSHELL_GATEWAY_HELPER=…`, as earlier versions of this
+document showed) keeps working; `install --force` replaces it with the
+direct form.
+
+#### Windows: one per-user scheduled task
+
+`install` registers **`\PocketShell\GatewayLink`** with `schtasks /Create /XML`
+(every child launched with `CREATE_NO_WINDOW`; no console window, ever).
+The definition:
+
+| Field | Value |
+| --- | --- |
+| Principal | the **current user's SID**, `LogonType` **S4U** (runs whether logged on or not, no stored password), `RunLevel` **LeastPrivilege**. S4U tasks run in the non-interactive **session 0**: nothing can appear on the desktop. |
+| Triggers | `BootTrigger` (+30 s) and a `TimeTrigger` repeating every 5 minutes (watchdog). |
+| Settings | `MultipleInstancesPolicy=IgnoreNew`, `ExecutionTimeLimit=PT0S` (no 72 h kill), battery stops off, `RunOnlyIfNetworkAvailable=false` (the agent's own backoff handles the network), `RestartOnFailure` 1 min × 999. |
+| Action | exactly ONE `Exec`: `Command` = the absolute helper `.exe`, `Arguments` = `run --config-dir "<DIR>"`, `WorkingDirectory` = the helper's directory. **No `cmd.exe`, shell or redirection** (and so no stderr log until the helper grows `run --log-file`). |
+
+Refusals before anything is registered:
+
+- **Helper trust.** The task runs the exe directly, so its sha256 must be on
+  the reviewed allow-list in `service_windows.ALLOWED_HELPER_SHA256` —
+  today exactly `f9582de6a3f635ec70e4daaf755479788f788d8d493c3ed1fd58812f555dabe1`
+  (private qualified build of pocketshell-gateway cd7c6f6). The historical
+  8cbeb8f (`57f3a86e…`) and 771c9e1 (`f6e357d8…`) builds are refused by
+  name. Adding a build is a reviewed source change, never a flag or env var.
+  It must also answer `version --json` with protocol `pocketshell-tunnel-v1`.
+- **Same account.** The helper binds the device key's ACL to its owner, so
+  the key must be owned by the current user's SID (the config dir by that
+  user, or by Administrators/SYSTEM when it was created from an elevated
+  prompt). Run `install` as the enrolling user.
+- **Paths** must be local absolute drive paths without `"`, `%` (Task
+  Scheduler expands `%VAR%`) or control characters; they are stored in their
+  long, final form.
+- An existing task needs `--force` (which ends the running instance first).
+
+Registering a task with a boot trigger and the S4U logon type normally needs
+an **elevated prompt** (*Run as administrator*); the token's user — and
+therefore the principal — is still you, and the task still runs with
+LeastPrivilege. A refused registration is reported as such; never fall back
+to a logon trigger or the Startup folder (they show a console window).
+
+Before the task is ever started, `install` reads the registered definition
+back and requires exactly the requested one: one direct Exec with the exact
+argv, `WorkingDirectory` = the helper's directory, `UserId` = your SID (an
+account-name form only if it resolves to that SID), LogonType S4U and
+LeastPrivilege (an export may omit it as the schema default). Anything else
+is deleted again and never started. After `/Run`, `install` waits up to
+15 s for the task's own state to report Running; otherwise it exits 5.
+
+The task is read through the Task Scheduler COM API (child PowerShell with
+`CREATE_NO_WINDOW`). Only "not found" (HRESULT 0x80070002/0x80070003) counts
+as absent; access denied or any other query failure is an error — `status`
+exits 1 and `uninstall` does not claim success.
+
+`status` reports **running only from the task's own state** (Running). It
+also lists the registered principal / logon type / run level, whether the
+action is still the direct launch, whether the configured helper is still an
+allow-listed build (it runs that helper's `show` only if so), and every
+process with the helper's image path and its **session id** — as
+diagnostics: a same-path process next to a Ready/Disabled task (e.g. another
+supervisor's agent) is reported, but the result is still "not running"
+(exit 3). `uninstall` ends and deletes the task, verifies it is gone, then
+waits briefly for the helper process to exit.
+
+**Private loopback endpoint (`--with-endpoint MANIFEST`, Windows).** When the
+enrolled local sshd is a private endpoint owned by its own guardian,
+`install --with-endpoint MANIFEST` also registers `\PocketShell\GatewayEndpoint`.
+Its action is exactly `<manifest python> -I -S -B <guardian.py> --manifest
+MANIFEST`, as your SID (S4U, LeastPrivilege, session 0, boot +10 s, a
+5-minute watchdog), with no shell. The guardian's interface (INTERFACE.md)
+is authoritative; see `endpoint-guardian-api-agreement.md`.
+
+- **Manifest.** Version 1 with exactly `ownerSID, root, state, config, port,
+  daemon, python, pins, environment, configBindings`, validated with the
+  guardian's own rules. The config is checked against the guardian's
+  `config_guard`.
+- **Before anything runs.** The manifest digest and the
+  (guardian.py, native_api.py, policy.py) source triple must be on the
+  reviewed lists, which are empty until reviewed. Every pin is re-hashed. The
+  service checks the guardian's protected-ancestor and final-file mutation
+  authority itself.
+- **Readiness.** `CURRENT.json` must point to a `generation-<uuidhex>`
+  generation whose READY.json names the held daemon by pid + creation
+  FILETIME. The guardian must run the manifest interpreter, the daemon must
+  be the only listener, and a real SSH key exchange must prove the enrolled
+  pinned host key.
+- **Uninstall.** Disables the task, hands the exact held identity to the
+  guardian through STOP.json, waits for an accepted CLOSED.json and deletes
+  the task. It never kills.
+- **Qualification.** `--endpoint-only --instance NAME` registers an isolated
+  `GatewayEndpointQ<NAME>` on a non-production port. `--check-only` (Phase A)
+  runs the guardian's read-only preflight once in a trigger-less task and
+  reports its exit status.
+
+**One agent per device:** a new connection supersedes the old one at the
+gateway. Stop any other `pocketshell-link run` for the same enrolled device
+before starting the task (`install --no-start` registers it disabled;
+`install --force` re-registers it enabled and starts it).
 
 ## 5. Show the enrolled state
 
@@ -494,16 +631,19 @@ enrolled with either one gateway or one legacy relay — never both mixed.
 
 ## 8. Status
 
-The host-side commands wrap the Go agent; the CLI client (§9) reaches
-enrolled hosts with OpenSSH. How the PocketShell phone/desktop app pairs
-and connects through this tunnel is separate, in-progress work elsewhere.
-The production gateway currently runs without its host registry, so
-`/api/v1/hosts/*` (and therefore `gateway ssh`) is not served there yet. The same goes for the enrollment-token flow: the web
-client's **Generate enrollment token** action and its broker exchange are
-being built (web client and token-service integration in progress, not
-deployed/production yet) — until they land, obtain tokens from lab tooling
-as in §6. This wrapper treats the token on stdin as opaque bytes either way;
-it will not change when the issuer UI ships.
+The host-side commands wrap the Go agent, and the CLI client (§9) reaches
+enrolled hosts with OpenSSH. The production gateway (`gateway.pocketshell.io`)
+serves enrollment, the host registry (`/api/v1/hosts/*`, so `gateway devices`
+and `gateway ssh`) and routes to enrolled hosts.
+
+`gateway enroll` mints its scoped enrollment token from your `pocketshell
+login` session. `--token-stdin` remains for tokens obtained elsewhere (for
+example lab tooling, §6); the wrapper treats that token as opaque bytes.
+
+How the PocketShell phone/desktop app pairs and connects through this tunnel
+is separate work elsewhere. The durable Windows endpoint task
+(`service install --with-endpoint`) stays gated on reviewed guardian and
+manifest digests (§4.1).
 
 ## 9. Client side: reach an enrolled host
 
