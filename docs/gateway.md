@@ -491,28 +491,32 @@ supervisor's agent) is reported, but the result is still "not running"
 waits briefly for the helper process to exit.
 
 **Private loopback endpoint (`--with-endpoint MANIFEST`, Windows).** When the
-enrolled local sshd is a private endpoint with its own guardian (rather than a
-system service), `install --with-endpoint MANIFEST` also registers
-`\PocketShell\GatewayEndpoint`. It uses the same rules as the link task (your SID,
-S4U, LeastPrivilege, session 0, boot +10 s and a 5-minute watchdog), and its
-single action launches the guardian exe directly with the manifest's argv and
-working directory.
+enrolled local sshd is a private endpoint owned by its own guardian,
+`install --with-endpoint MANIFEST` also registers `\PocketShell\GatewayEndpoint`.
+It runs the manifest's protected `python` with its pinned `guardian.py
+--manifest MANIFEST` directly, as your SID (S4U, LeastPrivilege, session 0,
+boot +10 s, a 5-minute watchdog). The contract with the guardian is
+`endpoint-guardian-api-agreement.md`.
 
-- **Trust.** The manifest file's sha256 must be on the reviewed
-  `service_endpoint.ALLOWED_ENDPOINT_MANIFEST_SHA256` list, which is empty until a
-  manifest is reviewed. The guardian and every pinned file are re-hashed against
-  it.
-- **Identity.** Its `listen` must be `127.0.0.1:<port>` and equal the enrolled
-  `local ssh`, and its `host_key_fingerprint` must equal the enrolled pin.
-- **Held endpoint.** A port that is already served (for example, by a currently
-  held endpoint) is refused; the command never stops it.
-- **Install order.** The endpoint is registered, read back, started and
-  confirmed first: task Running plus an `SSH-2.0-` banner on `listen`. Only then
-  is the link registered. If the endpoint does not come up, `install` exits 5
-  and does not register the link.
-- **Status.** Reports both tasks; running requires both plus the banner.
-- **Uninstall.** Removes the link first, then the endpoint, and never touches the
-  endpoint's files.
+- **Manifest.** The guardian's own closed schema. Its digest and the
+  `guardian.py` digest must be on the reviewed lists
+  (`service_endpoint.ALLOWED_ENDPOINT_MANIFEST_SHA256` /
+  `ALLOWED_GUARDIAN_SOURCE_SHA256`, both empty until reviewed). Every pin is
+  re-hashed. `ownerSID` must be you. The port must be the enrolled
+  `local ssh`.
+- **Readiness.** `install` confirms it before registering the link, and
+  `status` requires it. CURRENT.json must point to a generation whose
+  READY.json names the held daemon; the daemon pid must be alive with exactly
+  its recorded birth; it must be the only listener; and a real SSH key
+  exchange must **prove the enrolled pinned host key**. A banner is never
+  enough.
+- **Uninstall.** Removes the link first. Then it disables the endpoint task,
+  hands the exact held identity to the guardian through STOP.json, waits for
+  an accepted CLOSED.json and deletes the task. It never kills; on any doubt
+  the task stays registered and disabled.
+- **Qualification.** `--endpoint-only --instance NAME` registers an isolated
+  `GatewayEndpointQ<NAME>` on a non-production port and never touches
+  `GatewayLink`. Use `status --instance NAME` / `uninstall --instance NAME`.
 
 **One agent per device:** a new connection supersedes the old one at the
 gateway. Stop any other `pocketshell-link run` for the same enrolled device
