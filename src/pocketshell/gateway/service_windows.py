@@ -672,10 +672,11 @@ class WindowsApi:
         image = argv[0], creation FILETIME, and job membership.
 
         CREATE_BREAKAWAY_FROM_JOB is requested; if the caller's job forbids
-        breakaway the child is created inside it. Independence is then never
-        claimed: if the caller's job has JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE the
-        suspended child is terminated (its exact handle) and CallerJobError is
-        raised; otherwise the membership is reported as measured."""
+        breakaway the child is created inside it. Independence is never
+        claimed for a child in ANY job (the nearest job cannot prove the KILL
+        semantics of its ancestors): the exact suspended child is terminated
+        through its held handle and CallerJobError is raised. A failed
+        ResumeThread ((DWORD)-1) likewise ends the held child."""
         import ctypes as c
         import subprocess
         from ctypes import wintypes as w
@@ -699,6 +700,7 @@ class WindowsApi:
                                      c.c_void_p, w.LPCWSTR, c.POINTER(SI), c.POINTER(PI)]
         k.IsProcessInJob.argtypes = [w.HANDLE, w.HANDLE, c.POINTER(w.BOOL)]
         k.ResumeThread.argtypes = [w.HANDLE]
+        k.ResumeThread.restype = w.DWORD  # (DWORD)-1 = failure; a c_int -1 would never equal 0xFFFFFFFF
         k.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
         k.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
         k.CloseHandle.argtypes = [w.HANDLE]
@@ -774,15 +776,18 @@ class WindowsApi:
                 # inspect that job through our own membership (hJob = NULL)
                 info = (c.c_byte * 144)()  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION (x64)
                 if not k.QueryInformationJobObject(None, 9, info, c.sizeof(info), None):
-                    kill_on_close = True  # unknown limits: never claim independence
+                    kill_on_close = None  # unknown limits
                 else:
                     flags = c.c_uint32.from_buffer(info, 16).value  # BasicLimitInformation.LimitFlags
                     kill_on_close = bool(flags & 0x2000)
-            if in_job.value and kill_on_close:
+            if in_job.value:
+                # the nearest (NULL = our) job cannot prove the KILL semantics of
+                # every ancestor job: ANY membership is refused, never reported
+                # as independence
                 raise CallerJobError(
-                    "the child could not break away from the caller's job, which has "
-                    "KILL_ON_JOB_CLOSE (its lifetime would end with the caller); the suspended "
-                    "child was terminated before resume")
+                    "the child is inside a job object (it could not break away from the caller's job; "
+                    f"KILL_ON_JOB_CLOSE {'unknown' if kill_on_close is None else 'set' if kill_on_close else 'not set on the nearest job'}); "
+                    "independence cannot be proven; the suspended child was terminated before resume")
             times = [w.FILETIME() for _ in range(4)]
             if not k.GetProcessTimes(pi.hProcess, *[c.byref(t) for t in times]):
                 raise ServiceError("cannot read the child's creation time")

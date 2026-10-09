@@ -62,9 +62,11 @@ class AgentApi(EndpointApi):
 
     def spawn_hidden(self, argv, cwd, env):
         self.spawns.append({"argv": list(argv), "cwd": cwd, "env": dict(env) if env is not None else None})
-        if self.caller_job is not None and self.caller_job["killOnJobClose"]:
-            raise win.CallerJobError("the child could not break away from the caller's job, which has "
-                                     "KILL_ON_JOB_CLOSE; the suspended child was terminated before resume")
+        if self.caller_job is not None:
+            raise win.CallerJobError("the child is inside a job object (it could not break away from the "
+                                     "caller's job; KILL_ON_JOB_CLOSE "
+                                     f"{'set' if self.caller_job['killOnJobClose'] else 'not set on the nearest job'}); "
+                                     "independence cannot be proven; the suspended child was terminated before resume")
         job = {"inJob": self.caller_job is not None,
                "callerJobKillOnClose": bool(self.caller_job and self.caller_job["killOnJobClose"]),
                "brokeAway": self.caller_job is None, "elevated": False, "session": self.session}
@@ -362,14 +364,13 @@ def test_r2_children_in_a_kill_on_close_caller_job_are_refused(agent):
     assert "KILL_ON_JOB_CLOSE" in data["error"]["message"]
 
 
-def test_r2_job_membership_is_reported_never_claimed(agent):
+def test_r2_any_job_membership_is_refused_never_claimed(agent):
+    """root 626 review: the nearest job cannot prove ancestor KILL semantics."""
     bind()
     agent["api"].caller_job = {"killOnJobClose": False}
     result, data = run("start", "--json")
-    assert result.exit_code == 0
-    assert data["endpoint"]["launch"] == {"inJob": True, "callerJobKillOnClose": False, "brokeAway": False,
-                                          "elevated": False, "session": SESSION}
-    assert data["outbound"]["launch"]["inJob"] is True and data["outbound"]["launch"]["brokeAway"] is False
+    assert result.exit_code == 1 and data["error"]["code"] == "caller-job"
+    assert "independence cannot be proven" in data["error"]["message"]
 
 
 def test_r2_broke_away_children(agent):
@@ -377,3 +378,55 @@ def test_r2_broke_away_children(agent):
     result, data = run("start", "--json")
     assert data["endpoint"]["launch"]["brokeAway"] is True and data["endpoint"]["launch"]["inJob"] is False
     assert data["outbound"]["launch"]["brokeAway"] is True
+
+
+# --- root START2: guardian launch custody without CURRENT/READY ---------------------------
+
+
+def _guardian_launch(agent):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    data = agent_mod._read_private(agent_mod._path("guardian.json"))
+    return json.loads(data) if data else None
+
+
+def test_start2_timeout_keeps_guardian_custody_and_stop_consumes_it(agent):
+    bind()
+    agent["g"].ready_on_run = False
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert result.exit_code == 5
+    launch = _guardian_launch(agent)
+    assert launch and agent["api"].process_birth(launch["pid"]) == launch["creationFILETIME"]
+    assert data["endpoint"]["guardianLaunch"] == {"pid": launch["pid"], "creationFILETIME": launch["creationFILETIME"],
+                                                  "running": True}
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0, data
+    assert (launch["pid"], launch["creationFILETIME"], PYTHON) in agent["api"].terminated
+    assert _guardian_launch(agent) is None and data["state"] == "stopped"
+
+
+def test_start2_live_noready_guardian_failed_stop_retains_custody(agent):
+    bind()
+    agent["g"].ready_on_run = False
+    run("start", "--json", "--timeout", "0.2")
+    launch = _guardian_launch(agent)
+    agent["api"].terminate_fails = True
+    result, data = run("stop", "--json")
+    assert result.exit_code == 1 and data["state"] == "failed"
+    assert str(launch["pid"]) in data["error"]["message"]
+    assert _guardian_launch(agent) == launch
+    agent["api"].terminate_fails = False
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and _guardian_launch(agent) is None
+
+
+def test_start2_restart_reuses_live_launched_guardian(agent):
+    bind()
+    agent["g"].ready_on_run = False
+    run("start", "--json", "--timeout", "0.2")
+    launch = _guardian_launch(agent)
+    guardians = [s for s in agent["api"].spawns if s["argv"][0] == PYTHON]
+    result, data = run("start", "--json", "--timeout", "0.2")
+    assert result.exit_code == 5
+    assert [s for s in agent["api"].spawns if s["argv"][0] == PYTHON] == guardians, "no second guardian"
+    assert _guardian_launch(agent) == launch

@@ -245,6 +245,58 @@ def _spawn(api, argv, cwd, env) -> dict:
     return meta
 
 
+def _guardian_launch() -> Optional[dict]:
+    """The exact launch identity of the guardian this CLI started (custody,
+    independent of CURRENT/READY)."""
+    data = _read_private(_path("guardian.json"))
+    try:
+        meta = json.loads(data.decode("utf-8")) if data else None
+    except ValueError:
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+def _launch_alive(meta, image, api) -> bool:
+    """True iff the recorded pid still has the recorded birth AND image."""
+    from pocketshell.gateway import service_windows as win
+
+    if not meta or type(meta.get("pid")) is not int or not isinstance(meta.get("creationFILETIME"), str):
+        return False
+    return api.process_birth(meta["pid"]) == meta["creationFILETIME"] and \
+        win._same_path(api.process_image(meta["pid"]), image)
+
+
+def _record_launch(name, meta, image, api) -> None:
+    """Persist custody; if that fails, end the exact child we just started."""
+    try:
+        _write_private(_path(name), json.dumps(meta).encode())
+    except Exception as exc:
+        api.terminate_exact(meta["pid"], meta["creationFILETIME"], image)
+        raise AgentError("error", f"cannot record the launch of {meta['pid']}; the child was ended: {exc}") from None
+
+
+def _release_custody(name, meta, image, api, errors, what) -> None:
+    """End the exact recorded process (if alive) and re-read its identity:
+    gone or pid reused => release the record; still alive / unverifiable =>
+    keep it and fail."""
+    if meta is None:
+        return
+    if not (type(meta.get("pid")) is int and isinstance(meta.get("creationFILETIME"), str)):
+        _delete(_path(name))  # malformed: names no process
+        return
+    if _launch_alive(meta, image, api):
+        api.terminate_exact(meta["pid"], meta["creationFILETIME"], image)
+    try:
+        still = _launch_alive(meta, image, api)
+    except Exception:  # noqa: BLE001 - inaccessible = unverifiable
+        still = True
+    if still:
+        errors.append(f"the {what} process {meta['pid']} (birth {meta['creationFILETIME']}) is still running; "
+                      "its identity is retained for a retry")
+    else:
+        _delete(_path(name))
+
+
 def _launch(meta) -> Optional[dict]:
     return None if not meta else {k: meta.get(k) for k in LAUNCH_KEYS}
 
@@ -299,16 +351,20 @@ def _endpoint_status(m, host_key, api, runner, session: int) -> dict:
         "problems": ready["problems"],
         "launch": None,
     }
-    data = _read_private(_path("guardian.json"))
-    try:
-        meta = json.loads(data.decode("utf-8")) if data else None
-    except ValueError:
-        meta = None
-    if meta and meta.get("pid") == ready.get("guardianPID"):
-        out["launch"] = _launch(meta)
+    meta = _guardian_launch()
+    out["launch"] = _launch(meta)
+    out["guardianLaunch"] = None if not meta else {
+        "pid": meta.get("pid"), "creationFILETIME": meta.get("creationFILETIME"),
+        "running": _launch_alive(meta, m.python, api)}
     if not ready["ok"] and ready.get("pid") and api.process_birth(ready["pid"]) is None \
             and not api.listener_pids(m.port):
         out["state"] = "stopped"
+    if out["state"] == "stopped" and out["guardianLaunch"] and out["guardianLaunch"]["running"]:
+        # never infer "no runtime" from an absent CURRENT/READY: our launched
+        # guardian is alive
+        out["state"] = "not-ready"
+        out["problems"] = [*out["problems"], f"the launched guardian {meta['pid']} is running without a "
+                                            "current READY"]
     return out
 
 
@@ -390,9 +446,10 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
             previous = endpoint.get("generation")
             if api.listener_pids(m.port):
                 raise AgentError("port-busy", f"127.0.0.1:{m.port} is served by another process; not starting")
-            launch = _spawn(api, [m.python, *ep.BOOTSTRAP_FLAGS, m.guardian, "--manifest", m.path],
-                            m.root, dict(m.environment))
-            _write_private(_path("guardian.json"), json.dumps(launch).encode())
+            if not _launch_alive(_guardian_launch(), m.python, api):
+                launch = _spawn(api, [m.python, *ep.BOOTSTRAP_FLAGS, m.guardian, "--manifest", m.path],
+                                m.root, dict(m.environment))
+                _record_launch("guardian.json", launch, m.python, api)  # custody BEFORE any wait
             while True:
                 ready = wep.readiness(m, host_key, api, runner, not_generation=previous,
                                       mode=MODE, session=owner["session"])
@@ -403,7 +460,7 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
         if link["state"] != "running":
             launch = _spawn(api, [b["helper"], "run", "--config-dir", b["configDir"]],
                             ntpath.dirname(b["helper"]), None)
-            _write_private(_path("link.json"), json.dumps({**launch, "helper": b["helper"]}).encode())
+            _record_launch("link.json", {**launch, "helper": b["helper"]}, b["helper"], api)
             settle = min(LINK_SETTLE_SECONDS, max(0.0, deadline - time.monotonic()))
             if settle and sys.platform == "win32" and os.name == "nt":
                 time.sleep(settle)
@@ -451,22 +508,13 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
                           .replace("; the task is left registered and DISABLED", ""))
         finally:
             wep.STOP_CONFIRM_SECONDS = old
-        state = _link_state()
-        if state and type(state.get("pid")) is int and isinstance(state.get("creationFILETIME"), str):
-            from pocketshell.gateway import service_windows as win
-
-            api.terminate_exact(state["pid"], state["creationFILETIME"], b["helper"])
-            # custody: re-read the exact identity; only absence (or a reused
-            # pid, i.e. a different birth/image) releases the record
-            still = api.process_birth(state["pid"]) == state["creationFILETIME"] and \
-                win._same_path(api.process_image(state["pid"]), b["helper"])
-            if still:
-                errors.append(f"the link process {state['pid']} (birth {state['creationFILETIME']}) is still "
-                              "running; its identity is retained for a retry")
-            else:
-                _delete(_path("link.json"))
-        elif state is not None:
-            _delete(_path("link.json"))
+        # the guardian WE launched: consumed even without CURRENT/READY (a
+        # start that timed out before READY must not orphan it)
+        _release_custody("guardian.json", _guardian_launch(), m.python, api, errors, "launched guardian")
+        _release_custody("link.json", _link_state(), b["helper"], api, errors, "link")
+        served = api.listener_pids(m.port)
+        if served:
+            errors.append(f"127.0.0.1:{m.port} is still served by {sanitize(str(served), 200)}")
         owner, endpoint, outbound, state_name, code = _collect(b, m, host_key, api, runner)
         doc = _document(operation_id, state="stopped", binding=b, owner=owner, endpoint=endpoint, outbound=outbound)
         if errors or endpoint["state"] == "ready" or outbound["state"] == "running":

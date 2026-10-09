@@ -37,7 +37,59 @@ class SID_AND_ATTRIBUTES(c.Structure):
     _fields_ = [("Sid", c.c_void_p), ("Attributes", w.DWORD)]
 
 
+def _elevated(token) -> bool:
+    value, size = w.DWORD(), w.DWORD()
+    if not a.GetTokenInformation(token, 20, c.byref(value), 4, c.byref(size)):
+        raise c.WinError(c.get_last_error())
+    return bool(value.value)
+
+
+def _medium(token):
+    sid = c.c_void_p()
+    if not a.ConvertStringSidToSidW("S-1-16-8192", c.byref(sid)):  # medium integrity
+        raise c.WinError(c.get_last_error())
+    label = SID_AND_ATTRIBUTES(sid, 0x20)  # SE_GROUP_INTEGRITY
+    if not a.SetTokenInformation(token, 25, c.byref(label), c.sizeof(label) + a.GetLengthSid(sid)):
+        raise c.WinError(c.get_last_error())
+
+
+def _lua_token():
+    """CreateRestrictedToken(LUA_TOKEN | DISABLE_MAX_PRIVILEGE) with the
+    Administrators alias made deny-only: the UAC-style filtered token."""
+    k.GetCurrentProcess.restype = w.HANDLE
+    base = w.HANDLE()
+    if not a.OpenProcessToken(k.GetCurrentProcess(), 0x0002 | 0x0008 | 0x0001 | 0x0080 | 0x0100,
+                              c.byref(base)):
+        raise c.WinError(c.get_last_error())
+    admins = c.c_void_p()
+    a.ConvertStringSidToSidW("S-1-5-32-544", c.byref(admins))
+    deny = (SID_AND_ATTRIBUTES * 1)(SID_AND_ATTRIBUTES(admins, 0))
+    token = w.HANDLE()
+    a.CreateRestrictedToken.argtypes = [w.HANDLE, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, c.c_void_p, w.DWORD,
+                                        c.c_void_p, c.POINTER(w.HANDLE)]
+    if not a.CreateRestrictedToken(base, 0x1 | 0x4, 1, deny, 0, None, 0, None, c.byref(token)):
+        raise c.WinError(c.get_last_error())
+    k.CloseHandle(base)
+    _medium(token)
+    return token
+
+
 def _unelevated_token():
+    errors = []
+    for make in (_safer_token, _lua_token):
+        try:
+            token = make()
+        except OSError as exc:
+            errors.append(f"{make.__name__}: {exc}")
+            continue
+        if not _elevated(token):
+            return token
+        errors.append(f"{make.__name__}: TokenElevation still 1")
+        k.CloseHandle(token)
+    raise RuntimeError("no unelevated token: " + "; ".join(errors))
+
+
+def _safer_token():
     level = w.HANDLE()
     if not a.SaferCreateLevel(2, 0x20000, 1, c.byref(level), None):  # USER scope, NORMALUSER
         raise c.WinError(c.get_last_error())
@@ -47,11 +99,7 @@ def _unelevated_token():
             raise c.WinError(c.get_last_error())
     finally:
         a.SaferCloseLevel(level)
-    sid = c.c_void_p()
-    if not a.ConvertStringSidToSidW("S-1-16-8192", c.byref(sid)):  # medium integrity
-        raise c.WinError(c.get_last_error())
-    label = SID_AND_ATTRIBUTES(sid, 0x20)  # SE_GROUP_INTEGRITY
-    a.SetTokenInformation(token, 25, c.byref(label), c.sizeof(label) + a.GetLengthSid(sid))
+    _medium(token)
     return token
 
 
@@ -141,6 +189,8 @@ def _serve(request_path):
     with open(request_path, encoding="utf-8") as handle:
         req = json.load(handle)
     in_job = w.BOOL()
+    k.GetCurrentProcess.restype = w.HANDLE
+    k.IsProcessInJob.argtypes = [w.HANDLE, w.HANDLE, cc.POINTER(w.BOOL)]
     k.IsProcessInJob(k.GetCurrentProcess(), None, cc.byref(in_job))
     try:
         code, out = run_unelevated(req["argv"], env=req["env"], cwd=req["cwd"])
