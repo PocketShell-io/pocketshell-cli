@@ -112,7 +112,11 @@ def test_broker_refusal_is_a_plain_error(pin_helper, logged_in, pipe_exec):
     assert pipe_exec == []
 
 
-def test_helper_is_verified_before_minting(logged_in, pipe_exec):
+def test_helper_is_verified_before_minting(logged_in, pipe_exec, monkeypatch, tmp_path):
+    # No helper anywhere: an empty PATH, no pin, no wheel — so a real
+    # pocketshell-link installed on the test machine cannot satisfy discovery.
+    monkeypatch.delenv("POCKETSHELL_GATEWAY_HELPER", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
     result = CliRunner().invoke(cli, ["gateway", "enroll"])
     assert result.exit_code == 127
     assert _mints(logged_in) == 0
