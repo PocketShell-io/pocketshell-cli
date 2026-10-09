@@ -124,6 +124,7 @@ jobs:
           tests/gateway/test_gateway_service_task_acl.py
           tests/gateway/test_gateway_service_task_object.py
           tests/gateway/test_windows_service_private_read.py
+          tests/gateway/test_gateway_user_agent.py
 
       # `pocketshell gateway service` against the REAL Task Scheduler of
       # this disposable runner: a fake pocketshell-link.exe (Go, built
@@ -148,7 +149,7 @@ jobs:
       - name: Windows gateway service (real scheduled task)
         env:
           POCKETSHELL_WINDOWS_SERVICE_E2E: "1"
-        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_service_native.py
+        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_service_native.py tests/gateway/test_windows_gateway_user_agent_native.py
 
       - name: Prepare OpenSSH Server and a spaced interpreter (CI only)
         shell: pwsh

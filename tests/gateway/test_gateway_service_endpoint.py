@@ -165,6 +165,7 @@ class Guardian:
         self.close_accepted = True
         self.stop_requests = []
         self.runs = []
+        self.context = None  # override (e.g. the active-console user mode)
 
     def run(self, leaf):
         self.runs.append(leaf)
@@ -179,13 +180,15 @@ class Guardian:
         self.api.listeners[self.port] = [("127.0.0.1", daemon)]
         ready = {
             "accepted": False, "manifestSHA256": self.manifest_sha,
-            "context": {"ownerSID": USER_SID, "session": 0, "station": "Service-0x0-1a2b$",
-                        "stationVisible": False, "desktop": "Default", "activeConsoleSession": 1,
-                        "authenticationLUID": "123"},
+            "context": dict(self.context) if self.context else {
+                "ownerSID": USER_SID, "session": 0, "station": "Service-0x0-1a2b$",
+                "stationVisible": False, "desktop": "Default", "activeConsoleSession": 1,
+                "authenticationLUID": "123"},
             "cleanupErrors": [], "pid": daemon, "creationFILETIME": self.api.births[daemon],
             "guardianPID": guardian, "sourceSHA256": SHA_G, "port": self.port,
             "heldProcessHandle": True, "ownedJob": True,
-            "privateDesktop": "Service-0x0-1a2b$\\PocketShellPrivate_" + os.urandom(16).hex(),
+            "privateDesktop": (self.context or {}).get("station", "Service-0x0-1a2b$")
+            + "\\PocketShellPrivate_" + os.urandom(16).hex(),
             # native_api.verify_desktop_acl (cab601e2) schema
             "desktopACL": {"ownerSID": USER_SID, "protectedDACL": True,
                            "allowTrustees": sorted([USER_SID, "S-1-5-18", "S-1-5-32-544"]), "ACECount": 3},

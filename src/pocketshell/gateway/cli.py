@@ -482,3 +482,111 @@ gateway_group.add_command(gateway_service.service_group)
 
 for _client_command in gateway_client_cli.CLIENT_COMMANDS:
     gateway_group.add_command(_client_command)
+
+
+# --- `gateway agent`: the ordinary-user Windows runtime (API v1) -----------------------
+
+from pocketshell.gateway import service_user_agent as _agent  # noqa: E402
+
+_OPERATION_ID = click.option(
+    "--operation-id", default=None, metavar="ID",
+    help="Caller's operation id (1-64 of A-Z a-z 0-9 . _ -), echoed in the JSON.",
+)
+_JSON = click.option("--json", "as_json", is_flag=True, help="Print the versioned JSON document (API v1).")
+
+
+def _check_operation_id(value):
+    if value is not None and not _agent.OPERATION_ID_RE.fullmatch(value):
+        raise click.UsageError("--operation-id must be 1-64 of A-Z a-z 0-9 . _ -")
+
+
+def _timeout(value, default):
+    if value is None:
+        return default
+    if not 0 < value <= _agent.MAX_TIMEOUT:
+        raise click.UsageError(f"--timeout must be in (0, {_agent.MAX_TIMEOUT:g}] seconds")
+    return value
+
+
+def _emit(doc, code, as_json):
+    import json as _json
+
+    if as_json:
+        click.echo(_json.dumps(doc, indent=1, sort_keys=False))
+    else:
+        line = f"{doc['state']}"
+        if doc.get("error"):
+            line += f": {doc['error']['code']}: {doc['error']['message']}"
+        click.echo(line)
+    raise SystemExit(code)
+
+
+def _api_runner():
+    from pocketshell.gateway import service_windows as win
+
+    return win.WindowsApi(), None
+
+
+@click.group(
+    name="agent",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    help=(
+        "Ordinary-user runtime (Windows): the enrolled endpoint (guardian + daemon) and the "
+        "outbound link in YOUR session, no elevation, no scheduled task. Called by the "
+        "Desktop app at sign-in; see the API v1 agreement. Exit: 0 ready/done, 1 error, "
+        "2 usage, 3 not ready, 4 stopped, 5 start deadline."
+    ),
+)
+def agent_group() -> None:
+    """Ordinary-user background runtime (API v1)."""
+
+
+@agent_group.command("bind")
+@click.option("--manifest", required=True, metavar="PATH", help="Protected guardian manifest (reviewed).")
+@click.option("--config-dir", required=True, metavar="DIR", help="Enrolled helper config dir.")
+@click.option("--helper", default=None, metavar="PATH", help="Reviewed pocketshell-link.exe.")
+@_JSON
+@_OPERATION_ID
+def agent_bind(manifest, config_dir, helper, as_json, operation_id):
+    """Validate and record the protected binding (once, from the owner's setup)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit(*_agent.bind_command(manifest, config_dir, helper, api=api, runner=runner,
+                               operation_id=operation_id), as_json)
+
+
+@agent_group.command("status")
+@_JSON
+@_OPERATION_ID
+def agent_status(as_json, operation_id):
+    """Readiness of the endpoint and the outbound link (exit 0 ready, 3 not, 4 stopped)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit(*_agent.status(api=api, runner=runner, operation_id=operation_id), as_json)
+
+
+@agent_group.command("start")
+@click.option("--timeout", type=float, default=None, help="Readiness deadline in seconds (default 60).")
+@_JSON
+@_OPERATION_ID
+def agent_start(timeout, as_json, operation_id):
+    """Start (idempotent) and wait until ready or the deadline (exit 0 / 5)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit(*_agent.start(api=api, runner=runner, timeout=_timeout(timeout, _agent.DEFAULT_START_TIMEOUT),
+                        operation_id=operation_id), as_json)
+
+
+@agent_group.command("stop")
+@click.option("--timeout", type=float, default=None, help="STOP acknowledgement deadline (default 45).")
+@_JSON
+@_OPERATION_ID
+def agent_stop(timeout, as_json, operation_id):
+    """Guardian STOP protocol + exact link identity (exit 0 stopped, 1 failed)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit(*_agent.stop(api=api, runner=runner, timeout=_timeout(timeout, _agent.DEFAULT_STOP_TIMEOUT),
+                       operation_id=operation_id), as_json)
+
+
+gateway_group.add_command(agent_group)

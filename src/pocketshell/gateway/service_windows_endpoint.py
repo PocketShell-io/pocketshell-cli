@@ -160,7 +160,8 @@ def read_private(api, path: str, m: ep.GuardianManifest, limit: int = ep.MAX_PRO
     return api.read_private_file(path, m.owner_sid, limit)
 
 
-def readiness(m: ep.GuardianManifest, host_key, api, runner, *, not_generation: Optional[str] = None) -> dict:
+def readiness(m: ep.GuardianManifest, host_key, api, runner, *, not_generation: Optional[str] = None,
+              mode: str = ep.MODE_S4U, session: Optional[int] = None) -> dict:
     out = {"ok": False, "problems": [], "generation": None, "pid": None, "birth": None,
            "guardianPID": None, "hostKey": None, "guardianIdentity": ep.GUARDIAN_IDENTITY,
            "stopAuthority": ep.STOP_AUTHORITY}
@@ -179,9 +180,10 @@ def readiness(m: ep.GuardianManifest, host_key, api, runner, *, not_generation: 
         if ready_data is None:
             problems.append("READY.json of the current generation is missing")
             return out
-        ready = ep.parse_ready(ready_data, m)
+        ready = ep.parse_ready(ready_data, m, mode=mode, session=session)
         out.update(pid=ready.pid, birth=ready.birth, guardianPID=ready.guardian_pid,
-                   station=ready.station, privateDesktop=ready.private_desktop)
+                   station=ready.station, privateDesktop=ready.private_desktop,
+                   mode=ready.mode, session=ready.session)
         if read_private(api, cur.file("CLOSED.json"), m) is not None:
             problems.append("the current generation is CLOSED (stale CURRENT is not proof of running)")
             return out
@@ -364,7 +366,15 @@ def _left_disabled(message: str) -> ServiceError:
     return ServiceError(f"{message}; the task is left registered and DISABLED, nothing was killed")
 
 
-def _verify_closed(m, cur, ready, closed: bytes, leaf: str, runner, api, *, force: bool, existing: bool) -> str:
+def _task_running(leaf: str, runner):
+    def running() -> bool:
+        info = win.query_task(runner, leaf)
+        return info is not None and info.state == "Running"
+    return running
+
+
+def _verify_closed(m, cur, ready, closed: bytes, leaf: str, runner, api, *, force: bool, existing: bool,
+                   is_running=None) -> str:
     """CLOSED.json counts only when accepted AND the held daemon is gone AND
     the port is free (and, for a pre-existing CLOSED, the task is not
     Running)."""
@@ -382,19 +392,23 @@ def _verify_closed(m, cur, ready, closed: bytes, leaf: str, runner, api, *, forc
     if accepted:
         return f"{prefix} (accepted)" if existing else \
             f"generation {cur.generation} stopped by the guardian (CLOSED accepted)"
-    info = win.query_task(runner, leaf)
-    if force and (info is None or info.state != "Running"):
+    is_running = is_running or _task_running(leaf, runner)
+    if force and not is_running():
         return (f"{prefix} but NOT accepted ({detail}); removed anyway because of --force "
                 "(daemon gone, port free, task not running)")
     raise _left_disabled(f"{prefix} but NOT accepted ({detail})")
 
 
-def _stop_current_generation(m: ep.GuardianManifest, leaf: str, runner, api, *, force: bool = False) -> str:
+def _stop_current_generation(m: ep.GuardianManifest, leaf: str, runner, api, *, force: bool = False,
+                             is_running=None, mode: str = ep.MODE_S4U, session: Optional[int] = None) -> str:
+    """The guardian STOP protocol on the CURRENT generation. ``is_running``
+    tells whether the owning runtime (the task, or the user-mode guardian)
+    is still running; ``mode``/``session`` select the READY context rules."""
+    is_running = is_running or _task_running(leaf, runner)
     deadline = time.monotonic() + 30
     data = read_private(api, ep.current_path(m), m)
     while data is None:
-        info = win.query_task(runner, leaf)
-        if not info or info.state != "Running" or time.monotonic() >= deadline:
+        if not is_running() or time.monotonic() >= deadline:
             return "no CURRENT.json: no READY generation to stop"
         time.sleep(POLL_SECONDS)
         data = read_private(api, ep.current_path(m), m)
@@ -402,14 +416,14 @@ def _stop_current_generation(m: ep.GuardianManifest, leaf: str, runner, api, *, 
     ready_data = read_private(api, cur.ready, m)
     if ready_data is None:
         raise _left_disabled("CURRENT.json names a generation without READY.json; not acting on it")
-    ready = ep.parse_ready(ready_data, m)
+    ready = ep.parse_ready(ready_data, m, mode=mode, session=session)
     closed_path = cur.file("CLOSED.json")
     closed = read_private(api, closed_path, m)
     if closed is not None:
-        return _verify_closed(m, cur, ready, closed, leaf, runner, api, force=force, existing=True)
+        return _verify_closed(m, cur, ready, closed, leaf, runner, api, force=force, existing=True,
+                              is_running=is_running)
     if api.process_birth(ready.pid) != ready.birth:
-        info = win.query_task(runner, leaf)
-        if (info is None or info.state != "Running") and not api.listener_pids(m.port):
+        if not is_running() and not api.listener_pids(m.port):
             # F8: a crash / power loss skipped CLOSED.json; CURRENT is only a pointer
             return (f"stale generation {cur.generation} (no CLOSED.json; the held daemon "
                     f"{ready.pid} is gone, the port is free, the task is not running): nothing to stop")
@@ -425,7 +439,8 @@ def _stop_current_generation(m: ep.GuardianManifest, leaf: str, runner, api, *, 
     if closed is None:
         raise _left_disabled(
             f"the guardian did not write CLOSED.json for {cur.generation} within {STOP_CONFIRM_SECONDS:g}s")
-    return _verify_closed(m, cur, ready, closed, leaf, runner, api, force=False, existing=False)
+    return _verify_closed(m, cur, ready, closed, leaf, runner, api, force=False, existing=False,
+                          is_running=is_running)
 
 
 def endpoint_status(leaf: str, runner, api, user_sid: Optional[str] = None) -> Optional[dict]:

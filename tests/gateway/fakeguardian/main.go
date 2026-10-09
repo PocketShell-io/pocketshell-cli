@@ -134,6 +134,7 @@ var (
 	procGetUserObjectInfo    = user32.NewProc("GetUserObjectInformationW")
 	procCreateDesktopW       = user32.NewProc("CreateDesktopW")
 	procGetUserObjectSec     = user32.NewProc("GetUserObjectSecurity")
+	procGetThreadDesktop     = user32.NewProc("GetThreadDesktop")
 )
 
 // verifyDesktopACL mirrors native_api.verify_desktop_acl (cab601e2): it reads
@@ -186,6 +187,11 @@ func verifyDesktopACL(desk uintptr, ownerSID string) (map[string]interface{}, er
 	return map[string]interface{}{"ownerSID": owner.String(), "protectedDACL": true, "allowTrustees": want, "ACECount": 3}, nil
 }
 
+func threadDesktop() string {
+	desk, _, _ := procGetThreadDesktop.Call(uintptr(windows.GetCurrentThreadId()))
+	return objectName(desk)
+}
+
 func objectName(h uintptr) string {
 	buf := make([]uint16, 256)
 	var needed uint32
@@ -236,7 +242,7 @@ func context(ownerSID string) (map[string]interface{}, string, error) {
 	desktopACL = acl
 	ctx := map[string]interface{}{
 		"ownerSID": user.User.Sid.String(), "session": session, "station": name,
-		"stationVisible": flags.Flags&1 != 0, "desktop": "", "activeConsoleSession": windows.WTSGetActiveConsoleSessionId(),
+		"stationVisible": flags.Flags&1 != 0, "desktop": threadDesktop(), "activeConsoleSession": windows.WTSGetActiveConsoleSessionId(),
 	}
 	return ctx, name + "\\" + desktopName, nil
 }

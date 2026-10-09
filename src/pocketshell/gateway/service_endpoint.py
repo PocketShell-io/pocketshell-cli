@@ -481,9 +481,16 @@ class Ready:
     station: str
     private_desktop: str
     desktop_acl: dict = field(default_factory=dict, hash=False, compare=False)
+    mode: str = "s4u-session0"
+    session: int = 0
 
 
-def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
+MODE_S4U = "s4u-session0"
+MODE_ACTIVE_CONSOLE = "active-console"
+
+
+def parse_ready(data: bytes, m: GuardianManifest, *, mode: str = MODE_S4U,
+                session: Optional[int] = None) -> Ready:
     """READY.json as the 6cf7ae85 guardian publishes it, with every fact the
     production (S4U) readiness depends on REQUIRED:
 
@@ -514,11 +521,28 @@ def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
     c = r.get("context")
     require(isinstance(c, dict), "context is missing")
     require(c.get("ownerSID") == m.owner_sid, "context.ownerSID is not the manifest owner")
-    require(type(c.get("session")) is int and c["session"] == 0, "context.session is not 0 (not the S4U task)")
-    require(c.get("stationVisible") is False, "context.stationVisible is not false")
     station = c.get("station")
-    require(isinstance(station, str) and bool(station) and not any(x in station for x in "\\/\x00\r\n")
-            and station.casefold() != "winsta0", "context.station is not an actual non-WinSta0 station")
+    if mode == MODE_S4U:
+        require(type(c.get("session")) is int and c["session"] == 0, "context.session is not 0 (not the S4U task)")
+        require(c.get("stationVisible") is False, "context.stationVisible is not false")
+        require(isinstance(station, str) and bool(station) and not any(x in station for x in "\\/\x00\r\n")
+                and station.casefold() != "winsta0", "context.station is not an actual non-WinSta0 station")
+    elif mode == MODE_ACTIVE_CONSOLE:
+        # The ordinary-user mode: the guardian's validated interactive branch,
+        # captured AT LAUNCH (own SID, the caller's session, the active console
+        # session, the visible WinSta0 station, thread desktop Default). The
+        # CURRENT input desktop is never consulted: locking switches it to
+        # Winlogon and the endpoint stays online.
+        require(type(session) is int and session > 0, "the caller's session is unknown")
+        require(type(c.get("session")) is int and c["session"] == session and c["session"] != 0,
+                "context.session is not the caller's (non-zero) session")
+        require(type(c.get("activeConsoleSession")) is int and c["activeConsoleSession"] == c["session"],
+                "context.session was not the active console session at launch")
+        require(station == "WinSta0", "context.station is not WinSta0")
+        require(c.get("stationVisible") is True, "context.stationVisible is not true (visible WinSta0)")
+        require(c.get("desktop") == "Default", "context.desktop at launch is not Default")
+    else:
+        raise ServiceError(f"unknown readiness mode {mode!r}")
     desktop = r.get("privateDesktop")
     require(isinstance(desktop, str) and desktop.startswith(station + "\\")
             and bool(re.fullmatch(r"PocketShellPrivate_[0-9a-f]{32}", desktop[len(station) + 1:])),
@@ -528,7 +552,7 @@ def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
             "{ownerSID: manifest owner, protectedDACL: true, allowTrustees: sorted [own, SYSTEM, "
             "Administrators], ACECount: 3}")
     return Ready(r["pid"], r["creationFILETIME"], r["guardianPID"], r["port"], r["manifestSHA256"],
-                 r["sourceSHA256"], station, desktop, dict(r["desktopACL"]))
+                 r["sourceSHA256"], station, desktop, dict(r["desktopACL"]), mode, c["session"])
 
 
 def stop_request(ready: Ready) -> bytes:

@@ -650,6 +650,76 @@ class WindowsApi:
         finally:
             k.CloseHandle(handle)
 
+    def current_session(self) -> int:
+        """This process's Terminal Services session id (observed, never assumed)."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        session = w.DWORD()
+        if not k.ProcessIdToSessionId(k.GetCurrentProcessId(), c.byref(session)):
+            raise ServiceError("cannot read this process's session id")
+        return int(session.value)
+
+    def spawn_hidden(self, argv: list, cwd: str, env: Optional[dict]) -> tuple:
+        """Start ``argv`` directly (no shell) with no console window in the
+        caller's session; returns (pid, decimal creation FILETIME)."""
+        import subprocess
+
+        flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+        try:
+            proc = subprocess.Popen(
+                list(argv), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, creationflags=flags | 0x01000000,  # + CREATE_BREAKAWAY_FROM_JOB
+                close_fds=True,
+            )
+        except OSError:
+            try:
+                proc = subprocess.Popen(
+                    list(argv), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True,
+                )
+            except OSError as exc:
+                raise ServiceError(f"cannot start {sanitize(argv[0])}: {sanitize(exc.strerror or '')}") from None
+        birth = self.process_birth(proc.pid)
+        if birth is None:
+            raise ServiceError(f"{sanitize(argv[0])} exited immediately")
+        return proc.pid, birth
+
+    def terminate_exact(self, pid: int, birth: str, image: str) -> bool:
+        """Terminate ONLY the process whose pid, creation FILETIME and image all
+        match the recorded identity (a reused pid is never touched)."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.restype = w.HANDLE
+        k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        k.GetProcessTimes.argtypes = [w.HANDLE] + [c.POINTER(w.FILETIME)] * 4
+        k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
+        k.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+        k.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        # PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+        handle = k.OpenProcess(0x0001 | 0x1000 | 0x00100000, False, pid)
+        if not handle:
+            return False
+        try:
+            times = [w.FILETIME() for _ in range(4)]
+            if not k.GetProcessTimes(handle, *[c.byref(t) for t in times]):
+                return False
+            if str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime) != birth:
+                return False
+            buf = c.create_unicode_buffer(32768)
+            size = w.DWORD(32768)
+            if not k.QueryFullProcessImageNameW(handle, 0, buf, c.byref(size)) or not _same_path(buf.value, image):
+                return False
+            if not k.TerminateProcess(handle, 1):
+                return False
+            return k.WaitForSingleObject(handle, 5000) == 0
+        finally:
+            k.CloseHandle(handle)
+
     def process_image(self, pid: int) -> Optional[str]:
         """Full image path of a live process (QueryFullProcessImageNameW)."""
         import ctypes as c
