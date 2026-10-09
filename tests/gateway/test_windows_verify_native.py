@@ -171,3 +171,48 @@ def test_hold_is_refused_when_verification_fails(tree):
     p = subprocess.run(argv(tree, reqs, extra=["--hold", "--entry", tree["entry"]]), capture_output=True, timeout=60,
                        creationflags=0x08000000)
     assert p.returncode == 1 and len(p.stdout.decode().splitlines()) == 1  # no hold: exit, nothing held
+
+
+# --- review 1501b0fe N2: every directory at/below a private root is owner-only ----------
+
+
+@pytest.mark.parametrize("which", ["root", "intermediate"])
+def test_n2_unprotected_private_root_or_intermediate_is_refused(tree, which):
+    target = tree["root"] if which == "root" else os.path.join(tree["root"], "releases")
+    # re-enable inheritance: the DACL is no longer protected (owner-only shape broken)
+    subprocess.run(["icacls", target, "/inheritance:e"], check=True, capture_output=True)
+    reqs = [("binary", tree["entry"]), ("directory", tree["release"]), ("inventory", tree["release"])]
+    code, reply = verify(tree, reqs)
+    print(json.dumps(reply, indent=1)[:2000])
+    assert code == 1
+    assert all(not r["ok"] for r in reply["results"]), reply
+    oreply, ocode = oracle(tree, reqs)
+    assert ocode == 1 and all(not r["ok"] for r in oreply["results"]), oreply  # the oracle agrees
+
+
+def _set_dacl(path, sddl):
+    import ctypes as c
+    from ctypes import wintypes as w
+
+    a = c.WinDLL("advapi32", use_last_error=True)
+    sd = c.c_void_p()
+    if not a.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, c.byref(sd), None):
+        return f"SDDL refused ({c.get_last_error()})"
+    present, dacl, defaulted = w.BOOL(), c.c_void_p(), w.BOOL()
+    a.GetSecurityDescriptorDacl(sd, c.byref(present), c.byref(dacl), c.byref(defaulted))
+    a.SetNamedSecurityInfoW.argtypes = [w.LPCWSTR, c.c_int, w.DWORD, c.c_void_p, c.c_void_p, c.c_void_p, c.c_void_p]
+    code = a.SetNamedSecurityInfoW(path, 1, 0x4 | 0x80000000, None, None, dacl, None)  # DACL | PROTECTED
+    return None if code == 0 else f"SetNamedSecurityInfo refused ({code})"
+
+
+@pytest.mark.parametrize("extra", [
+    "(OA;;FA;bf967aba-0de6-11d0-a285-00aa003049e2;;WD)",           # object ACE (type 5)
+    "(XA;;FA;;;WD;(Member_of {SID(BA)}))",                            # callback ACE (type 9)
+])
+def test_n1_object_and_callback_aces_are_refused(tree, extra):
+    problem = _set_dacl(tree["authority"], f"D:P(A;;FA;;;{tree['sid']}){extra}")
+    if problem:
+        pytest.skip(f"this NTFS refuses that ACE: {problem}")
+    code, reply = verify(tree, [("document", tree["authority"])])
+    print(reply)
+    assert code == 1 and "ACE" in reply["results"][0]["problem"], reply
