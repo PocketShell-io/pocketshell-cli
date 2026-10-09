@@ -93,6 +93,12 @@ cli.add_command(workspaces_group, name="workspaces")
 cli.add_command(login_command, name="login")
 cli.add_command(logout_command, name="logout")
 cli.add_command(whoami_command, name="whoami")
+# Device-password SSH key vault (docs/keys.md), used by `gateway ssh --key`.
+# Imported here rather than in the import block above so this registration
+# stays one self-contained hunk.
+from pocketshell.keys import keys_group  # noqa: E402
+
+cli.add_command(keys_group, name="keys")
 
 
 # ---------------------------------------------------------------------------
