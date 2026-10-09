@@ -83,3 +83,46 @@ jobs:
           uv run --frozen pocketshell --version
           uv run --frozen pocketshell --help
           uv run --frozen pocketshell usage --help
+
+  # Native Windows client side of `pocketshell gateway ssh/proxy`: the
+  # Windows unit tests, then a real end to end through the inbox
+  # Win32-OpenSSH ssh.exe, its real ProxyCommand and the fake gateway into
+  # the runner's own OpenSSH Server (tests/gateway/test_windows_gateway_e2e.py).
+  windows-gateway:
+    name: Windows gateway client
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      # enable-cache comes first on purpose: scripts/check-python-ci-lock.sh
+      # reads the uv pin two lines below the FIRST-job setup-uv step only.
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          version: "0.10.11"
+
+      - name: Install pocketshell + dev deps from the committed lock
+        run: uv sync --frozen --group dev --extra link
+
+      - name: Windows unit tests
+        run: >-
+          uv run --frozen pytest -v -rs
+          tests/gateway/test_winssh.py
+          tests/gateway/test_windows_winssh_native.py
+          tests/gateway/test_windows_sshcmd.py
+          tests/gateway/test_gateway_proxy.py
+
+      - name: Prepare OpenSSH Server and a spaced interpreter (CI only)
+        shell: pwsh
+        run: ./scripts/windows-e2e-sshd-setup.ps1
+
+      - name: Windows gateway end to end
+        run: uv run --frozen pytest -v -rs tests/gateway/test_windows_gateway_e2e.py

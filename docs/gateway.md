@@ -627,6 +627,10 @@ explicit configuration; refuses to run without a valid pin:
   expansion (no `%h`/`%n` tokens are used), ssh runs it with
   `SHELL=/bin/sh`, and `-P` keeps a `pocketshell/` or `click.py` in your
   current directory from being imported instead of the real package.
+  On native Windows, ssh is the inbox Win32-OpenSSH (or
+  `POCKETSHELL_SSH`), which starts the ProxyCommand with `CreateProcessW`
+  and no shell. The quoting rules and path limits are different there; see
+  [windows-gateway-client.md](windows-gateway-client.md).
 
 The hardening `-o` options come first (for ssh, the first value wins), then
 your allowlisted arguments, then `--`, the destination alias, and the

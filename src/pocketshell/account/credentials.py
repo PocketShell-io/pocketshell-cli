@@ -133,6 +133,15 @@ def load(*, allow_shared_mode: bool = False) -> Credentials:
     """
     directory = config_dir()
     path = directory / FILE_NAME
+    if os.name == "nt":
+        from pocketshell.windows_security import read_private, PrivateFileError
+        try:
+            return _parse(read_private(path, MAX_FILE_BYTES), path)
+        except FileNotFoundError:
+            raise NotLoggedIn(f"Not logged in; {_LOGIN_HINT}.") from None
+        except (PrivateFileError, OSError):
+            # Logout cannot bypass native owner/DACL/reparse protections.
+            raise CredentialsUnsafe("Windows credentials are unsafe or inaccessible; refusing to read them.") from None
     dfd = _open_dir_for_read(directory)
     try:
         try:
@@ -240,6 +249,13 @@ def save(creds: Credentials) -> Path:
         raise AccountError("refusing to store a malformed session token")
     directory = config_dir()
     payload = (json.dumps(creds.to_json(), indent=2, sort_keys=True) + "\n").encode()
+    if os.name == "nt":
+        from pocketshell.windows_security import write_private
+        try:
+            write_private(directory / FILE_NAME, payload)
+        except OSError:
+            raise AccountError("Cannot safely save Windows credentials; check the private directory DACL and reparse points.") from None
+        return directory / FILE_NAME
     dfd = _open_dir_for_write(directory)
     tmp = f".{FILE_NAME}.{secrets.token_hex(8)}.tmp"
     try:
@@ -286,6 +302,12 @@ def exists() -> bool:
 def delete() -> bool:
     """Remove the credentials entry (never following a symlink). True if removed."""
     directory = config_dir()
+    if os.name == "nt":
+        from pocketshell.windows_security import delete_private
+        try:
+            return delete_private(directory / FILE_NAME)
+        except OSError:
+            raise AccountError("Cannot safely remove Windows credentials; check their owner and DACL.") from None
     try:
         dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     except (FileNotFoundError, NotADirectoryError):

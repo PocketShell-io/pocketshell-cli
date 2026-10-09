@@ -296,35 +296,44 @@ def _case_collision(device_id: str, existing) -> Optional[str]:
 def load_pin_entries(path: Optional[Path] = None) -> dict[str, PinEntry]:
     """Read and strictly validate the whole pin file (see :func:`load_pins`)."""
     path = path or pin_file_path()
-    # The containing directory must be ours and not group/world-writable:
-    # otherwise someone else could swap the file between this check and
-    # OpenSSH reading it by name (and only `pin` would have tightened it).
-    try:
-        dfd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    except FileNotFoundError:
-        return {}
-    except OSError as exc:
-        raise PinError(f"cannot open pin directory {path.parent}: {exc.strerror}") from None
-    try:
-        _check_owned_private(path.parent, os.fstat(dfd), "pin directory")
+    if os.name == "nt":
+        from pocketshell.windows_security import read_private
         try:
-            fd = os.open(
-                path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd
-            )
+            data = read_private(path, MAX_PIN_FILE_BYTES)
+        except FileNotFoundError:
+            return {}
+        except OSError:
+            raise PinError("Windows pin storage has an unsafe owner/DACL/reparse point or is inaccessible") from None
+    else:
+        # The containing directory must be ours and not group/world-writable:
+        # otherwise someone else could swap the file between this check and
+        # OpenSSH reading it by name (and only `pin` would have tightened it).
+        try:
+            dfd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         except FileNotFoundError:
             return {}
         except OSError as exc:
-            raise PinError(f"cannot open pin file {path}: {exc.strerror}") from None
-    finally:
-        os.close(dfd)
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            raise PinError(f"pin file {path} is not a regular file")
-        _check_owned_private(path, st, "pin file")
-        data = os.read(fd, MAX_PIN_FILE_BYTES + 1)
-    finally:
-        os.close(fd)
+            raise PinError(f"cannot open pin directory {path.parent}: {exc.strerror}") from None
+        try:
+            _check_owned_private(path.parent, os.fstat(dfd), "pin directory")
+            try:
+                fd = os.open(
+                    path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd
+                )
+            except FileNotFoundError:
+                return {}
+            except OSError as exc:
+                raise PinError(f"cannot open pin file {path}: {exc.strerror}") from None
+        finally:
+            os.close(dfd)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise PinError(f"pin file {path} is not a regular file")
+            _check_owned_private(path, st, "pin file")
+            data = os.read(fd, MAX_PIN_FILE_BYTES + 1)
+        finally:
+            os.close(fd)
     if len(data) > MAX_PIN_FILE_BYTES:
         raise PinError(f"pin file {path} is too large")
     try:
@@ -371,12 +380,20 @@ def _ensure_private_dir(directory: Path) -> None:
 
 def _write_pins(pins: dict[str, HostKey], path: Path) -> None:
     directory = path.parent
-    _ensure_private_dir(directory)
+    if os.name != "nt":
+        _ensure_private_dir(directory)
     # Always the current format: legacy lines are migrated on every write.
     body = "".join(
         f"{host_key_alias(device_id)} {key.line} {device_id}\n"
         for device_id, key in sorted(pins.items())
     ).encode("ascii")
+    if os.name == "nt":
+        from pocketshell.windows_security import write_private
+        try:
+            write_private(path, body)
+        except OSError:
+            raise PinError("Cannot safely save Windows pins; check the private directory DACL and reparse points") from None
+        return
     tmp = directory / f".{PIN_FILE_NAME}.{os.getpid()}.{os.urandom(4).hex()}.tmp"
     fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_CLOEXEC, 0o600)
     try:

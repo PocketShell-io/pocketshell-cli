@@ -27,6 +27,7 @@ The ssh argv is fully explicit:
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import shlex
@@ -36,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
 
+from pocketshell.gateway import winssh
 from pocketshell.gateway.endpoint import (
     GatewayEndpoint,
     host_key_alias,
@@ -98,7 +100,18 @@ _REFUSAL_HINT = (
 )
 
 
-def _check_path(path: str, what: str) -> str:
+def _is_windows(platform: Optional[str]) -> bool:
+    return (sys.platform if platform is None else platform) == "win32"
+
+
+def _check_path(path: str, what: str, platform: Optional[str] = None, *, option: bool = False) -> str:
+    if _is_windows(platform):
+        try:
+            if option:
+                return winssh.ssh_option_path(path, what)
+            return winssh.ssh_path(path, what)
+        except winssh.WindowsSshError as exc:
+            raise SshArgsError(str(exc)) from None
     if not os.path.isabs(path):
         raise SshArgsError(f"{what} path must be absolute")
     if _UNSAFE_PATH_RE.search(path):
@@ -126,10 +139,20 @@ def proxy_command(
     *,
     python: Optional[str] = None,
     insecure_dev: bool = False,
+    platform: Optional[str] = None,
 ) -> str:
-    """The ProxyCommand string: quoted argv, ``%`` escaped for ssh."""
+    """The ProxyCommand string: quoted argv, ``%`` escaped for ssh.
+
+    On Windows see :mod:`pocketshell.gateway.winssh` for the exact rules
+    (Win32-OpenSSH starts it with CreateProcessW, no shell)."""
     python = sys.executable if python is None else python
-    if not python or not os.path.isabs(python):
+    windows = _is_windows(platform)
+    if windows:
+        try:
+            python = winssh.proxy_interpreter(python)
+        except winssh.WindowsSshError as exc:
+            raise SshArgsError(str(exc)) from None
+    elif not python or not os.path.isabs(python):
         raise SshArgsError("cannot locate an absolute Python interpreter path")
     argv = [python, "-P", "-m", "pocketshell", "gateway", "proxy", validate_device_id(device_id)]
     if not endpoint.is_production or endpoint.ws_base != "wss://gateway.pocketshell.io":
@@ -138,6 +161,11 @@ def proxy_command(
         argv += ["--trust-gateway", endpoint.host]
     if insecure_dev:
         argv.append("--insecure-dev")
+    if windows:
+        try:
+            return winssh.quote_proxy_command(argv)
+        except winssh.WindowsSshError as exc:
+            raise SshArgsError(str(exc)) from None
     return " ".join(shlex.quote(_check_proxy_element(a)).replace("%", "%%") for a in argv)
 
 
@@ -218,6 +246,7 @@ def build_ssh_argv(
     insecure_dev: bool = False,
     python: Optional[str] = None,
     alias: Optional[str] = None,
+    platform: Optional[str] = None,
 ) -> list[str]:
     """The complete, hardened ssh argv (argv[0] is the ssh path).
 
@@ -230,9 +259,10 @@ def build_ssh_argv(
         alias = current
     elif alias not in (current, legacy_host_key_alias(device_id)):
         raise SshArgsError(f"host key alias does not belong to device {device_id}")
-    if not os.path.isabs(ssh):
+    windows = _is_windows(platform)
+    if not (ntpath.isabs(ssh) if windows else os.path.isabs(ssh)):
         raise SshArgsError("ssh path must be absolute")
-    pin_path = _check_path(str(pin_file), "pin file")
+    pin_path = _check_path(str(pin_file), "pin file", platform, option=True)
     parsed = parse_extra_args(extra)
     argv = [ssh, "-F", "none"]
     for opt in HARDENING_OPTIONS:
@@ -243,31 +273,57 @@ def build_ssh_argv(
         "-o", f"UserKnownHostsFile={pin_path}",
         "-o", f"HostKeyAlias={alias}",
         "-o", "ProxyCommand="
-        + proxy_command(device_id, endpoint, python=python, insecure_dev=insecure_dev),
+        + proxy_command(
+            device_id, endpoint, python=python, insecure_dev=insecure_dev, platform=platform
+        ),
     ]
     if user is not None:
         if not _USER_RE.match(user):
             raise SshArgsError(f"invalid login name {ascii(user)[:80]}")
         argv += ["-l", user]
     if identity is not None:
-        ident = _check_path(os.path.abspath(identity), "identity file")
+        ident = _check_path(
+            ntpath.abspath(identity) if windows else os.path.abspath(identity),
+            "identity file",
+            platform,
+        )
         if not os.path.isfile(ident):
             raise SshArgsError(f"identity file {ident} does not exist")
         argv += ["-i", ident]
     argv += parsed.flags
     argv += ["--", alias, *parsed.command]
+    if windows and any(f.startswith("-v") for f in parsed.flags):
+        # Which ssh.exe really runs matters on Windows (inbox Win32-OpenSSH
+        # vs. an explicit POCKETSHELL_SSH override): say so under -v.
+        sys.stderr.write(
+            f"pocketshell: ssh executable {ssh} ({winssh.ssh_version(ssh)})\n"
+        )
     return argv
 
 
-def find_ssh() -> str:
+def find_ssh(*, platform: Optional[str] = None, environ: Optional[dict] = None) -> str:
+    """Absolute path of the OpenSSH client to run.
+
+    POSIX: ``ssh`` on PATH. Windows: ``%POCKETSHELL_SSH%`` or the inbox
+    ``System32\\OpenSSH\\ssh.exe``, never PATH (see
+    :func:`pocketshell.gateway.winssh.find_windows_ssh`)."""
+    if _is_windows(platform):
+        try:
+            return winssh.find_windows_ssh(environ)
+        except winssh.WindowsSshError as exc:
+            raise SshArgsError(str(exc)) from None
     found = shutil.which("ssh")
     if not found:
         raise SshArgsError("OpenSSH client `ssh` was not found on PATH")
     return os.path.abspath(found)
 
 
-def ssh_environment(base: Optional[dict] = None) -> dict:
-    """ssh's environment: ProxyCommand always runs under /bin/sh."""
+def ssh_environment(base: Optional[dict] = None, *, platform: Optional[str] = None) -> dict:
+    """ssh's environment: ProxyCommand always runs under /bin/sh (POSIX).
+
+    Win32-OpenSSH starts the ProxyCommand without a shell, so SHELL is
+    left alone there."""
     env = dict(os.environ if base is None else base)
-    env["SHELL"] = "/bin/sh"
+    if not _is_windows(platform):
+        env["SHELL"] = "/bin/sh"
     return env

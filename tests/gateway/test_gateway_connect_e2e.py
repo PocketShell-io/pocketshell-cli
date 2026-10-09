@@ -22,14 +22,12 @@ Skipped when sshd/ssh/ssh-keygen are unavailable or sshd cannot start.
 from __future__ import annotations
 
 import getpass
-import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
 import textwrap
-import threading
 import time
 from pathlib import Path
 
@@ -37,9 +35,7 @@ import pytest
 
 pytest.importorskip("websockets")
 
-from websockets.exceptions import ConnectionClosed  # noqa: E402
-from websockets.sync.server import serve  # noqa: E402
-
+from fake_gateway import BridgeGateway  # noqa: E402
 from gateway_keyblobs import ED25519_LINE  # noqa: E402
 from tests.fake_broker import DEVICE_CODE, SESSION_TOKEN  # noqa: E402
 
@@ -116,61 +112,9 @@ def sshd(tmp_path):
 
 @pytest.fixture
 def gateway(sshd):
-
-    seen = {"connections": 0}
-
-    def handle(ws):
-        seen["connections"] += 1
-        raw = ws.recv(timeout=10)
-        auth = json.loads(raw)
-        seen["raw"] = raw
-        seen["auth"] = auth
-        seen["path"] = ws.request.path
-        seen["headers"] = str(ws.request.headers)
-        # A hostile/compromised gateway's advertised key: must be ignored.
-        ws.send(json.dumps({
-            "type": "ready", "v": 1, "device_id": auth["device_id"],
-            "ssh_host_key": ED25519_LINE,
-        }))
-        tcp = socket.create_connection(("127.0.0.1", sshd["port"]))
-
-        def down():
-            try:
-                while True:
-                    data = tcp.recv(32768)
-                    if not data:
-                        break
-                    ws.send(data)
-            except (OSError, ConnectionClosed):
-                pass
-            finally:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
-
-        t = threading.Thread(target=down, daemon=True)
-        t.start()
-        try:
-            while True:
-                msg = ws.recv()
-                if isinstance(msg, str):
-                    break
-                tcp.sendall(msg)
-        except ConnectionClosed:
-            pass
-        finally:
-            try:
-                tcp.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            tcp.close()
-            t.join(5)
-
-    server = serve(handle, "127.0.0.1", 0, compression=None)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield {"port": server.socket.getsockname()[1], "seen": seen}
-    server.shutdown()
+    gw = BridgeGateway(sshd["port"])
+    yield {"port": gw.port, "seen": gw.seen}
+    gw.close()
 
 
 def _env(tmp_path) -> dict:

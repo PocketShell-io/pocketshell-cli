@@ -4,8 +4,9 @@
 The `pocketshell gateway` commands are thin wrappers: they never implement
 tunnel, enrollment, or SSH logic themselves, they build an argv for the
 installed Go helper, verify it identifies as protocol-compatible, and then
-replace this process with it (``os.execv``). That boundary is what makes
-the wrappers faithful:
+replace this process with it on POSIX (``os.execv``). Windows waits for a
+native child with inherited stdio, forwards cancellation and returns its
+status. These boundaries preserve the wrappers' stream contract:
 
 - **stdin** — the enroll token arrives piped to stdin and flows straight to
   the helper through the inherited descriptor. Python never reads it (the
@@ -27,6 +28,10 @@ The helper is resolved from trusted locations only, in this order:
    executable, built for a different platform — is a hard error, never a
    silent fallback to PATH.
 3. a `pocketshell-link` found on PATH.
+
+Windows private rollout deliberately has only the explicit absolute .exe
+route, constrained to the reviewed 8cbeb8f artifact SHA256. It has no wheel
+or PATH fallback; metadata compatibility is checked separately from trust.
 
 Nothing is ever downloaded at runtime and nothing is bundled: the binary
 reaches the machine only through an install the user consented to — the
@@ -58,9 +63,11 @@ ASCII-escaped and truncated to 100 characters — see
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import platform
 import selectors
+import signal
 import shutil
 import subprocess
 import sys
@@ -70,6 +77,9 @@ from typing import NoReturn, Optional
 
 HELPER_NAME = "pocketshell-link"
 HELPER_ENV_VAR = "POCKETSHELL_GATEWAY_HELPER"
+# Private Windows rollout: only the independently reviewed 8cbeb8f build.
+# This is an artifact trust gate, separate from the protocol compatibility gate.
+WINDOWS_HELPER_SHA256 = "57f3a86e2166b079e99479a985fd8cbc56a91260cf3d8dee76c446e60189ac63"
 
 # The installed-wheel route: the delivery pipeline packages the built
 # helper as platform wheels carrying ONLY the binary at this in-package
@@ -262,7 +272,10 @@ def resolve_helper() -> str:
        preferred over PATH so an explicit package install is not shadowed
        by a stray binary. A broken or foreign-platform install raises
        instead of falling back (see :func:`_resolve_wheel_helper`).
-    3. `pocketshell-link` on PATH.
+    3. `pocketshell-link` on PATH (POSIX only).
+
+    Windows instead requires an absolute explicit .exe pin whose bytes match
+    the approved private build. No Windows wheel or PATH fallback exists.
 
     Raises :class:`HelperNotFoundError` with an actionable message
     otherwise. The selection is normalized ONCE to a single absolute
@@ -273,14 +286,15 @@ def resolve_helper() -> str:
     Whatever it is still has to pass :func:`verify_helper` before
     anything is exec'd.
     """
-    if sys.platform == "win32":
-        raise HelperNotFoundError(
-            "pocketshell gateway does not support Windows: the exec "
-            "boundary is the POSIX os.execv, and the "
-            f"{WHEEL_DIST_NAME} wheels ship for linux amd64/arm64 and "
-            "darwin amd64/arm64 only."
-        )
     pinned = os.environ.get(HELPER_ENV_VAR)
+    if sys.platform == "win32":
+        if not pinned:
+            raise HelperNotFoundError(
+                f"Windows requires {HELPER_ENV_VAR} set to the absolute path "
+                "of the reviewed private Windows helper; no wheel or PATH fallback."
+            )
+        _verify_windows_helper(pinned)
+        return os.path.abspath(pinned)
     if pinned:
         if os.path.isfile(pinned) and os.access(pinned, os.X_OK):
             return os.path.abspath(pinned)
@@ -317,6 +331,68 @@ def resolve_helper() -> str:
     )
 
 
+def _verify_windows_helper(helper: str) -> None:
+    """Require the approved native payload, never a launcher or PATH name."""
+    if not os.path.isabs(helper) or not helper.lower().endswith(".exe"):
+        raise HelperNotFoundError("Windows helper pin must be an absolute .exe path")
+    try:
+        with open(helper, "rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    except OSError:
+        raise HelperNotFoundError("The pinned Windows helper cannot be read") from None
+    if digest != WINDOWS_HELPER_SHA256:
+        raise HelperNotFoundError("The pinned Windows helper digest is not the reviewed build")
+
+
+def _probe_version_json_windows(helper: str) -> tuple[int, bytes]:
+    """Bounded anonymous-pipe reads; Windows selectors cannot select pipes."""
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    peek = ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe
+    peek.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                     wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
+    peek.restype = wintypes.BOOL
+    deadline = time.monotonic() + METADATA_TIMEOUT_SECONDS
+    try:
+        proc = subprocess.Popen([helper, "version", "--json"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        raise _incompatible(helper, "cannot be executed") from None
+    output = bytearray()
+    try:
+        fd = proc.stdout.fileno()
+        pipe = wintypes.HANDLE(msvcrt.get_osfhandle(fd))
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _incompatible(helper, "version metadata timed out")
+            available = wintypes.DWORD()
+            if not peek(pipe, None, 0, None, ctypes.byref(available), None):
+                if ctypes.get_last_error() != 109:  # ERROR_BROKEN_PIPE: EOF
+                    raise _incompatible(helper, "cannot read version metadata")
+                try:
+                    code = proc.wait(timeout=max(0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    raise _incompatible(helper, "version metadata timed out") from None
+                if time.monotonic() >= deadline:
+                    raise _incompatible(helper, "version metadata timed out")
+                return code, bytes(output)
+            if available.value:
+                output.extend(os.read(fd, min(available.value,
+                    METADATA_MAX_OUTPUT_BYTES - len(output) + 1)))
+                if len(output) > METADATA_MAX_OUTPUT_BYTES:
+                    raise _incompatible(helper, "version metadata exceeds output limit")
+            else:
+                time.sleep(min(remaining, 0.01))
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        proc.stdout.close()
+
+
 def _probe_version_json(helper: str) -> tuple[int, bytes]:
     """Run ``helper version --json`` under hard bounds and capture the answer.
 
@@ -336,6 +412,8 @@ def _probe_version_json(helper: str) -> tuple[int, bytes]:
     nothing the helper writes is ever captured unboundedly. The probe
     child is always reaped; a misbehaving one is killed.
     """
+    if sys.platform == "win32":
+        return _probe_version_json_windows(helper)
     deadline = time.monotonic() + METADATA_TIMEOUT_SECONDS
     try:
         proc = subprocess.Popen(
@@ -623,10 +701,86 @@ def exec_helper(helper: str, argv: list[str]) -> NoReturn:
     ``os.execv`` keeps the inherited file descriptors, controlling
     terminal, and PID, which is exactly the preservation contract:
     the token on stdin, Ctrl+C / SIGTERM delivery, and the helper's exit
-    code all pass through without this wrapper in the loop. POSIX only —
-    same assumption the bundled aplexer dependency already makes.
+    code all pass through without this wrapper in the loop. Windows instead
+    waits for a native child with inherited stdio and propagates its status.
     """
+    if sys.platform == "win32":
+        _verify_windows_helper(helper)
+        wait_windows_child([helper, *argv])
     os.execv(helper, [helper, *argv])
+
+
+def wait_windows_child(argv: list[str], *, env: Optional[dict] = None,
+                       stdin_data: Optional[bytes] = None) -> NoReturn:
+    """Inherit terminal streams, wait, propagate exit and reap on Ctrl+C.
+
+    No shell or new console/process group: console Ctrl+C also reaches the
+    child's own handlers. Tokens supplied here travel only through stdin.
+    """
+    # SIGBREAK and queued handlers need bytecode dispatch opportunities;
+    # an infinite Windows process-handle wait can otherwise defer them.
+    # Handlers only record state, so repeated signals cannot interrupt reap.
+    cancellation = None
+    previous = {}
+    proc = None
+    def cancel(signum, frame):
+        nonlocal cancellation
+        cancellation = 143 if signum == signal.SIGTERM else 130
+    try:
+        for signum in (signal.SIGINT, getattr(signal, "SIGBREAK", None), signal.SIGTERM):
+            if signum is None:
+                continue
+            try:
+                previous[signum] = signal.signal(signum, cancel)
+            except ValueError:  # Non-main-thread embedding cannot own handlers.
+                break
+        if cancellation is not None:
+            raise SystemExit(cancellation)
+        try:
+            proc = subprocess.Popen(argv, env=env,
+                                    stdin=subprocess.PIPE if stdin_data is not None else None)
+        except OSError:
+            print("pocketshell: could not start the trusted child process", file=sys.stderr)
+            raise SystemExit(127) from None
+        first_input = True
+        while cancellation is None:
+            try:
+                if stdin_data is None:
+                    code = proc.wait(timeout=0.1)
+                else:
+                    proc.communicate(input=stdin_data if first_input else None, timeout=0.1)
+                    code = proc.returncode
+                if cancellation is None:
+                    raise SystemExit(code)
+            except subprocess.TimeoutExpired:
+                pass
+            except KeyboardInterrupt:
+                cancellation = 130
+            finally:
+                first_input = False
+        if cancellation == 130:
+            deadline = time.monotonic() + 2
+            while proc.poll() is None and time.monotonic() < deadline:
+                try:
+                    proc.wait(timeout=min(0.1, max(0, deadline - time.monotonic())))
+                except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                    pass
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+        raise SystemExit(cancellation) from None
+    finally:
+        try:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=2)
+        finally:
+            for signum, old_handler in previous.items():
+                signal.signal(signum, old_handler)
 
 
 def exec_helper_with_stdin_token(helper: str, argv: list[str], token: str) -> NoReturn:
@@ -639,7 +793,14 @@ def exec_helper_with_stdin_token(helper: str, argv: list[str], token: str) -> No
     token is never in argv, the environment, or a file, and the caller's
     original stdin is not inherited. The write end is non-blocking: a
     token too large for the pipe buffer is refused instead of deadlocking.
+    Windows uses a native child stdin pipe and communicate's concurrent pipe
+    writer, with inherited stdout/stderr and child status propagation.
     """
+    if sys.platform == "win32":
+        _verify_windows_helper(helper)
+        if not token.isascii():
+            raise ValueError("gateway token must be ASCII")
+        wait_windows_child([helper, *argv], stdin_data=token.encode("ascii") + b"\n")
     data = token.encode("ascii") + b"\n"
     read_fd, write_fd = os.pipe()
     try:
