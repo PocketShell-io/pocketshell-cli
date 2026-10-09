@@ -515,6 +515,7 @@ pocketshell login                        # once: device sign-in, stores a CLI se
 pocketshell gateway devices              # list your enrolled hosts
 pocketshell gateway pin home-lab         # paste the line from `gateway show --host-key` ON THE HOST
 pocketshell gateway ssh home-lab -l me   # OpenSSH through the gateway
+pocketshell gateway ssh home-lab -l me --key home-lab   # …with a key from the device vault (docs/keys.md)
 ```
 
 Every command that talks to the gateway mints a fresh short-lived (≤ 5
@@ -592,7 +593,7 @@ the same checks — `gateway ssh` then verifies against that older alias — and
 the next `pin`/`unpin` rewrites them in the current format. A different key for an already pinned device
 needs `--replace` (re-keyed host — verify on the host first).
 
-### 9.4 `gateway ssh DEVICE_ID [-l USER] [-i KEY] [-- SSH_ARGS…]`
+### 9.4 `gateway ssh DEVICE_ID [-l USER] [-i KEY | --key NAME] [-- SSH_ARGS…]`
 
 Execs the OpenSSH client (`ssh` resolved once to an absolute path) with an
 explicit configuration; refuses to run without a valid pin:
@@ -612,9 +613,10 @@ explicit configuration; refuses to run without a valid pin:
 - key authentication only: `PubkeyAuthentication=yes`,
   `PreferredAuthentications=publickey`, `PasswordAuthentication=no`,
   `KbdInteractiveAuthentication=no`, `GSSAPIAuthentication=no`,
-  `HostbasedAuthentication=no`, `IdentitiesOnly=yes` (always: `-i KEY`, or
-  your default `~/.ssh/id_*` files; agent-only keys without a file are not
-  offered); `Compression=no`, `ExitOnForwardFailure=yes`;
+  `HostbasedAuthentication=no`, `IdentitiesOnly=yes` (always: `-i KEY`,
+  `--key NAME`, or your default `~/.ssh/id_*` files; agent-only keys
+  without a file are not offered); `Compression=no`,
+  `ExitOnForwardFailure=yes`;
 - bounded waits: `ConnectTimeout=30` (connection setup through the
   ProxyCommand, including the SSH banner), `ServerAliveInterval=30`,
   `ServerAliveCountMax=3` (a silent gateway or host ends the session after
@@ -642,9 +644,24 @@ characters).
 
 ```bash
 pocketshell gateway ssh home-lab -l me -i ~/.ssh/id_ed25519
+pocketshell gateway ssh home-lab -l me --key home-lab
 pocketshell gateway ssh home-lab -l me -- -N -L 8080:localhost:80
 pocketshell gateway ssh home-lab -l me -- uptime
 ```
+
+**`--key NAME`** takes the key from the device-password vault
+([keys.md](keys.md)) instead of a file. You type the device password on
+the terminal, and the key is decrypted in memory and loaded into a
+private `ssh-agent`. That agent's socket sits in a fresh 0700 temporary
+directory, and the key is held for at most 120 s. If the key has its own
+OpenSSH passphrase, `ssh-add` asks for it on the terminal too. ssh then
+runs as a child process (not `exec`) with `IdentityAgent=<that socket>`
+and `IdentityFile=<the key's .pub>` inserted right after `-F none`. With
+`IdentitiesOnly=yes`, only that key is offered, and `ForwardAgent=no`
+still holds. When ssh exits, or on Ctrl-C, SIGTERM/SIGHUP or an error,
+the agent is killed and the directory removed. `--key` is never implied:
+without it, nothing reads the vault or asks for a password. `--key` and
+`-i` are mutually exclusive.
 
 Things worth knowing about the session itself:
 
@@ -730,7 +747,19 @@ no shared control socket. When pinning, the key line it prints is data
 (one validated `<keytype> <base64>` line), never a command, so a hostile
 host cannot trick you into running something by pasting.
 
+**Your SSH keys never reach PocketShell's servers.** With `-i` or the
+default `~/.ssh` files, OpenSSH reads the key locally. With `--key`, the
+key comes from the device-password vault ([keys.md](keys.md)): a local
+file that is never synced, decrypted only in this process with a password
+typed on this device, and handed to a private agent on this device.
+Neither the broker, the gateway nor the sync service ever holds a usable
+private key, the device password or a key passphrase. A compromised
+server therefore has no way to log in to your hosts as you, and no way
+into your devices.
+
 **Not covered:** a compromised client machine (it holds the login
-session, the pins and your SSH keys); you pinning a key without checking
+session, the pins and your SSH keys; for vault keys, malware running as
+you can capture the device password as you type it, or use the private
+agent during its 120 s key lifetime); you pinning a key without checking
 where it came from; hosts whose sshd still allows non-key authentication
 (see §2.1); denial of service by any party on the path.
