@@ -308,6 +308,19 @@ def _build_endpoint(layout, monkeypatch, *, port: int, enrolled_port: int, name:
             "guardian": str(guardian), "public": public}
 
 
+def _diagnose(endpoint, leaf):
+    """Print what the guardian left behind (CI diagnostics only)."""
+    try:
+        info = win.query_task(None, leaf)
+        print("task:", info.state if info else None, "last result:", info.last_result if info else None)
+    except Exception as exc:  # noqa: BLE001
+        print("task query failed:", exc)
+    for path in sorted(endpoint["state"].rglob("*")):
+        print("state:", path.relative_to(endpoint["state"]))
+        if path.suffix == ".json":
+            print("   ", path.read_text(encoding="utf-8", errors="replace")[:2000])
+
+
 def _current(endpoint) -> dict:
     return json.loads((endpoint["state"] / "CURRENT.json").read_text(encoding="utf-8"))
 
@@ -374,6 +387,8 @@ def test_real_endpoint_and_link_lifecycle(layout, monkeypatch):
     assert _query_xml() is None and _query_xml(ENDPOINT_TASK) is None
 
     result = _service(*args)
+    if result.exit_code != 0:
+        _diagnose(endpoint, ep.ENDPOINT_LEAF)
     assert result.exit_code == 0, result.output
     assert "enrolled host key proven" in result.output
 
@@ -451,6 +466,8 @@ def test_isolated_qualification_instance(layout, monkeypatch):
     endpoint = _build_endpoint(layout, monkeypatch, port=port, enrolled_port=enrolled, name="qual")
     result = _service("install", "--helper", layout["helper"], "--config-dir", layout["config"],
                       "--with-endpoint", endpoint["manifest"], "--endpoint-only", "--instance", INSTANCE)
+    if result.exit_code != 0:
+        _diagnose(endpoint, ep.leaf_for(INSTANCE))
     assert result.exit_code == 0, result.output
     assert _query_xml() is None, "a qualification install must never register GatewayLink"
     assert _query_xml(QUALIFICATION_TASK) is not None
