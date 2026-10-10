@@ -1,0 +1,52 @@
+[
+  {
+    "name": "quiet-host-source-build-role-handoff.json",
+    "bytes": 24868,
+    "sha256": "827a4ee271a63fa0729f42269ff26e200113e2b9a1dd0a76a57356d5a24a0900"
+  },
+  {
+    "name": "windows-aplexer-msys-backend-source-role-handoff.json",
+    "bytes": 39256,
+    "sha256": "5dc313e792965eafaf9ab7167aee1add5bbbddbaeb9a03a6e178960d656657ca"
+  },
+  {
+    "name": "quiet-build-terminal-fields-addendum.json",
+    "bytes": 6674,
+    "sha256": "74cfbd64c883c9301fd062a6622989159e394c0d53a27d0f9591d6ca1bd85c6c"
+  },
+  {
+    "name": "source-e302fe1.zip",
+    "bytes": 3305948,
+    "sha256": "8545e33b809f7ec6eb8363cbbbd2d4d68982d8ab7a8b7e6bb63506d82ae62223"
+  },
+  {
+    "name": "w32fd.c",
+    "bytes": 38425,
+    "sha256": "baeb8d3fcf8a24e71b242e890a97771c23c32c0914c2f4f7e763048d409eaf7a"
+  },
+  {
+    "name": "shell-host.c",
+    "bytes": 43299,
+    "sha256": "f0e0a17ec66079ee16201abf92041034af2c502973e5a886fc14da2e2ac02c0d"
+  },
+  {
+    "name": "policy-manifest.json",
+    "bytes": 2149,
+    "sha256": "5c3fcd9a8163af09b6e0a0f0a7118e7b2bfe818054902656dad06997ec9e0668"
+  },
+  {
+    "name": "OWNED-BUILD-V26A.json",
+    "bytes": 42229,
+    "sha256": "6b792806b8e13d6716f0107943d37aefe07c81199f84181a8a72c14f5ce92523"
+  },
+  {
+    "name": "console.before.cc",
+    "bytes": 147152,
+    "sha256": "ec3092a13fc7237d7136cc86401a83549b39cf718136f38bf2f902e236b89e03"
+  },
+  {
+    "name": "console.after-v2.cc",
+    "bytes": 147596,
+    "sha256": "717e49fe10e8a31df0a21035b8b1f74987460a61b4a2bf34a498ee9ff4710e46"
+  }
+]

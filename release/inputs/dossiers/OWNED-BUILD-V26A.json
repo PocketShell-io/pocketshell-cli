@@ -1,0 +1,848 @@
+{
+  "accepted": true,
+  "scope": "Private unsigned OpenSSH build only; no generated executable is launched",
+  "upstreamCommit": "e302fe1ed190e408573cf0139252e5db26eeba2f",
+  "cleanupErrors": [],
+  "censusLimit": "Polling records observed members, not a complete census of short-lived compiler processes",
+  "environmentNames": [
+    "APPDATA",
+    "CMAKE_BUILD_PARALLEL_LEVEL",
+    "ComSpec",
+    "DOTNET_CLI_TELEMETRY_OPTOUT",
+    "GCM_INTERACTIVE",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_KEY_1",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_CONFIG_VALUE_0",
+    "GIT_CONFIG_VALUE_1",
+    "GIT_TERMINAL_PROMPT",
+    "INCLUDE",
+    "LIB",
+    "LOCALAPPDATA",
+    "MSBUILDDISABLENODEREUSE",
+    "PATH",
+    "PKG_CONFIG",
+    "PROCESSOR_ARCHITECTURE",
+    "SystemDrive",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "VCPKG_BINARY_SOURCES",
+    "VCPKG_DISABLE_METRICS",
+    "VCPKG_DOWNLOADS",
+    "VCPKG_FORCE_SYSTEM_BINARIES",
+    "VCPKG_KEEP_ENV_VARS",
+    "VCPKG_MAX_CONCURRENCY",
+    "VCPKG_ROOT",
+    "VCPKG_VISUAL_STUDIO_PATH",
+    "VSLANG",
+    "VisualStudioVersion",
+    "WINDIR"
+  ],
+  "desktopACL": {
+    "ownerSID": "S-1-5-21-1846869698-1433458354-420588588-1001",
+    "protectedDACL": true,
+    "allowTrustees": [
+      "S-1-5-18",
+      "S-1-5-21-1846869698-1433458354-420588588-1001",
+      "S-1-5-32-544"
+    ],
+    "ACECount": 3
+  },
+  "desktopFlags": {
+    "fInherit": true,
+    "fReserved": false,
+    "dwFlags": 0
+  },
+  "desktopName": "PocketShellFleetHiddenProbe_ea59643f5581453e88ada716a9513bc7",
+  "retainedDependencyProof": "OWNED-BUILD-V21.json; dependency phase natural exit0; exact retained files checked",
+  "retainedCompiledProof": "OWNED-BUILD-V22C.json; config/win32iocompat natural0; exact retained outputs checked",
+  "phases": [
+    {
+      "label": "build-v26a-openbsd_compat",
+      "pid": 39348,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "argv": [
+        "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\openbsd_compat.vcxproj",
+        "/t:Build",
+        "/m:1",
+        "/nr:false",
+        "/nologo",
+        "/v:minimal",
+        "/p:Configuration=Release",
+        "/p:Platform=x64",
+        "/p:BuildInParallel=false",
+        "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+        "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+        "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+        "/p:VcpkgEnabled=false",
+        "/p:WindowsSDKVersion=10.0.26100.0",
+        "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+        "/p:SpectreMitigation=Spectre",
+        "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+        "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+      ],
+      "naturalExit": 0
+    },
+    {
+      "label": "build-v26a-libssh",
+      "pid": 4116,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "argv": [
+        "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\libssh.vcxproj",
+        "/t:Build",
+        "/m:1",
+        "/nr:false",
+        "/nologo",
+        "/v:minimal",
+        "/p:Configuration=Release",
+        "/p:Platform=x64",
+        "/p:BuildInParallel=false",
+        "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+        "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+        "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+        "/p:VcpkgEnabled=false",
+        "/p:WindowsSDKVersion=10.0.26100.0",
+        "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+        "/p:SpectreMitigation=Spectre",
+        "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+        "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+      ],
+      "naturalExit": 0
+    },
+    {
+      "label": "build-v26a-sshd",
+      "pid": 28368,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "argv": [
+        "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\sshd.vcxproj",
+        "/t:Build",
+        "/m:1",
+        "/nr:false",
+        "/nologo",
+        "/v:minimal",
+        "/p:Configuration=Release",
+        "/p:Platform=x64",
+        "/p:BuildInParallel=false",
+        "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+        "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+        "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+        "/p:VcpkgEnabled=false",
+        "/p:WindowsSDKVersion=10.0.26100.0",
+        "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+        "/p:SpectreMitigation=Spectre",
+        "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+        "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+      ],
+      "naturalExit": 0
+    },
+    {
+      "label": "build-v26a-sshd-auth",
+      "pid": 24392,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "argv": [
+        "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\sshd-auth.vcxproj",
+        "/t:Build",
+        "/m:1",
+        "/nr:false",
+        "/nologo",
+        "/v:minimal",
+        "/p:Configuration=Release",
+        "/p:Platform=x64",
+        "/p:BuildInParallel=false",
+        "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+        "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+        "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+        "/p:VcpkgEnabled=false",
+        "/p:WindowsSDKVersion=10.0.26100.0",
+        "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+        "/p:SpectreMitigation=Spectre",
+        "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+        "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+      ],
+      "naturalExit": 0
+    },
+    {
+      "label": "build-v26a-sshd-session",
+      "pid": 44636,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "argv": [
+        "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\sshd-session.vcxproj",
+        "/t:Build",
+        "/m:1",
+        "/nr:false",
+        "/nologo",
+        "/v:minimal",
+        "/p:Configuration=Release",
+        "/p:Platform=x64",
+        "/p:BuildInParallel=false",
+        "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+        "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+        "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+        "/p:VcpkgEnabled=false",
+        "/p:WindowsSDKVersion=10.0.26100.0",
+        "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+        "/p:SpectreMitigation=Spectre",
+        "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+        "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+      ],
+      "naturalExit": 0
+    },
+    {
+      "label": "build-v26a-ssh-shellhost",
+      "pid": 12752,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "argv": [
+        "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\ssh-shellhost.vcxproj",
+        "/t:Build",
+        "/m:1",
+        "/nr:false",
+        "/nologo",
+        "/v:minimal",
+        "/p:Configuration=Release",
+        "/p:Platform=x64",
+        "/p:BuildInParallel=false",
+        "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+        "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+        "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+        "/p:VcpkgEnabled=false",
+        "/p:WindowsSDKVersion=10.0.26100.0",
+        "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+        "/p:SpectreMitigation=Spectre",
+        "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+        "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+      ],
+      "naturalExit": 0
+    }
+  ],
+  "sampleContext": {
+    "stage": "QueryInformationJobObject.Accounting",
+    "pid": null,
+    "creationFILETIME": null,
+    "image": null,
+    "exactOwnedJobMembership": false
+  },
+  "observedMembers": [
+    {
+      "pid": 39348,
+      "creationFILETIME": 134359977795614285,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\msbuild.exe",
+      "sha256": "58fbe0acac5265fe9a93acb291e1dbd50432c4ebf00ff9b9fb4c34bc0f247c73",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 40748,
+      "creationFILETIME": 134359977795860406,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 20308,
+      "creationFILETIME": 134359977801595825,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 38644,
+      "creationFILETIME": 134359977801697525,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 44740,
+      "creationFILETIME": 134359977801829950,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\cl.exe",
+      "sha256": "f4eba2208e132daf500b7d7bbdf051e930c59dbdc1d87c35e146479427ffeb8d",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 40244,
+      "creationFILETIME": 134359977803204816,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+      "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 31008,
+      "creationFILETIME": 134359977883623309,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 32512,
+      "creationFILETIME": 134359977883705102,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 39896,
+      "creationFILETIME": 134359977884159156,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\lib.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\lib.exe",
+      "sha256": "2c6c3988eda560b540355cbd468ba1aada7c040a91b9d3d5eb564de1b9d55d8d",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 37844,
+      "creationFILETIME": 134359977884483759,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\link.exe",
+      "sha256": "1a9889872481270ca45febcdaf26e75c53cea505c9eb214daea1098d4cf706bd",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 4116,
+      "creationFILETIME": 134359977887632764,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\msbuild.exe",
+      "sha256": "58fbe0acac5265fe9a93acb291e1dbd50432c4ebf00ff9b9fb4c34bc0f247c73",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 44524,
+      "creationFILETIME": 134359977887719587,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 1848,
+      "creationFILETIME": 134359977893258968,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 37280,
+      "creationFILETIME": 134359977893341377,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 43504,
+      "creationFILETIME": 134359977893495029,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\cl.exe",
+      "sha256": "f4eba2208e132daf500b7d7bbdf051e930c59dbdc1d87c35e146479427ffeb8d",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 8156,
+      "creationFILETIME": 134359977997360836,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 39940,
+      "creationFILETIME": 134359977997797038,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 44940,
+      "creationFILETIME": 134359977997962838,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\lib.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\lib.exe",
+      "sha256": "2c6c3988eda560b540355cbd468ba1aada7c040a91b9d3d5eb564de1b9d55d8d",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 45480,
+      "creationFILETIME": 134359977998231444,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\link.exe",
+      "sha256": "1a9889872481270ca45febcdaf26e75c53cea505c9eb214daea1098d4cf706bd",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 28368,
+      "creationFILETIME": 134359978001101676,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\msbuild.exe",
+      "sha256": "58fbe0acac5265fe9a93acb291e1dbd50432c4ebf00ff9b9fb4c34bc0f247c73",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 32460,
+      "creationFILETIME": 134359978001195493,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 39272,
+      "creationFILETIME": 134359978006461118,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 3564,
+      "creationFILETIME": 134359978006536638,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 21720,
+      "creationFILETIME": 134359978006675571,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\cl.exe",
+      "sha256": "f4eba2208e132daf500b7d7bbdf051e930c59dbdc1d87c35e146479427ffeb8d",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 32920,
+      "creationFILETIME": 134359978042236703,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 39536,
+      "creationFILETIME": 134359978042312619,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 18112,
+      "creationFILETIME": 134359978042470062,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\link.exe",
+      "sha256": "1a9889872481270ca45febcdaf26e75c53cea505c9eb214daea1098d4cf706bd",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 24392,
+      "creationFILETIME": 134359978068668760,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\msbuild.exe",
+      "sha256": "58fbe0acac5265fe9a93acb291e1dbd50432c4ebf00ff9b9fb4c34bc0f247c73",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 39400,
+      "creationFILETIME": 134359978068779114,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 34344,
+      "creationFILETIME": 134359978072689546,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 32352,
+      "creationFILETIME": 134359978072767977,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 11944,
+      "creationFILETIME": 134359978072942477,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\cl.exe",
+      "sha256": "f4eba2208e132daf500b7d7bbdf051e930c59dbdc1d87c35e146479427ffeb8d",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 36244,
+      "creationFILETIME": 134359978152436880,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 6940,
+      "creationFILETIME": 134359978152502688,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 2472,
+      "creationFILETIME": 134359978153032976,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\link.exe",
+      "sha256": "1a9889872481270ca45febcdaf26e75c53cea505c9eb214daea1098d4cf706bd",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 44636,
+      "creationFILETIME": 134359978189361115,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\msbuild.exe",
+      "sha256": "58fbe0acac5265fe9a93acb291e1dbd50432c4ebf00ff9b9fb4c34bc0f247c73",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 45252,
+      "creationFILETIME": 134359978189468355,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 38940,
+      "creationFILETIME": 134359978195634609,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 22252,
+      "creationFILETIME": 134359978195701395,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 39164,
+      "creationFILETIME": 134359978195850911,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\cl.exe",
+      "sha256": "f4eba2208e132daf500b7d7bbdf051e930c59dbdc1d87c35e146479427ffeb8d",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 9644,
+      "creationFILETIME": 134359978280972405,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 33868,
+      "creationFILETIME": 134359978281057499,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 1528,
+      "creationFILETIME": 134359978281205920,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\link.exe",
+      "sha256": "1a9889872481270ca45febcdaf26e75c53cea505c9eb214daea1098d4cf706bd",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 12752,
+      "creationFILETIME": 134359978324997355,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\msbuild.exe",
+      "sha256": "58fbe0acac5265fe9a93acb291e1dbd50432c4ebf00ff9b9fb4c34bc0f247c73",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 39468,
+      "creationFILETIME": 134359978325100302,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 42588,
+      "creationFILETIME": 134359978328886252,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 12792,
+      "creationFILETIME": 134359978328962638,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 11096,
+      "creationFILETIME": 134359978329134262,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\cl.exe",
+      "sha256": "f4eba2208e132daf500b7d7bbdf051e930c59dbdc1d87c35e146479427ffeb8d",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 45504,
+      "creationFILETIME": 134359978335235264,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\Tracker.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\msbuild\\current\\bin\\amd64\\tracker.exe",
+      "sha256": "e4c2da7394c9b6e30d3e169841fb1af18756d9e98d2a20a8f0972b2793a13f45",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 43536,
+      "creationFILETIME": 134359978335299768,
+      "image": "C:\\Windows\\System32\\conhost.exe",
+      "canonicalImage": "c:\\windows\\system32\\conhost.exe",
+      "sha256": "e449bce01f275cd08f3d4e64bb73b3b43ae845a0dbdb3e6131426e66537705e5",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 44764,
+      "creationFILETIME": 134359978335457812,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\link.exe",
+      "sha256": "1a9889872481270ca45febcdaf26e75c53cea505c9eb214daea1098d4cf706bd",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    },
+    {
+      "pid": 27804,
+      "creationFILETIME": 134359978337812760,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cvtres.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\cvtres.exe",
+      "sha256": "d2fff6de8c6f5f2ce0dca73f051f77e4ceae52450d4e71bc4fc9cb879e2b4ec4",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    }
+  ],
+  "lastAliveMembers": [],
+  "lastAccounting": {
+    "total": 75,
+    "active": 0
+  },
+  "retainedDaemonDecisions": [
+    {
+      "phase": "build-v26a-openbsd_compat",
+      "members": [
+        {
+          "pid": 40244,
+          "creationFILETIME": 134359977803204816,
+          "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+          "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+          "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+          "exactOwnedJobMembership": true,
+          "authority": "pinned tool"
+        }
+      ]
+    },
+    {
+      "phase": "build-v26a-libssh",
+      "members": [
+        {
+          "pid": 40244,
+          "creationFILETIME": 134359977803204816,
+          "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+          "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+          "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+          "exactOwnedJobMembership": true,
+          "authority": "pinned tool"
+        }
+      ]
+    },
+    {
+      "phase": "build-v26a-sshd",
+      "members": [
+        {
+          "pid": 40244,
+          "creationFILETIME": 134359977803204816,
+          "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+          "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+          "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+          "exactOwnedJobMembership": true,
+          "authority": "pinned tool"
+        }
+      ]
+    },
+    {
+      "phase": "build-v26a-sshd-auth",
+      "members": [
+        {
+          "pid": 40244,
+          "creationFILETIME": 134359977803204816,
+          "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+          "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+          "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+          "exactOwnedJobMembership": true,
+          "authority": "pinned tool"
+        }
+      ]
+    },
+    {
+      "phase": "build-v26a-sshd-session",
+      "members": [
+        {
+          "pid": 40244,
+          "creationFILETIME": 134359977803204816,
+          "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+          "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+          "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+          "exactOwnedJobMembership": true,
+          "authority": "pinned tool"
+        }
+      ]
+    },
+    {
+      "phase": "build-v26a-ssh-shellhost",
+      "members": [
+        {
+          "pid": 40244,
+          "creationFILETIME": 134359977803204816,
+          "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+          "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+          "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+          "exactOwnedJobMembership": true,
+          "authority": "pinned tool"
+        }
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\ssh-shellhost.exe",
+      "sha256": "c80995fa23cf6278ff9ee572542187f7be031a29f2f62736418192a053cf6e10",
+      "bytes": 182784
+    },
+    {
+      "path": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\ssh-shellhost.pdb",
+      "sha256": "17739e18dfe4ec3fc00dbd4c9f1a8ac3864d5dd88ddce6ad722243bac5a5d1ca",
+      "bytes": 4214784
+    },
+    {
+      "path": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd-auth.exe",
+      "sha256": "2af7dc2bcee9e957970250f23d6c1094c27631a406537cc33de6430d2b37a6ab",
+      "bytes": 1031680
+    },
+    {
+      "path": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd-auth.pdb",
+      "sha256": "5056f7b49d1f3e5a0818e119c8c38854351bb98193beabcf6a264d8729cdfb51",
+      "bytes": 9932800
+    },
+    {
+      "path": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd-session.exe",
+      "sha256": "e691e8172fac083109afebaadee7735b01e0b57c5489170a5c305b59a0386948",
+      "bytes": 1346048
+    },
+    {
+      "path": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd-session.pdb",
+      "sha256": "8393ba7c4d0df6b2e5dfa8645bc341f60e630b5f06991b9fd594a85181bf5090",
+      "bytes": 10809344
+    },
+    {
+      "path": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd.exe",
+      "sha256": "f9a6ad49bff88bbf61da3d7809266153b5001d572bbbf7f7f129e426066aaa25",
+      "bytes": 785408
+    },
+    {
+      "path": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd.pdb",
+      "sha256": "f48b3c6b0a18b95022960a5f288e42ad97e67ffceb82edac243a485097c5ff7f",
+      "bytes": 8663040
+    }
+  ],
+  "naturalActiveBeforeClose": 1,
+  "expectedDaemonCloseDecision": [
+    {
+      "pid": 40244,
+      "creationFILETIME": 134359977803204816,
+      "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+      "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+      "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+      "exactOwnedJobMembership": true,
+      "authority": "pinned tool"
+    }
+  ],
+  "expectedCompilerDaemonCleanup": true,
+  "activeAtSafetyClose": 0,
+  "safetyCloseMembers": [],
+  "desktopHandleClosed": true,
+  "cleanupCompletedMonotonicMs": 227909687
+}

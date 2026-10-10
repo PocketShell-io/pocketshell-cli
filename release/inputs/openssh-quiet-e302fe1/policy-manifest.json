@@ -1,0 +1,66 @@
+{
+  "scope": "Source-only two-product-file console policy proposal; no build/runtime authorization inferred",
+  "upstreamRepository": "https://github.com/PowerShell/openssh-portable",
+  "upstreamCommit": "e302fe1ed190e408573cf0139252e5db26eeba2f",
+  "productFiles": [
+    "contrib/win32/win32compat/w32fd.c",
+    "contrib/win32/win32compat/shell-host.c"
+  ],
+  "files": [
+    {
+      "file": "OpenSSHBuildHelper.psm1",
+      "bytes": 30133,
+      "sha256": "1757a8662350586d5cd4baec01bd769dacf2002777c7d7fc1bbc4a9c183fd0c9"
+    },
+    {
+      "file": "paths.targets",
+      "bytes": 987,
+      "sha256": "ad0eeca64e3d3eb924c25c8b4e2274f8de9fa40cfa8b6ad366e11ded58e20d87"
+    },
+    {
+      "file": "PROPOSAL.md",
+      "bytes": 4562,
+      "sha256": "bde6fb14948f76249e891cd88acafc40678b36436c0756fc72b3ae13b4ce5d4f"
+    },
+    {
+      "file": "shell-host.c",
+      "bytes": 43175,
+      "sha256": "82d580093f4c6587c4a2dd3e888b4c8c38122556bd1396cdcbbd396bab0b5b10"
+    },
+    {
+      "file": "shell-host.proposed.c",
+      "bytes": 43299,
+      "sha256": "f0e0a17ec66079ee16201abf92041034af2c502973e5a886fc14da2e2ac02c0d"
+    },
+    {
+      "file": "toolchain-custody.json",
+      "bytes": 1190,
+      "sha256": "42b9061c253cc160788e541483178b688d5ff5cf344c1b8c4b2917aee575d3db"
+    },
+    {
+      "file": "vcpkg_overlay_ports-libfido2-portfile.cmake",
+      "bytes": 923,
+      "sha256": "42efec1d7ddf4e9aee1f344bbe3023410a70f2e49e79de8cc34315ddbe631afe"
+    },
+    {
+      "file": "vcpkg_overlay_ports-libressl-portfile.cmake",
+      "bytes": 2789,
+      "sha256": "850d9bb6aac240c7a49b44d4658ecb315b1191e92bf8cfe64cd38cd064926305"
+    },
+    {
+      "file": "vcpkg.json",
+      "bytes": 426,
+      "sha256": "44daac2c978bc5f267c3d3f2f67fae4239a48c0dcf1e4cd79db6b0410fb4cde1"
+    },
+    {
+      "file": "w32fd.c",
+      "bytes": 38242,
+      "sha256": "a964fb8994b4b778fe51db359fa72ba04e4c0cead122156c21f110958f899186"
+    },
+    {
+      "file": "w32fd.proposed.c",
+      "bytes": 38425,
+      "sha256": "baeb8d3fcf8a24e71b242e890a97771c23c32c0914c2f4f7e763048d409eaf7a"
+    }
+  ]
+}

@@ -1,0 +1,475 @@
+{
+  "scope": "Read-only existing quiet-host source/build/role handoff; no rebuild/runtime/key/config read",
+  "version": "OpenSSH_for_Windows_10.3p1",
+  "upstream": {
+    "repo": "https://github.com/PowerShell/openssh-portable",
+    "commit": "e302fe1ed190e408573cf0139252e5db26eeba2f",
+    "anchors": [
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/hidden-launch-review/vendor-no-window-build-preparation/source-e302fe1.zip",
+        "bytes": 3305948,
+        "sha256": "8545e33b809f7ec6eb8363cbbbd2d4d68982d8ab7a8b7e6bb63506d82ae62223"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/ssh-build/s/version.h",
+        "bytes": 329,
+        "sha256": "ed9c651a212e28afcfe110a3d335ebce327e7a829f9a9b9b817b2872018b269d"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/private-openssh-v26a/manifest.json",
+        "bytes": 10816,
+        "sha256": "b0eddad8a04588138e5efd2c2289a3a95e911b388685d486b1fb75663c9b4a3e"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/private-openssh-v26a/receipts/ACTUAL-NONPTY-V29.json",
+        "bytes": 1427,
+        "sha256": "3e2ad09800e3651aab874528e112331c50034070e245cca811ff0224a1cad268"
+      }
+    ]
+  },
+  "manifestFilesIndependentlyMatched": [
+    {
+      "path": "bin/ssh-shellhost.exe",
+      "sha256": "c80995fa23cf6278ff9ee572542187f7be031a29f2f62736418192a053cf6e10",
+      "bytes": 182784,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\ssh-shellhost.exe",
+      "match": true
+    },
+    {
+      "path": "bin/sshd-auth.exe",
+      "sha256": "2af7dc2bcee9e957970250f23d6c1094c27631a406537cc33de6430d2b37a6ab",
+      "bytes": 1031680,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd-auth.exe",
+      "match": true
+    },
+    {
+      "path": "bin/sshd-session.exe",
+      "sha256": "e691e8172fac083109afebaadee7735b01e0b57c5489170a5c305b59a0386948",
+      "bytes": 1346048,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd-session.exe",
+      "match": true
+    },
+    {
+      "path": "bin/sshd.exe",
+      "sha256": "f9a6ad49bff88bbf61da3d7809266153b5001d572bbbf7f7f129e426066aaa25",
+      "bytes": 785408,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd.exe",
+      "match": true
+    },
+    {
+      "path": "bin/libcrypto.dll",
+      "sha256": "44dfaae6d459c8d60088548233e0635e0fe183a42dcd5e11886c18e6e7403102",
+      "bytes": 1726976,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\vcpkg_installed\\x64-custom\\x64-custom\\bin\\libcrypto.dll",
+      "match": true
+    },
+    {
+      "path": "bin/sshd_config_default",
+      "sha256": "adb2e7f67e0ff172f5d6ea87a15889398738ce074279801f68796b584c0344fe",
+      "bytes": 2144,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd_config_default",
+      "match": true
+    },
+    {
+      "path": "bin/LICENSE.txt",
+      "sha256": "5bb5b160726ef5756e4f32fe95b35249c294962419650f48d05134b486d27ccb",
+      "bytes": 21140,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\LICENSE.txt",
+      "match": true
+    },
+    {
+      "path": "bin/NOTICE.txt",
+      "sha256": "d8fb0495df76fc9bc4e379ef80154e933df823f55a743fb15745057635ccb114",
+      "bytes": 35280,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\NOTICE.txt",
+      "match": true
+    },
+    {
+      "path": "source/w32fd.c",
+      "sha256": "baeb8d3fcf8a24e71b242e890a97771c23c32c0914c2f4f7e763048d409eaf7a",
+      "bytes": 38425,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\win32compat\\w32fd.c",
+      "match": true
+    },
+    {
+      "path": "source/shell-host.c",
+      "sha256": "f0e0a17ec66079ee16201abf92041034af2c502973e5a886fc14da2e2ac02c0d",
+      "bytes": 43299,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\win32compat\\shell-host.c",
+      "match": true
+    },
+    {
+      "path": "receipts/OWNED-BUILD-V26A.json",
+      "sha256": "6b792806b8e13d6716f0107943d37aefe07c81199f84181a8a72c14f5ce92523",
+      "bytes": 42229,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\OWNED-BUILD-V26A.json",
+      "match": true
+    },
+    {
+      "path": "receipts/BUILD-V26A-OUTER.json",
+      "sha256": "dac4b7ce3e3da6784435712702b8cc81220fbfeb093c31d7c2dcf488f24ae66f",
+      "bytes": 684,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\BUILD-V26A-OUTER.json",
+      "match": true
+    },
+    {
+      "path": "receipts/BUILD-V26A-DEFAULT-WITNESS.json",
+      "sha256": "a46af8715a5fe1a860ace9f8786dea0b2d4806e43925869043d565069006dd31",
+      "bytes": 15367,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\BUILD-V26A-DEFAULT-WITNESS.json",
+      "match": true
+    },
+    {
+      "path": "receipts/direct-node-v26a-launch.json",
+      "sha256": "7b713579e8d091ea943cdd05999dd353582d75d45874d4132a86dd8adc4a7c59",
+      "bytes": 431,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\direct-node-v26a-launch.json",
+      "match": true
+    },
+    {
+      "path": "receipts/direct-node-v26a-terminal.json",
+      "sha256": "f17d11c3a20860f3a3864e10d8aa07a1b25abc3f4d05fd4400584a11c157bc18",
+      "bytes": 134,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\direct-node-v26a-terminal.json",
+      "match": true
+    },
+    {
+      "path": "receipts/owned-build-v26a-prepared-manifest.json",
+      "sha256": "ca8bb1ba9f2d35520c519bd00e00fed2918abf3a8b2fc609f98ee7b20f19512a",
+      "bytes": 1606,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-build-v26a-prepared-manifest.json",
+      "match": true
+    },
+    {
+      "path": "receipts/build-launch-v26a-pins.json",
+      "sha256": "0457909e37396932ff1a9d5639d4fa84353a5e04a79c0b07c539ac7deaadd491",
+      "bytes": 9600,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\build-launch-v26a-pins.json",
+      "match": true
+    },
+    {
+      "path": "receipts/dependency-source-downloads.json",
+      "sha256": "9cea54d3b45e4831afae02d9948a1e38f762515bd05dafb3ec0a39b832563427",
+      "bytes": 1549,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\dependency-source-downloads.json",
+      "match": true
+    },
+    {
+      "path": "receipts/short-build-inputs-v17.json",
+      "sha256": "9abe7d553c9307a5099149a20c344a2413ad4e4d2c528b977b97df962e1e5412",
+      "bytes": 5818645,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\short-build-inputs-v17.json",
+      "match": true
+    },
+    {
+      "path": "receipts/owned-dependency-append-v26a.props",
+      "sha256": "92d02e49670ff99747f30c36cfd21e6314a61cc7b2348ecc206a7e45dc6e63df",
+      "bytes": 511,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+      "match": true
+    },
+    {
+      "path": "source/policy-manifest.json",
+      "sha256": "5c3fcd9a8163af09b6e0a0f0a7118e7b2bfe818054902656dad06997ec9e0668",
+      "bytes": 2149,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-source-proposal\\manifest.json",
+      "match": true
+    }
+  ],
+  "overlay": {
+    "sourceRoot": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/ssh-build/s",
+    "originalAndProposedRoot": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/hidden-launch-review/vendor-no-window-source-proposal",
+    "roles": [
+      "contrib/win32/win32compat/w32fd.c",
+      "contrib/win32/win32compat/shell-host.c"
+    ],
+    "semantics": "SW_HIDE plus conditional CREATE_NO_WINDOW; legacy PTY CREATE_NEW_CONSOLE retained; win32_pty.c unchanged",
+    "pins": [
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/private-openssh-v26a/source/w32fd.c",
+        "bytes": 38425,
+        "sha256": "baeb8d3fcf8a24e71b242e890a97771c23c32c0914c2f4f7e763048d409eaf7a"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/private-openssh-v26a/source/shell-host.c",
+        "bytes": 43299,
+        "sha256": "f0e0a17ec66079ee16201abf92041034af2c502973e5a886fc14da2e2ac02c0d"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/private-openssh-v26a/source/policy-manifest.json",
+        "bytes": 2149,
+        "sha256": "5c3fcd9a8163af09b6e0a0f0a7118e7b2bfe818054902656dad06997ec9e0668"
+      }
+    ]
+  },
+  "build": {
+    "receipt": {
+      "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/private-openssh-v26a/receipts/OWNED-BUILD-V26A.json",
+      "bytes": 42229,
+      "sha256": "6b792806b8e13d6716f0107943d37aefe07c81199f84181a8a72c14f5ce92523"
+    },
+    "preparationRoot": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/hidden-launch-review/vendor-no-window-build-preparation",
+    "phases": [
+      {
+        "label": "build-v26a-openbsd_compat",
+        "pid": 39348,
+        "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+        "argv": [
+          "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\openbsd_compat.vcxproj",
+          "/t:Build",
+          "/m:1",
+          "/nr:false",
+          "/nologo",
+          "/v:minimal",
+          "/p:Configuration=Release",
+          "/p:Platform=x64",
+          "/p:BuildInParallel=false",
+          "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+          "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+          "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+          "/p:VcpkgEnabled=false",
+          "/p:WindowsSDKVersion=10.0.26100.0",
+          "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+          "/p:SpectreMitigation=Spectre",
+          "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+          "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+        ],
+        "naturalExit": 0
+      },
+      {
+        "label": "build-v26a-libssh",
+        "pid": 4116,
+        "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+        "argv": [
+          "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\libssh.vcxproj",
+          "/t:Build",
+          "/m:1",
+          "/nr:false",
+          "/nologo",
+          "/v:minimal",
+          "/p:Configuration=Release",
+          "/p:Platform=x64",
+          "/p:BuildInParallel=false",
+          "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+          "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+          "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+          "/p:VcpkgEnabled=false",
+          "/p:WindowsSDKVersion=10.0.26100.0",
+          "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+          "/p:SpectreMitigation=Spectre",
+          "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+          "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+        ],
+        "naturalExit": 0
+      },
+      {
+        "label": "build-v26a-sshd",
+        "pid": 28368,
+        "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+        "argv": [
+          "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\sshd.vcxproj",
+          "/t:Build",
+          "/m:1",
+          "/nr:false",
+          "/nologo",
+          "/v:minimal",
+          "/p:Configuration=Release",
+          "/p:Platform=x64",
+          "/p:BuildInParallel=false",
+          "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+          "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+          "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+          "/p:VcpkgEnabled=false",
+          "/p:WindowsSDKVersion=10.0.26100.0",
+          "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+          "/p:SpectreMitigation=Spectre",
+          "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+          "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+        ],
+        "naturalExit": 0
+      },
+      {
+        "label": "build-v26a-sshd-auth",
+        "pid": 24392,
+        "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+        "argv": [
+          "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\sshd-auth.vcxproj",
+          "/t:Build",
+          "/m:1",
+          "/nr:false",
+          "/nologo",
+          "/v:minimal",
+          "/p:Configuration=Release",
+          "/p:Platform=x64",
+          "/p:BuildInParallel=false",
+          "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+          "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+          "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+          "/p:VcpkgEnabled=false",
+          "/p:WindowsSDKVersion=10.0.26100.0",
+          "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+          "/p:SpectreMitigation=Spectre",
+          "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+          "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+        ],
+        "naturalExit": 0
+      },
+      {
+        "label": "build-v26a-sshd-session",
+        "pid": 44636,
+        "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+        "argv": [
+          "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\sshd-session.vcxproj",
+          "/t:Build",
+          "/m:1",
+          "/nr:false",
+          "/nologo",
+          "/v:minimal",
+          "/p:Configuration=Release",
+          "/p:Platform=x64",
+          "/p:BuildInParallel=false",
+          "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+          "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+          "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+          "/p:VcpkgEnabled=false",
+          "/p:WindowsSDKVersion=10.0.26100.0",
+          "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+          "/p:SpectreMitigation=Spectre",
+          "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+          "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+        ],
+        "naturalExit": 0
+      },
+      {
+        "label": "build-v26a-ssh-shellhost",
+        "pid": 12752,
+        "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe",
+        "argv": [
+          "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\ssh-shellhost.vcxproj",
+          "/t:Build",
+          "/m:1",
+          "/nr:false",
+          "/nologo",
+          "/v:minimal",
+          "/p:Configuration=Release",
+          "/p:Platform=x64",
+          "/p:BuildInParallel=false",
+          "/p:SolutionDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\",
+          "/p:UserRootDir=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\state-v26a\\user-props/",
+          "/p:ForceImportAfterCppTargets=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\fleet\\hidden-launch-review\\vendor-no-window-build-preparation\\owned-dependency-append-v26a.props",
+          "/p:VcpkgEnabled=false",
+          "/p:WindowsSDKVersion=10.0.26100.0",
+          "/p:WindowsTargetPlatformVersion=10.0.26100.0",
+          "/p:SpectreMitigation=Spectre",
+          "/p:VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp",
+          "/p:VC_LibraryPath_VC_x64_Desktop_spectre=C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\sp"
+        ],
+        "naturalExit": 0
+      }
+    ],
+    "toolchain": "VS2022 BuildTools MSVC14.44.35207 SDK10.0.26100.0; recorded CMake/vcpkg/source dependency custody",
+    "dependencies": "vcpkg a345bbdc68cdfda65603e24413b21afb28f110fb; LibreSSL4.2.0, zlib1.3.2, libfido2 1.16.0, libcbor0.14.0"
+  },
+  "runtime": [
+    {
+      "path": "bin/ssh-shellhost.exe",
+      "sha256": "c80995fa23cf6278ff9ee572542187f7be031a29f2f62736418192a053cf6e10",
+      "bytes": 182784,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\ssh-shellhost.exe"
+    },
+    {
+      "path": "bin/sshd-auth.exe",
+      "sha256": "2af7dc2bcee9e957970250f23d6c1094c27631a406537cc33de6430d2b37a6ab",
+      "bytes": 1031680,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd-auth.exe"
+    },
+    {
+      "path": "bin/sshd-session.exe",
+      "sha256": "e691e8172fac083109afebaadee7735b01e0b57c5489170a5c305b59a0386948",
+      "bytes": 1346048,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd-session.exe"
+    },
+    {
+      "path": "bin/sshd.exe",
+      "sha256": "f9a6ad49bff88bbf61da3d7809266153b5001d572bbbf7f7f129e426066aaa25",
+      "bytes": 785408,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd.exe"
+    },
+    {
+      "path": "bin/libcrypto.dll",
+      "sha256": "44dfaae6d459c8d60088548233e0635e0fe183a42dcd5e11886c18e6e7403102",
+      "bytes": 1726976,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\contrib\\win32\\openssh\\vcpkg_installed\\x64-custom\\x64-custom\\bin\\libcrypto.dll"
+    },
+    {
+      "path": "bin/sshd_config_default",
+      "sha256": "adb2e7f67e0ff172f5d6ea87a15889398738ce074279801f68796b584c0344fe",
+      "bytes": 2144,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\sshd_config_default"
+    },
+    {
+      "path": "bin/LICENSE.txt",
+      "sha256": "5bb5b160726ef5756e4f32fe95b35249c294962419650f48d05134b486d27ccb",
+      "bytes": 21140,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\LICENSE.txt"
+    },
+    {
+      "path": "bin/NOTICE.txt",
+      "sha256": "d8fb0495df76fc9bc4e379ef80154e933df823f55a743fb15745057635ccb114",
+      "bytes": 35280,
+      "source": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\ssh-build\\s\\bin\\x64\\Release\\NOTICE.txt"
+    }
+  ],
+  "qualification": {
+    "nonpty": {
+      "pin": {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/private-openssh-v26a/receipts/ACTUAL-NONPTY-V29.json",
+        "bytes": 1427,
+        "sha256": "3e2ad09800e3651aab874528e112331c50034070e245cca811ff0224a1cad268"
+      },
+      "scope": "Actual private patched server NONPTY key-auth/normalEOF/no-popup evidence; overall original harness failed lifetime sampling assertion",
+      "leafNaturalExit": 0,
+      "clientNaturalExit": 0,
+      "harnessAccepted": false,
+      "harnessFailure": "Client lifetime member identity was not captured",
+      "excludes": [
+        "Gateway",
+        "PTY",
+        "persistentendpointactivation"
+      ]
+    },
+    "ptyV34": {
+      "pin": {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/hidden-launch-review/PTY-SERVER-V34.json",
+        "bytes": 16521,
+        "sha256": "e2339970dceb4f576b4ae60da412477262a73820dcbb1ad26e66ced1581352e1"
+      },
+      "accepted": true,
+      "scope": "Temporary private patched OpenSSH22024 actual owned native PTY scenario; no persistent migration/Gateway/account",
+      "scenario": {
+        "completed": true,
+        "accepted": true,
+        "receiptPath": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/desktop-windows-host-cli/laptop-hidden-direct-bash-v34/result.json"
+      },
+      "activeBeforeClose": 0,
+      "cleanupErrors": [],
+      "fixtureStop": true,
+      "witnessPin": {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/hidden-launch-review/VENDOR-V34-DEFAULT-WITNESS.json",
+        "bytes": 13312,
+        "sha256": "cab4346a19044ce78d27c29cda4680cf2043f86e615c2d950d21185dc429e027"
+      },
+      "limits": "Temporary direct endpoint and historical GitBash backend; not tray/startup/new generic release acceptance. Outer receipt carries stale NONPTY wording; use actual PTY server+scenario fields."
+    }
+  },
+  "roleClosure": {
+    "sshd": "f9a6ad49bff88bbf61da3d7809266153b5001d572bbbf7f7f129e426066aaa25",
+    "sshdAuth": "2af7dc2bcee9e957970250f23d6c1094c27631a406537cc33de6430d2b37a6ab",
+    "sshdSession": "e691e8172fac083109afebaadee7735b01e0b57c5489170a5c305b59a0386948",
+    "shellhost": "c80995fa23cf6278ff9ee572542187f7be031a29f2f62736418192a053cf6e10",
+    "libcrypto": "44dfaae6d459c8d60088548233e0635e0fe183a42dcd5e11886c18e6e7403102",
+    "sftp": "Not in eight-file quiet artifact. Existing separate9.5.6.2 pair must be explicitly sourced/licensed/pinned or build matching upstream SFTP; no claimed matching10.3 SFTP provenance.",
+    "backend": "Windows Aplexer native pair plus actual engine/backend runtime closure required; not shell-only. Follow-up existing pair+PortableGit private overlay dossier in progress."
+  },
+  "handoff": "B2 custom quiet chosen by ROOT. Reuse source overlay/build provenance in maintained owner packaging; do not substitute official10.0p2 as proven quiet. New generic bundle requires its own exact closure receipt; personal keys/config are excluded."
+}

@@ -1,1 +1,2 @@
 tests/gateway/fixtures/task-object-authority.ps1 -text
+release/inputs/** -text
