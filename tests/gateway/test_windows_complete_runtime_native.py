@@ -17,7 +17,14 @@ The new-machine flow (revision D), as an ORDINARY user (unelevated token):
 4. a key login runs the MSYS bash (the backend shell role) and the aplexer CLI
    (with the SetEnv backend environment); a PTY session; SFTP put/get through
    the owned sftp-server;
-5. ``agent stop``.
+5. ``agent stop`` (in a ``finally`` that also covers a failed start/READY).
+
+SCOPE (honest): ``acceptJob`` is a TEST-ONLY report-only seam (agent_harness):
+the hosted runner's step job forbids a job-free launch, so the job membership is
+ACCEPTED and REPORTED here; this is NOT a NoJob qualification. NOT YET
+QUALIFIED here: the Aplexer SESSION lifecycle (create, typing, resize,
+reconnect, detach/reattach). This test covers the engines query, a PTY shell
+round trip with a computed reply, the backend bash and SFTP only.
 """
 
 from __future__ import annotations
@@ -108,15 +115,18 @@ def test_new_machine_complete_runtime(closure, tmp_path):
     authority = str(user_data / "managed-runtime" / "authority.json")
     code, data = agent("bind", "--manifest", endpoint["manifest"], "--authority", authority)
     assert code == 0, data
-    code, data = agent("start", "--timeout", "300")
-    if code != 0:
-        for p in sorted(Path(endpoint["state"]).rglob("*.json")):
-            print(p, p.read_text(encoding="utf-8", errors="replace")[:3000])
-    assert code == 0 and data["state"] == "pre-enrollment", data
-    assert data["endpoint"]["state"] == "ready" and data["endpoint"]["hostKey"]["proven"] is True
-    assert data["outbound"]["state"] == "not-enrolled"
+    print("SCOPE: acceptJob is a report-only CI seam (job membership accepted and reported), NOT NoJob "
+          "qualification; the Aplexer session lifecycle is NOT YET QUALIFIED by this test")
+    try:  # the finally also stops a start whose READY assertion fails
+        code, data = agent("start", "--timeout", "300")
+        if code != 0:
+            for p in sorted(Path(endpoint["state"]).rglob("*.json")):
+                print(p, p.read_text(encoding="utf-8", errors="replace")[:3000])
+        assert code == 0 and data["state"] == "pre-enrollment", data
+        assert data["endpoint"]["state"] == "ready" and data["endpoint"]["hostKey"]["proven"] is True
+        assert data["outbound"]["state"] == "not-enrolled"
+        print("launch (reported):", data["endpoint"].get("launch"))
 
-    try:
         # 3. authorize ONE own client key
         key = tmp_path / "client_ed25519"
         subprocess.run([str(SSH_DIR / "ssh-keygen.exe"), "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
@@ -132,20 +142,23 @@ def test_new_machine_complete_runtime(closure, tmp_path):
 
         # 4a. non-PTY session: the default shell runs the backend bash and the aplexer CLI
         script = (f'"{bash}" --noprofile --norc -c "echo bash-$((6*7)); uname -s"\r\n'
-                  f'"{a_exe}" --json engines\r\nexit\r\n')
+                  f'"{a_exe}" --json engines\r\nexit 5\r\n')
         p = subprocess.run([str(SSH_DIR / "ssh.exe"), *base, "-p", str(port), f"{user}@127.0.0.1"],
                            input=script.encode("utf-8"), capture_output=True, timeout=120)
         out = p.stdout.decode("utf-8", "replace")
         print("non-PTY:", p.returncode, out[-3000:], p.stderr.decode(errors="replace")[-2000:])
-        assert "bash-42" in out and "MSYS_NT" in out
+        assert "bash-42" in out and "bash-42" not in script and "MSYS_NT" in out
+        assert p.returncode == 5  # the real exit status of the remote command
         assert '"shell"' in out  # the aplexer CLI answered with its engines (incl. the shell engine)
 
-        # 4b. PTY session (ssh-shellhost + conhost): input reaches the shell, output comes back
+        # 4b. PTY session (ssh-shellhost + conhost): a COMPUTED reply absent from the input
+        pty_in = b"set /a 6*7+1000\r\nexit 7\r\n"
         p = subprocess.run([str(SSH_DIR / "ssh.exe"), *base, "-tt", "-p", str(port), f"{user}@127.0.0.1"],
-                           input=b"echo pty-ok-%COMPUTERNAME%\r\nexit\r\n", capture_output=True, timeout=120)
+                           input=pty_in, capture_output=True, timeout=120)
         out = p.stdout.decode("utf-8", "replace")
         print("PTY:", p.returncode, out[-2000:])
-        assert "pty-ok-" in out
+        assert "1042" in out and b"1042" not in pty_in
+        assert p.returncode == 7  # the real exit status through the PTY
 
         # 4c. SFTP put/get through the owned sftp-server
         local = tmp_path / "payload.bin"
