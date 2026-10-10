@@ -408,40 +408,93 @@ class NativePaths:
             pass
 
 
-def known_folders() -> dict:
-    """Measured native bindings (never inherited caller environment)."""
+def _native_context_inputs() -> tuple:
+    """(Windows directory, the token's profile directory, the user's DEFAULT
+    environment block as NAME=VALUE strings): exactly the native inputs of
+    `pocketshell-verify context` (native/verify/context_windows.go). The block
+    is CreateEnvironmentBlock(token, bInherit=FALSE): built by userenv from the
+    token and the registry, never from this process's environment."""
     import ctypes as c
     from ctypes import wintypes as w
 
-    class GUID(c.Structure):
-        _fields_ = [("a", w.DWORD), ("b", w.WORD), ("c", w.WORD), ("d", c.c_ubyte * 8)]
-
-    def guid(text):
-        h = text.replace("-", "")
-        return GUID(int(h[0:8], 16), int(h[8:12], 16), int(h[12:16], 16),
-                    (c.c_ubyte * 8)(*bytes.fromhex(h[16:])))
-
-    shell = c.WinDLL("shell32")
-    ole = c.WinDLL("ole32")
-    shell.SHGetKnownFolderPath.argtypes = [c.POINTER(GUID), w.DWORD, w.HANDLE, c.POINTER(c.c_wchar_p)]
-    ole.CoTaskMemFree.argtypes = [c.c_void_p]
-
-    def folder(text):
-        out = c.c_wchar_p()
-        if shell.SHGetKnownFolderPath(c.byref(guid(text)), 0, None, c.byref(out)) != 0:
-            raise ServiceError("cannot resolve a known folder")
+    k = c.WinDLL("kernel32", use_last_error=True)
+    adv = c.WinDLL("advapi32", use_last_error=True)
+    env = c.WinDLL("userenv", use_last_error=True)
+    k.GetCurrentProcess.restype = w.HANDLE
+    adv.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, c.POINTER(w.HANDLE)]
+    env.GetUserProfileDirectoryW.argtypes = [w.HANDLE, w.LPWSTR, c.POINTER(w.DWORD)]
+    env.CreateEnvironmentBlock.argtypes = [c.POINTER(c.c_void_p), w.HANDLE, w.BOOL]
+    env.DestroyEnvironmentBlock.argtypes = [c.c_void_p]
+    buf = c.create_unicode_buffer(32768)
+    n = k.GetSystemWindowsDirectoryW(buf, 32768)
+    if not n or n >= 32768:
+        raise ServiceError("cannot measure the Windows directory")
+    windows_dir = buf.value
+    token = w.HANDLE()
+    if not adv.OpenProcessToken(k.GetCurrentProcess(), 0x0008 | 0x0004 | 0x0002, c.byref(token)):
+        raise ServiceError("cannot open the process token")
+    try:
+        size = w.DWORD(32768)
+        if not env.GetUserProfileDirectoryW(token, buf, c.byref(size)):
+            raise ServiceError("cannot measure the user profile directory")
+        profile = buf.value
+        block = c.c_void_p()
+        if not env.CreateEnvironmentBlock(c.byref(block), token, False):
+            raise ServiceError("cannot build the user's default environment block")
         try:
-            return out.value
+            entries, offset = [], 0
+            while True:
+                item = c.wstring_at(block.value + offset)
+                if not item:
+                    break
+                entries.append(item)
+                offset += (len(item) + 1) * c.sizeof(c.c_wchar)
         finally:
-            ole.CoTaskMemFree(c.cast(out, c.c_void_p))
+            env.DestroyEnvironmentBlock(block)
+    finally:
+        k.CloseHandle(token)
+    return windows_dir, profile, entries
 
-    k = c.WinDLL("kernel32")
-    buf = c.create_unicode_buffer(260)
-    k.GetSystemWindowsDirectoryW(buf, 260)
-    return {"SystemRoot": buf.value, "SystemDrive": buf.value[:2],
-            "ProgramData": folder("62AB5D82-FDC1-4DC3-A9DD-070D1D495D97"),
-            "USERPROFILE": folder("5E6C858F-0E22-4760-9AFE-EA3317B67173"),
-            "LOCALAPPDATA": folder("F1B32785-6FBA-4FCF-9D55-7B8E7F157091")}
+
+def _expand_measured(value: str, measured: dict) -> str:
+    """context.go expandMeasured: only %SystemDrive%/%SystemRoot%/%USERPROFILE%."""
+    out = []
+    while True:
+        i = value.find("%")
+        if i < 0:
+            out.append(value)
+            return "".join(out)
+        j = value.find("%", i + 1)
+        if j <= i + 1:
+            raise ServiceError("malformed %variable% in the measured environment")
+        name = value[i + 1:j].upper()
+        if name not in measured:
+            raise ServiceError(f"%{name}% is not a natively measured variable")
+        out.append(value[:i])
+        out.append(measured[name])
+        value = value[j + 1:]
+
+
+def known_folders() -> dict:
+    """Measured native bindings, IDENTICAL in method to `pocketshell-verify
+    context` (no SHGetKnownFolder*: it fails where folder descriptions are
+    stripped, measured on Win35 0x80070002, and under an empty environment on
+    windows-latest). Never the inherited environment."""
+    windows_dir, profile, block = _native_context_inputs()
+    if len(windows_dir) < 3:
+        raise ServiceError("cannot measure the Windows directory")
+    found = {}
+    for item in block:
+        name, sep, value = item.partition("=")
+        if sep and name.upper() in ("PROGRAMDATA", "LOCALAPPDATA"):
+            found[name.upper()] = value
+    if not found.get("PROGRAMDATA") or not found.get("LOCALAPPDATA"):
+        raise ServiceError("the user's default environment block lacks ProgramData/LOCALAPPDATA")
+    measured = {"SYSTEMDRIVE": windows_dir[:2], "SYSTEMROOT": windows_dir, "USERPROFILE": profile}
+    return {"SystemRoot": windows_dir, "SystemDrive": windows_dir[:2],
+            "ProgramData": _expand_measured(found["PROGRAMDATA"], measured),
+            "USERPROFILE": profile,
+            "LOCALAPPDATA": _expand_measured(found["LOCALAPPDATA"], measured)}
 
 
 # --- verify-paths -------------------------------------------------------------------------

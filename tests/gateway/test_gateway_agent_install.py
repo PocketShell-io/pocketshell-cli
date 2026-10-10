@@ -523,3 +523,38 @@ def test_install_refuses_a_manifest_that_is_not_the_bound_one():
     paths.put(MANIFEST, b'{"version": 1, "changed": true}')
     with pytest.raises(inst.InstallError, match="manifest"):
         install(paths)
+
+
+# --- native folders: the SAME method as `pocketshell-verify context` (no KnownFolder) -------
+
+
+def test_known_folders_measure_like_the_verifier_context(monkeypatch):
+    """Win35: SHGetKnownFolderPath(ProgramData) -> 0x80070002 (stripped folder
+    descriptions). The installer measures exactly like context_windows.go:
+    GetSystemWindowsDirectory, GetUserProfileDirectory(token) and the user's DEFAULT
+    environment block (CreateEnvironmentBlock, bInherit FALSE) for ProgramData /
+    LOCALAPPDATA, expanding only the measured variables."""
+    monkeypatch.setattr(inst, "_native_context_inputs", lambda: (
+        "C:\\WINDOWS", "C:\\Users\\owner",
+        ["ALLUSERSPROFILE=C:\\ProgramData", "ProgramData=%SystemDrive%\\ProgramData",
+         "LOCALAPPDATA=%USERPROFILE%\\AppData\\Local", "PATH=%SystemRoot%\\system32"]))
+    assert inst.known_folders() == {"SystemRoot": "C:\\WINDOWS", "SystemDrive": "C:",
+                                    "ProgramData": "C:\\ProgramData", "USERPROFILE": "C:\\Users\\owner",
+                                    "LOCALAPPDATA": "C:\\Users\\owner\\AppData\\Local"}
+
+
+@pytest.mark.parametrize("block", [
+    ["ProgramData=C:\\ProgramData"],                                                  # LOCALAPPDATA missing
+    ["ProgramData=%ALLUSERSPROFILE%", "LOCALAPPDATA=C:\\Users\\owner\\AppData\\Local"],  # not measured
+    ["ProgramData=%SystemDrive\\ProgramData", "LOCALAPPDATA=C:\\L"],                    # malformed
+])
+def test_known_folders_refuse_unmeasured_or_unexpanded_values(monkeypatch, block):
+    monkeypatch.setattr(inst, "_native_context_inputs", lambda: ("C:\\WINDOWS", "C:\\Users\\owner", block))
+    with pytest.raises(inst.ServiceError):
+        inst.known_folders()
+
+
+def test_the_installer_never_uses_known_folder_apis():
+    import inspect
+
+    assert "SHGetKnownFolderPath" not in inspect.getsource(inst)
