@@ -58,7 +58,13 @@ def layout(user_data: str, release: str) -> dict:
             "endpoint": ep, "manifest": ntpath.join(ep, MANIFEST_NAME), "config": ntpath.join(ep, CONFIG_NAME),
             "backendConfig": ntpath.join(ep, BACKEND_CONFIG_NAME), "state": state,
             "stateTmp": ntpath.join(state, "tmp"), "pidFile": ntpath.join(state, "sshd.pid"),
-            "backend": ntpath.join(ep, "backend")}
+            "backend": ntpath.join(ep, "backend"), "catalogs": ntpath.join(root, "catalogs")}
+
+
+def catalog_copy(root: str, catalog_sha256: str) -> str:
+    """The installed owner-private copy of the catalog the receipt names (bind
+    reads it to check every release pin against its catalog row)."""
+    return ntpath.join(root, "catalogs", catalog_sha256 + ".json")
 
 
 def parse_endpoint_inputs(data: bytes) -> dict:
@@ -194,12 +200,14 @@ def local_account(owner_sid: str) -> str:
 
 
 def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, config_dir: str,
-                             endpoint_inputs: bytes, owner_sid: str, account: str, show_text: str,
-                             helper_sha256: str, paths, folders: dict, cli_version: str, dry_run: bool = False,
-                             now=None) -> dict:
+                             endpoint_inputs: bytes, owner_sid: str, account: str, show, paths, folders: dict,
+                             cli_version: str, dry_run: bool = False, now=None) -> dict:
     """Install FIRST (no prior bind). Verify, copy, measure, generate, and
-    commit authority.json (receipt v3) last. ``show_text`` is the CATALOG
-    helper's ``show --config-dir <config_dir>`` (the caller runs it)."""
+    commit authority.json (receipt v3) last; an interrupted install leaves no
+    authority (unbound, never READY). ``show(helper_path) -> (text, sha256)``
+    runs THIS catalog's helper ``show --config-dir`` (the caller checks the
+    reviewed digest): the INSTALLED owner-private copy, or the staged one on
+    --dry-run (nothing is copied then)."""
     from pocketshell.gateway import service_endpoint as ep
 
     for name, value in (("--user-data", user_data), ("--catalog", catalog_path), ("--staged", staged),
@@ -224,10 +232,7 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
     if catalog["lineage"]["cliVersion"] != cli_version:
         raise InstallError("catalog-mismatch", f"this CLI is {cli_version}; the catalog is release "
                            f"{catalog['lineage']['cliVersion']}")
-    if helper_sha256 != role_file(catalog, "helper")["sha256"]:
-        raise InstallError("binding-mismatch", "the show output must come from this catalog's own helper")
     folders = _system_environment(folders)
-    measured = _measured_show(show_text)
 
     # existing enrollment + the key files: measured, never read, never re-ACLed
     try:
@@ -249,6 +254,20 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
     for role in ENDPOINT_ROLES:
         role_file(catalog, role)
     lay = layout(user_data, catalog["release"])
+    helper_rel = role_file(catalog, "helper")["path"].split("/")
+    if not dry_run:  # the release closure first (no authority yet: still unbound)
+        _copy_release(lay["root"], lay["release"], lay["tmp"], blobs, want, catalog, owner_sid, paths)
+    helper = ntpath.join(staged if dry_run else lay["release"], *helper_rel)
+    try:
+        show_text, helper_sha = show(helper)
+    except InstallError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise InstallError("binding-mismatch", f"the release helper's show refused: {sanitize(str(exc), 300)}") \
+            from None
+    if helper_sha != role_file(catalog, "helper")["sha256"]:
+        raise InstallError("binding-mismatch", "the show output must come from this catalog's own helper")
+    measured = _measured_show(show_text)
     generated = generate(lay=lay, catalog=catalog, owner_sid=owner_sid, account=account, port=measured["port"],
                          inputs=inputs, folders=folders)
     if len(generated["manifest"]) > ep.MAX_MANIFEST_BYTES:
@@ -275,10 +294,14 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
     if dry_run:
         return receipt
 
-    _copy_release(lay["root"], lay["release"], lay["tmp"], blobs, want, catalog, owner_sid, paths)
     for folder in (lay["endpoint"], lay["state"], lay["stateTmp"], lay["backend"],
                    *(ntpath.join(lay["backend"], v) for v in BACKEND_DIRS.values())):
         paths.mkdir(folder)
+    paths.mkdir(lay["catalogs"])
+    copy = catalog_copy(lay["root"], cat["sha256"])
+    paths.write(copy, cat["bytes"])
+    if paths.file(copy, owner_sid, private=True, max_bytes=0, private_root=lay["root"])["sha256"] != cat["sha256"]:
+        raise InstallError("install-failed", "the catalog copy did not land intact")
     for key in ("config", "backendConfig", "manifest"):
         paths.write(lay[key], generated[key])
     for key in ("config", "backendConfig", "manifest"):
@@ -291,3 +314,53 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
             raise InstallError("install-failed", f"{folder} is not the protected directory")
     paths.write(ntpath.join(lay["root"], "authority.json"), json.dumps(receipt, indent=1).encode("utf-8"))
     return receipt
+
+
+MAX_AUTHORITY = 64 * 1024
+
+
+def load_authority(authority: str, owner_sid: str, paths) -> tuple:
+    """(receipt v3, authority sha256, release_pins): the installed authority,
+    read handle-validated from the owner-only managed-runtime root, plus the
+    catalog rows of its release (casefolded installed path -> sha256) from
+    the installed catalog copy the receipt's catalogSHA256 names."""
+
+    def bad(why):
+        return InstallError("authority-invalid", f"the installed authority is unusable: {why}")
+
+    if not _abs(authority) or ntpath.basename(authority).casefold() != "authority.json":
+        raise bad("--authority must be <userData>\\managed-runtime\\authority.json")
+    authority = ntpath.normpath(authority)
+    root = ntpath.dirname(authority)
+    if ntpath.basename(root).casefold() != "managed-runtime":
+        raise bad("--authority must be <userData>\\managed-runtime\\authority.json")
+    try:
+        got = paths.file(authority, owner_sid, private=True, max_bytes=MAX_AUTHORITY, private_root=root)
+    except Exception as exc:  # noqa: BLE001
+        raise bad(f"cannot read it owner-only ({sanitize(str(exc), 200)})") from None
+    try:
+        r = json.loads((got["bytes"] or b"").decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise bad("not UTF-8 JSON") from None
+    if not isinstance(r, dict) or r.get("version") != RECEIPT_VERSION or r.get("ownerSid") != owner_sid \
+            or set(r) != {"version", "release", "catalogSHA256", "ownerSid", "binding", "environment", "location",
+                          "installer", "endpoint"}:
+        raise bad("not a receipt v3 of this user")
+    e = r["endpoint"]
+    if not isinstance(e, dict) or not isinstance(e.get("root"), str) or not _same(e["root"], root):
+        raise bad("its endpoint root is not this managed-runtime")
+    if not isinstance(r["catalogSHA256"], str) or not re.fullmatch(r"[a-f0-9]{64}", r["catalogSHA256"]):
+        raise bad("catalogSHA256")
+    try:
+        copy = paths.file(catalog_copy(root, r["catalogSHA256"]), owner_sid, private=True, max_bytes=MAX_AUTHORITY,
+                          private_root=root)
+    except Exception as exc:  # noqa: BLE001
+        raise bad(f"the installed catalog copy is missing or not owner-only ({sanitize(str(exc), 200)})") from None
+    if copy["sha256"] != r["catalogSHA256"] or copy["bytes"] is None:
+        raise bad("the installed catalog copy is not the recorded catalog")
+    catalog = parse_catalog(copy["bytes"])
+    if catalog["version"] != 3 or catalog["release"] != r["release"]:
+        raise bad("the recorded catalog is not this release's catalog v3")
+    release = ntpath.join(root, "releases", catalog["release"])
+    pins = {ntpath.normcase(ntpath.join(release, *f["path"].split("/"))): f["sha256"] for f in catalog["files"]}
+    return r, got["sha256"], pins

@@ -69,7 +69,7 @@ class Host:
         self.config_dir = home + "\\PocketShellFleet\\enrollment\\keys"
         self.host_key = home + "\\PocketShellFleet\\endpoint-keys\\ssh_host_ed25519_key"
         self.authorized = home + "\\PocketShellFleet\\endpoint-keys\\authorized_keys"
-        self.show = (f"server:          wss://gateway.pocketshell.io\ndevice id:       host-{user.replace(".", "-")}-1\n"
+        self.show = (f"server:          wss://gateway.pocketshell.io\ndevice id:       host-{user.replace('.', '-')}-1\n"
                      f"local ssh:       127.0.0.1:{port} (loopback only)\npinned ssh host key: {KEY_LINE}\n")
 
 
@@ -138,7 +138,7 @@ def inputs(host, **over):
 def install(host, paths, **over):
     kw = dict(user_data=host.user_data, catalog_path=host.catalog_path, staged=host.staged,
               config_dir=host.config_dir, endpoint_inputs=inputs(host), owner_sid=host.sid, account=host.user,
-              show_text=host.show, helper_sha256=sha(b"helper"), paths=paths, folders=host.folders,
+              show=lambda helper: (host.show, sha(b"helper")), paths=paths, folders=host.folders,
               cli_version=__version__, now=0)
     kw.update(over)
     return eps.install_endpoint_runtime(**kw)
@@ -235,7 +235,7 @@ def test_a_shipped_endpoint_binary_is_verified_against_the_catalog():
 def test_show_must_be_the_enrolled_loopback_port_and_key():
     host = Host()
     with pytest.raises(inst.InstallError):
-        install(host, staged(host), show_text=host.show.replace("pinned ssh host key", "pinned something"))
+        install(host, staged(host), show=lambda h: (host.show.replace("pinned ssh host key", "pinned x"), sha(b"helper")))
 
 
 # --- trust from the installed authority --------------------------------------------------
@@ -343,4 +343,58 @@ def test_trust_refuses_a_role_pin_that_is_not_the_catalog_row():
 def test_show_must_come_from_the_catalog_helper():
     host = Host()
     with pytest.raises(inst.InstallError, match="catalog's own helper"):
-        install(host, staged(host), helper_sha256="0" * 64)
+        install(host, staged(host), show=lambda h: (host.show, "0" * 64))
+
+
+def test_show_runs_the_installed_helper_and_nothing_commits_before_it():
+    host = Host()
+    paths = staged(host)
+    seen = []
+
+    def show(helper):
+        seen.append(helper)
+        assert not any(w.endswith("authority.json") for w in paths.writes)
+        return host.show, sha(b"helper")
+
+    install(host, paths, show=show)
+    assert any(w.endswith("authority.json") for w in paths.writes)
+    assert seen[0].casefold().endswith("\\managed-runtime\\releases\\r2026-10-10-3\\bin\\pocketshell-link.exe")
+    dry = []
+    install(host, staged(host), dry_run=True, show=lambda h: (dry.append(h), (host.show, sha(b"helper")))[1])
+    assert dry[0].startswith(host.staged)
+
+
+# --- the installed authority (bind/start input) -----------------------------------------
+
+
+def test_load_authority_returns_the_receipt_and_catalog_rows():
+    host = Host()
+    paths, receipt, e, data, digest = _installed(host)
+    authority = host.user_data + "\\managed-runtime\\authority.json"
+    r, asha, rows = eps.load_authority(authority, host.sid, paths)
+    assert r == receipt and asha == sha(paths.files[paths.key(authority)][1])
+    m = ep.parse_manifest(data, e["manifest"])
+    ep.check_trust_authority(m, r, file_sha256=digest, release_pins=rows)
+
+
+@pytest.mark.parametrize("mutate", ["sid", "catalog-copy", "unprotected", "not-managed-runtime", "v2"])
+def test_load_authority_refuses(mutate):
+    host = Host()
+    paths, receipt, e, _data, _digest = _installed(host)
+    authority = host.user_data + "\\managed-runtime\\authority.json"
+    sid = host.sid
+    if mutate == "sid":
+        sid = "S-1-5-21-9-9-9-1001"
+    elif mutate == "catalog-copy":
+        copy = eps.catalog_copy(host.user_data + "\\managed-runtime", receipt["catalogSHA256"])
+        paths.put(copy, paths.files[paths.key(copy)][1] + b" ")
+    elif mutate == "unprotected":
+        paths.unprotected.add(paths.key(authority))
+    elif mutate == "not-managed-runtime":
+        authority = host.user_data + "\\elsewhere\\authority.json"
+        paths.put(authority, paths.files[paths.key(host.user_data + "\\managed-runtime\\authority.json")][1])
+    elif mutate == "v2":
+        paths.put(authority, json.dumps(dict(receipt, version=2)).encode())
+    with pytest.raises(inst.InstallError) as err:
+        eps.load_authority(authority, sid, paths)
+    assert err.value.code == "authority-invalid"
