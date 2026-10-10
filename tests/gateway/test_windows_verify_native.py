@@ -397,3 +397,97 @@ def test_context_usage_errors():
     p = subprocess.run([VERIFY, "context"], env={}, stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
                        creationflags=0x08000000)
     assert p.returncode == 2 and json.loads(p.stdout)["ok"] is False
+
+
+# --- diagnostic 7a: ACL authority starts at the declared request ROOT ---------------
+# Measured on the user's laptop (runner 27552): every request refused at the
+# ABOVE-root ancestor C:\Users\<u>\AppData because of a capability-SID
+# full-control ACE. Shape, reparse, canonical checks and held no-delete
+# handles still cover the whole path; ACL role policy starts at the root.
+
+CAPABILITY = "S-1-15-3-2968813833-811790644-2202111208-3784096404-1081847329-2708967783-1438471679"
+
+
+def _grant(path, sid, rights="F"):
+    p = subprocess.run(["icacls", str(path), "/grant", f"*{sid}:({rights})"], capture_output=True, text=True)
+    if p.returncode != 0:
+        pytest.skip(f"icacls cannot grant {sid}: {p.stdout} {p.stderr}")
+
+
+@pytest.fixture
+def scoped(tmp_path):
+    if not VERIFY or not os.path.isfile(VERIFY):
+        pytest.skip("verifier not built")
+    from pocketshell import windows_security as ws
+    from pocketshell.gateway import service_windows as win
+
+    above = tmp_path / "AppDataLike"
+    res = above / "resources"
+    (res / "runtime" / "sub").mkdir(parents=True)
+    (res / "host-runtime-catalog.json").write_bytes(b"{}")
+    (res / "runtime" / "sub" / "m.bin").write_bytes(b"module")
+    private = above / "private-root"
+    ws.write_private(private / "tmp" / "keep", b"x")
+    return {"above": above, "res": res, "private": private, "sid": win.WindowsApi().current_sid()}
+
+
+def _verify_scoped(s, requests):
+    argv_ = [VERIFY, "verify", "--operation-id", "op-7a", "--owner-sid", s["sid"],
+             "--resources-root", str(s["res"]), "--private-root", str(s["private"])]
+    for kind, path in requests:
+        argv_ += ["--request", f"{kind}={path}"]
+    p = subprocess.run(argv_, capture_output=True, timeout=60, creationflags=0x08000000)
+    reply = json.loads(p.stdout.decode().splitlines()[0])
+    print(p.returncode, json.dumps(reply)[:1200])
+    return p.returncode, reply
+
+
+def test_7a_capability_ace_above_the_root_is_outside_the_acl_scope(scoped):
+    _grant(scoped["above"], CAPABILITY)  # the measured laptop shape, ABOVE both roots
+    code, reply = _verify_scoped(scoped, [("document", scoped["res"] / "host-runtime-catalog.json"),
+                                          ("binary", scoped["res"] / "runtime" / "sub" / "m.bin"),
+                                          ("directory", scoped["private"]), ("directory", scoped["private"] / "tmp")])
+    assert code == 0 and reply["ok"], reply
+
+
+@pytest.mark.parametrize("where", ["resources-root", "inside-resources", "private-root", "private-intermediate"])
+def test_7a_the_same_ace_at_or_below_a_root_still_refuses(scoped, where):
+    target = {"resources-root": scoped["res"], "inside-resources": scoped["res"] / "runtime" / "sub",
+              "private-root": scoped["private"], "private-intermediate": scoped["private"] / "tmp"}[where]
+    _grant(target, CAPABILITY)
+    req = ([("binary", scoped["res"] / "runtime" / "sub" / "m.bin")] if "resources" in where
+           else [("directory", scoped["private"] / "tmp")])
+    code, reply = _verify_scoped(scoped, req)
+    assert code == 1 and not reply["results"][0]["ok"], reply
+
+
+@pytest.mark.parametrize("sid", ["S-1-5-32-545", "S-1-1-0"])  # Users, Everyone
+def test_7a_foreign_mutation_inside_the_resources_root_still_refuses(scoped, sid):
+    _grant(scoped["res"] / "runtime", sid, "M")
+    code, reply = _verify_scoped(scoped, [("binary", scoped["res"] / "runtime" / "sub" / "m.bin")])
+    assert code == 1 and "foreign mutation authority" in reply["results"][0]["problem"], reply
+
+
+def test_7a_reparse_above_the_root_still_refuses(scoped, tmp_path):
+    junction = tmp_path / "jroot"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(scoped["above"])], check=True, capture_output=True)
+    s = dict(scoped, res=junction / "resources", private=junction / "private-root")
+    code, reply = _verify_scoped(s, [("document", s["res"] / "host-runtime-catalog.json")])
+    assert code == 1 and "reparse" in reply["results"][0]["problem"], reply
+
+
+def test_7a_held_root_cannot_be_replaced_while_held(scoped):
+    """Why no parent-ACL exception is needed: every component, the root
+    included, is held without delete sharing for the whole hold."""
+    reqs = [("binary", scoped["res"] / "runtime" / "sub" / "m.bin",
+             __import__("hashlib").sha256(b"module").hexdigest())]
+    argv_ = [VERIFY, "verify", "--operation-id", "op-7b", "--owner-sid", scoped["sid"], "--resources-root",
+             str(scoped["res"]), "--request", f"binary:{reqs[0][2]}={reqs[0][1]}", "--hold", "--entry", str(reqs[0][1])]
+    proc = subprocess.Popen(argv_, stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=0x08000000)
+    try:
+        assert json.loads(proc.stdout.readline())["ok"]
+        with pytest.raises(PermissionError):
+            os.replace(scoped["res"], scoped["above"] / "swapped")
+    finally:
+        proc.stdin.close()
+        proc.wait(timeout=10)
