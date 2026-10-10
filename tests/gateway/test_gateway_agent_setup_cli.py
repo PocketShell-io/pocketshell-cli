@@ -452,21 +452,19 @@ def test_enroll_role_refuses_an_enrolled_binding_and_a_missing_login(agent, auth
     assert result.exit_code == 1 and data["error"]["code"] == "already-enrolled"
 
 
-def authorize_file(path, *extra):
-    return run("authorize-key", "--public-key-file", str(path), "--json", "--operation-id", "op-k", *extra)
+def authorize_arg(line, *extra):
+    return run("authorize-key", "--public-key", line, "--json", "--operation-id", "op-k", *extra)
 
 
-def test_authorize_key_file_form_requires_and_records_consent(authority, tmp_path):
+def test_authorize_key_argv_form_requires_and_records_consent(authority, tmp_path):
     from gateway_keyblobs import ED25519_LINE_2
 
     ak = _generated(authority, tmp_path)
     assert bind_pre()[0].exit_code == 0
-    pub = tmp_path / "phone.pub"
-    pub.write_text(ED25519_LINE_2 + " phone\n")
-    result, data = authorize_file(pub)
+    result, data = authorize_arg(ED25519_LINE_2 + " phone")
     assert result.exit_code == 2 and data["error"]["code"] == "usage"  # no --confirmed
     assert ak.read_bytes() == b""
-    result, data = authorize_file(pub, "--confirmed")
+    result, data = authorize_arg(ED25519_LINE_2 + " phone", "--confirmed")
     assert result.exit_code == 0, result.output
     assert ak.read_text().splitlines() == [ED25519_LINE_2]
     log = [json.loads(x) for x in agent_mod._read_private(agent_mod._path("authorizations.jsonl")).splitlines()]
@@ -482,8 +480,17 @@ def test_authorize_key_file_form_requires_and_records_consent(authority, tmp_pat
 def test_authorize_key_refuses_a_non_canonical_public_key(authority, tmp_path, text):
     ak = _generated(authority, tmp_path)
     assert bind_pre()[0].exit_code == 0
-    pub = tmp_path / "k.pub"
-    pub.write_text(text)
-    result, data = authorize_file(pub, "--confirmed")
+    result, data = authorize_arg(text.rstrip("\n"), "--confirmed")
     assert result.exit_code == 1 and data["error"]["code"] == "key-refused", result.output
     assert ak.read_bytes() == b""
+
+
+def test_authorize_key_argv_is_bounded_and_exclusive(authority, tmp_path):
+    from gateway_keyblobs import ED25519_LINE
+
+    ak = _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    result, data = authorize_arg("ssh-rsa " + "A" * 20000, "--confirmed")
+    assert result.exit_code in (1, 2) and ak.read_bytes() == b""
+    result, data = run("authorize-key", "--public-key", ED25519_LINE, "--public-key-stdin", "--confirmed", "--json")
+    assert result.exit_code == 2 and data["error"]["code"] == "usage"

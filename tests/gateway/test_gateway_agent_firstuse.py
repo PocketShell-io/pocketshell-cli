@@ -67,8 +67,7 @@ def test_login_start_returns_only_public_fields_and_stores_the_device_code_priva
     doc, code = fu.login_start(operation_id="op-start", label="me@host")
     assert code == 0 and doc["state"] == "pending" and doc["action"] == "login-start"
     assert doc["login"] == {"userCode": "BCDF-GH23", "verificationUri": "https://app.pocketshell.io/device",
-                            "verificationUriComplete": "https://app.pocketshell.io/device?code=BCDF-GH23",
-                            "expiresAt": 1_800_000_600, "interval": 5}
+                            "expiresAt": 1_800_000_600, "interval": 5}  # exactly these (Fleet)
     _no_secret(doc)
     stored = json.loads(fu._read_private(fu.pending_path("op-start")))
     assert stored["deviceCode"] == DEVICE_CODE and stored["operationId"] == "op-start"
@@ -151,5 +150,4 @@ def test_login_start_refuses_an_untrusted_verification_origin(env, monkeypatch):
     monkeypatch.setattr(broker, "start_device", lambda base, label: bad)
     doc, code = fu.login_start(operation_id="op-start", label="me@host")
     assert doc["login"]["verificationUri"] == "https://app.pocketshell.io/device"
-    assert doc["login"]["verificationUriComplete"] is None
     _no_secret(doc)

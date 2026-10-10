@@ -626,30 +626,20 @@ def agent_install(user_data, catalog, staged, dry_run, config_dir, endpoint_inpu
 
 @agent_group.command("authorize-key")
 @click.option("--public-key-stdin", is_flag=True, help="Read ONE OpenSSH public-key line from stdin.")
-@click.option("--public-key-file", default=None, metavar="PATH",
-              help="Read ONE OpenSSH public-key line from this file (at most 16 KiB; a public key, not a secret).")
+@click.option("--public-key", "public_key", default=None, metavar="LINE",
+              help="ONE OpenSSH public-key line as an argument (at most 16 KiB; a public key, not a secret).")
 @click.option("--confirmed", is_flag=True, help="The user explicitly confirmed this is their own client key.")
 @_JSON
 @_OPERATION_ID
-def agent_authorize_key(public_key_stdin, public_key_file, confirmed, as_json, operation_id):
+def agent_authorize_key(public_key_stdin, public_key, confirmed, as_json, operation_id):
     """Authorize one of your own client public keys for this endpoint (new-machine installs)."""
     _check_operation_id(operation_id)
     api, runner = _api_runner()
-    if public_key_stdin == (public_key_file is not None):
+    if public_key_stdin == (public_key is not None):
         _emit_raw({"version": 1, "operationId": operation_id, "action": "authorize-key", "ok": False,
-                   "authorized": None, "error": {"code": "usage", "message": "exactly one of --public-key-stdin / "
-                                                 "--public-key-file"}}, 2)
-    if public_key_file is not None:
-        try:
-            with open(public_key_file, "rb") as handle:
-                text = handle.read(16 * 1024 + 1).decode("utf-8", "replace")
-        except OSError as exc:
-            text = None
-            _emit_raw({"version": 1, "operationId": operation_id, "action": "authorize-key", "ok": False,
-                       "authorized": None, "error": {"code": "usage", "message": f"cannot read the key file: "
-                                                     f"{exc.strerror}"}}, 2)
-    else:
-        text = click.get_text_stream("stdin").read(16 * 1024 + 1)
+                   "authorized": None, "error": {"code": "usage", "message": "exactly one of --public-key / "
+                                                 "--public-key-stdin"}}, 2)
+    text = public_key if public_key is not None else click.get_text_stream("stdin").read(16 * 1024 + 1)
     _emit_raw(*_agent.authorize_key_command(text, api=api, runner=runner, operation_id=operation_id,
                                             confirmed=confirmed))
 

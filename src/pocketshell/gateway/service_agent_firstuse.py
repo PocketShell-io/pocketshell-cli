@@ -92,10 +92,7 @@ def login_start(*, operation_id: str, label=None) -> tuple:
             return _doc(action, operation_id, ok=False, error=("broker-malformed", "malformed user code")), \
                 EXIT_ERROR
         origin = web_origin_mod.web_origin()
-        uri = _trusted(start.verification_uri, origin) or f"{origin}/device"
-        complete = _trusted(start.verification_uri_complete, origin)
-        if _trusted(start.verification_uri, origin) is None or complete != f"{uri}?code={start.user_code}":
-            complete = None
+        uri = _trusted(start.verification_uri, origin) or f"{origin}/device"  # never an untrusted origin
         interval = min(max(int(start.interval), 1), MAX_INTERVAL)
         expires_at = int(_now()) + int(start.expires_in)
         record = {"version": 1, "operationId": operation_id, "brokerUrl": base, "label": label,
@@ -105,8 +102,8 @@ def login_start(*, operation_id: str, label=None) -> tuple:
     except AccountError as exc:
         return _doc(action, operation_id, ok=False, error=("login-failed", str(exc))), EXIT_ERROR
     return _doc(action, operation_id, ok=True, state="pending",
-                login={"userCode": start.user_code, "verificationUri": uri, "verificationUriComplete": complete,
-                       "expiresAt": expires_at, "interval": interval}), EXIT_OK
+                login={"userCode": start.user_code, "verificationUri": uri, "expiresAt": expires_at,
+                       "interval": interval}), EXIT_OK
 
 
 def login_complete(*, operation_id: str, login: str, timeout: float = 60) -> tuple:
