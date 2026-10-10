@@ -149,7 +149,15 @@ def test_new_machine_complete_runtime(closure, tmp_path):
             result, out_ = hex(proc.returncode & 0xFFFFFFFF), proc.stdout + proc.stderr
         except subprocess.TimeoutExpired as exc:
             result, out_ = "running", (exc.stdout or b"") + (exc.stderr or b"")
-        print("BISECT", label, "->", result, ascii(out_[-600:]))
+        print("BISECT (runner token, inherited CI job; NOT an ordinary-user NoJob qualification)", label, "->",
+              result, ascii(out_[-600:]))
+        return result
+
+    def merged(base, add):
+        """Windows env names are case-insensitive: ONE key per name; the added value wins."""
+        out = {k.casefold(): (k, v) for k, v in base.items()}
+        out.update({k.casefold(): (k, v) for k, v in add.items()})
+        return dict(out.values())
 
     closed = dict(manifest0["environment"])
     back = {k: v.replace("/", "\\") for k, v in closed.items()}
@@ -157,15 +165,16 @@ def test_new_machine_complete_runtime(closure, tmp_path):
                                         "ALLUSERSPROFILE", "ProgramFiles", "PROGRAMDATA") if k in os.environ}
     root_cwd, bin_cwd = manifest0["root"], str(Path(manifest0["daemon"]).parent)
     bisect("inherited-env root-cwd", dict(os.environ), root_cwd)
-    bisect("closed-env root-cwd", closed, root_cwd)
+    # CONTROL for the owned NULL-PATH fix (NULL-PATH-FIX.md): the daemon must RUN in the exact closed env
+    assert bisect("closed-env root-cwd", closed, root_cwd) == "running", "the daemon crashes without PATH"
     bisect("closed-env bin-cwd", closed, bin_cwd)
     bisect("closed-env backslashed", back, root_cwd)
-    bisect("closed-env SystemRoot+WINDIR backslashed", {**closed, "SystemRoot": "C:\\Windows",
-                                                        "WINDIR": "C:\\Windows"}, root_cwd)
-    bisect("closed-env ProgramData backslashed", {**closed, "ProgramData": "C:\\ProgramData"}, root_cwd)
+    bisect("closed-env SystemRoot+WINDIR backslashed", merged(closed, {"SystemRoot": "C:\\Windows",
+                                                                        "WINDIR": "C:\\Windows"}), root_cwd)
+    bisect("closed-env ProgramData backslashed", merged(closed, {"ProgramData": "C:\\ProgramData"}), root_cwd)
     for key, value in extra.items():
-        bisect(f"closed-env + {key}", {**closed, key: value}, root_cwd)
-    bisect("closed-env + all extras", {**closed, **extra}, root_cwd)
+        bisect(f"closed-env + {key}", merged(closed, {key: value}), root_cwd)
+    bisect("closed-env + all extras", merged(closed, extra), root_cwd)
     print("SCOPE: acceptJob is a report-only CI seam (job membership accepted and reported), NOT NoJob "
           "qualification; the Aplexer session lifecycle is NOT YET QUALIFIED by this test")
     try:  # the finally also stops a start whose READY assertion fails

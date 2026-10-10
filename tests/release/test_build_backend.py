@@ -68,3 +68,17 @@ def test_every_failure_class_writes_a_refused_receipt_with_the_processes(bb, mon
     assert [p["label"] for p in receipt["processes"]] == ["first-step"]
     assert receipt["processes"][0]["naturalExit"] == 0
     assert receipt["error"]["type"] and len(receipt["error"]["message"]) <= 2000
+
+
+def test_the_null_path_overlay_guards_every_path_value_use(bb):
+    """NULL-PATH-FIX.md: the daemon entry points never dereference a NULL PATH."""
+    inputs = Path(bb.INPUTS) / "openssh-quiet-e302fe1"
+    for rel in ("contrib/win32/win32compat/wmain_sshd.c", "contrib/win32/win32compat/wmain_sshd-session.c",
+                "contrib/win32/win32compat/wmain_sshd-auth.c"):
+        assert rel in bb.OPENSSH["overlay"]
+        text = (inputs / Path(rel).name).read_text(encoding="utf-8")
+        import hashlib
+
+        assert hashlib.sha256((inputs / Path(rel).name).read_bytes()).hexdigest() == bb.OPENSSH["overlay"][rel][1]
+        assert "wcslen(path_value)" not in text  # every length uses the guarded value
+        assert text.count('path_value ? path_value : L""') == 2

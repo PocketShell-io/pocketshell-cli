@@ -52,6 +52,17 @@ OPENSSH = {
         "contrib/win32/win32compat/shell-host.c": (
             "82d580093f4c6587c4a2dd3e888b4c8c38122556bd1396cdcbbd396bab0b5b10",
             "f0e0a17ec66079ee16201abf92041034af2c502973e5a886fc14da2e2ac02c0d"),
+        # owned NULL-PATH fix (release/inputs/openssh-quiet-e302fe1/NULL-PATH-FIX.md): the guardian's
+        # closed environment has no PATH, and these entry points dereferenced the NULL _wdupenv_s result
+        "contrib/win32/win32compat/wmain_sshd.c": (
+            "40f0c064a20cdd629c8e8473d77ceb92f18d028fa05cd5a239cf76bf4010db53",
+            "7618bc1f2cd8bb7fa013e0961036ae685c4c1bf8d2a5775484d5a727e3caa675"),
+        "contrib/win32/win32compat/wmain_sshd-session.c": (
+            "013c787d6e0124ddb873a8e15987151e6028812210d2aa6747993ab3028ad1ee",
+            "48c4b370d0ef568bf864f70c0ef4b781ca9c23346799d829ebaef8c21726e848"),
+        "contrib/win32/win32compat/wmain_sshd-auth.c": (
+            "518b6fec763ef84534b4598d6405ce51bf67338562f168f1cf22c56171f7aea0",
+            "af1bd3fd074f87d65a71b94bc0de8079748283d724a5f1aa42d7c3c04317a9b3"),
     },
 }
 # The registry checkout must CONTAIN the manifest's override versions (zlib 1.3.2,
