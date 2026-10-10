@@ -22,7 +22,9 @@ from typing import Optional
 from pocketshell.gateway.service_common import ServiceError, sanitize
 
 CATALOG_VERSION = 2
+CATALOG_VERSIONS = (2, 3)           # v3 adds the endpoint roles + lineage (setup ABI v3)
 RECEIPT_VERSION = 2
+ENDPOINT_ROLES = ("sshd", "sftp", "backend-shell", "backend-dll")
 VERIFY_VERSION = 2
 API_NAME = "ordinary-v2"
 PLATFORM = "win32-x64"
@@ -82,15 +84,17 @@ def parse_catalog(data: bytes) -> dict:
     bad = lambda why: InstallError("catalog-invalid", f"catalog: {why}")  # noqa: E731
     if not _exact(c, ["version", "release", "source", "platform", "api", "lineage", "files"]):
         raise bad("keys must be exactly version, release, source, platform, api, lineage, files")
-    if c["version"] != CATALOG_VERSION or c["platform"] != PLATFORM or c["api"] != API_NAME:
-        raise bad(f"version/platform/api must be {CATALOG_VERSION}/{PLATFORM}/{API_NAME}")
+    if c["version"] not in CATALOG_VERSIONS or c["platform"] != PLATFORM or c["api"] != API_NAME:
+        raise bad(f"version/platform/api must be {CATALOG_VERSIONS}/{PLATFORM}/{API_NAME}")
+    v3 = c["version"] == 3
+    roles_allowed = (*SINGLE_ROLES, *ENDPOINT_ROLES, "module") if v3 else ROLES
     if not isinstance(c["release"], str) or not RELEASE_RE.match(c["release"]):
         raise bad("release")
     if not isinstance(c["source"], str) or not COMMIT_RE.match(c["source"]):
         raise bad("source must be a 40-hex commit")
     lin = c["lineage"]
     if not _exact(lin, ["cliVersion", "cliCommit", "agentApi", "guardian", "nativeApi", "policy", "interpreter",
-                        "helper", "lockSHA256"]):
+                        "helper", "lockSHA256", *(["endpoint"] if v3 else [])]):
         raise bad("lineage keys")
     if not isinstance(lin["cliVersion"], str) or not VERSION_RE.match(lin["cliVersion"]) \
             or lin["cliCommit"] != c["source"] or lin["agentApi"] != 1:
@@ -113,7 +117,7 @@ def parse_catalog(data: bytes) -> dict:
     for f in files:
         if not _exact(f, ["path", "sha256", "role"]) or not isinstance(f["path"], str) \
                 or len(f["path"]) > 1024 or not REL_RE.match(f["path"]) \
-                or not isinstance(f["sha256"], str) or not SHA_RE.match(f["sha256"]) or f["role"] not in ROLES:
+                or not isinstance(f["sha256"], str) or not SHA_RE.match(f["sha256"]) or f["role"] not in roles_allowed:
             raise bad(f"file entry {sanitize(str(f), 120)}")
         key = f["path"].lower()
         if key in seen:
@@ -122,12 +126,28 @@ def parse_catalog(data: bytes) -> dict:
         if f["role"] != "module" and f["role"] in roles:
             raise bad(f"more than one {f['role']}")
         roles.setdefault(f["role"], f)
-    for role in ROLES:
+    for role in roles_allowed:
         if role not in roles:
             raise bad(f"no {role} file")
     pins = {"guardian": lin["guardian"]["sourceSHA256"], "native-api": lin["nativeApi"]["sourceSHA256"],
             "policy": lin["policy"]["sourceSHA256"], "interpreter": lin["interpreter"]["sha256"],
             "helper": lin["helper"]["sha256"]}
+    if v3:
+        e = lin["endpoint"]
+        if not _exact(e, ["openssh", "sftp", "backendShell"]) \
+                or not _exact(e["openssh"], ["version", "sourceCommit", "buildReceiptSHA256"]) \
+                or not isinstance(e["openssh"]["version"], str) or not 0 < len(e["openssh"]["version"]) <= 64 \
+                or not COMMIT_RE.match(str(e["openssh"]["sourceCommit"])) \
+                or not SHA_RE.match(str(e["openssh"]["buildReceiptSHA256"])) \
+                or not _exact(e["sftp"], ["version", "sha256"]) or not isinstance(e["sftp"]["version"], str) \
+                or not _exact(e["backendShell"], ["distribution", "version", "sha256"]) \
+                or not isinstance(e["backendShell"]["distribution"], str) \
+                or not isinstance(e["backendShell"]["version"], str):
+            raise bad("lineage endpoint")
+        pins.update({"sftp": e["sftp"]["sha256"], "backend-shell": e["backendShell"]["sha256"]})
+        for f in files:
+            if f["role"] in ENDPOINT_ROLES and not f["path"].startswith("endpoint/"):
+                raise bad(f"endpoint role {f['role']} must live under endpoint/")
     for role, sha in pins.items():
         if roles[role]["sha256"] != sha:
             raise bad(f"lineage {role} pin does not match its file entry")
@@ -243,6 +263,31 @@ class NativePaths:
             self._close(pinned)
         return {"canonicalPath": canonical, "size": size, "sha256": digest.hexdigest(),
                 "bytes": bytes(head) if size <= max_bytes else None}
+
+    def metadata(self, path: str, owner_sid: str) -> dict:
+        """Setup ABI v3 key files: owner-only, protected, single-link, reparse-free
+        regular file whose parent is a private root. Opened with
+        FILE_READ_ATTRIBUTES|READ_CONTROL only (0x20080): no data access, so
+        the contents are never read (no share-mode check applies either)."""
+        from pathlib import Path
+
+        from pocketshell import windows_security as ws
+
+        p = ws._path(Path(path))
+        self._ancestors(str(p), owner_sid, root=str(p.parent))
+        pinned = self._pinned(p.parent, private_leaf=True, private_root=p.parent)
+        try:
+            handle = ws._open(p, access=0x20080)
+            try:
+                ws._check(handle, directory=False, private=True)
+                canonical = self._final(handle)
+            finally:
+                ws.CloseHandle(handle)
+        finally:
+            self._close(pinned)
+        if not canonical or not _same(canonical, str(p)):
+            raise ServiceError("the opened object is not the requested path")
+        return {"canonicalPath": canonical}
 
     def directory(self, path: str, owner_sid: str, private_root=None, root=None) -> str:
         from pathlib import Path
@@ -516,26 +561,7 @@ def install_runtime(*, user_data: str, catalog_path: str, staged: str, binding: 
     if manifest["sha256"] != binding["manifestSHA256"]:
         raise InstallError("binding-mismatch", "the guardian manifest is not the bound one; bind again after review")
 
-    # 1) the staged closure, exactly
-    try:
-        staged_files = paths.inventory(staged, owner_sid, private=False, root=staged)
-    except Exception as exc:  # noqa: BLE001
-        raise InstallError("staged-invalid", f"the staged release cannot be enumerated safely: "
-                           f"{sanitize(str(exc), 300)}") from None
-    want = {f["path"].lower(): f for f in catalog["files"]}
-    if sorted(p.lower() for p in staged_files) != sorted(want):
-        extra = sorted(set(p.lower() for p in staged_files) - set(want))[:5]
-        missing = sorted(set(want) - set(p.lower() for p in staged_files))[:5]
-        raise InstallError("staged-invalid", f"the staged closure differs from the catalog (extra {extra}, "
-                           f"missing {missing})")
-    blobs = {}
-    for rel in staged_files:
-        # staged bytes are anchored by the catalog digest (no ACL requirement)
-        got = paths.file(ntpath.join(staged, *rel.split("/")), owner_sid, private=False, max_bytes=MAX_FILE,
-                         root=staged)
-        if got["sha256"] != want[rel.lower()]["sha256"] or got["bytes"] is None:
-            raise InstallError("staged-invalid", f"{rel} does not match its catalog sha256")
-        blobs[want[rel.lower()]["path"]] = got["bytes"]
+    blobs, want = _verify_staged(staged, catalog, owner_sid, paths)
 
     root = ntpath.join(user_data, "managed-runtime")
     release_dir = ntpath.join(root, "releases", catalog["release"])
@@ -560,7 +586,37 @@ def install_runtime(*, user_data: str, catalog_path: str, staged: str, binding: 
     if dry_run:
         return receipt
 
-    # 2) copy with the private shape; an existing release dir must be exactly this closure
+    _copy_release(root, release_dir, tmp, blobs, want, catalog, owner_sid, paths)
+    paths.write(ntpath.join(root, "authority.json"), json.dumps(receipt, indent=1).encode("utf-8"))
+    return receipt
+
+
+def _verify_staged(staged, catalog, owner_sid, paths):
+    """1) the staged closure, exactly (set + per-file sha256 by handle)."""
+    try:
+        staged_files = paths.inventory(staged, owner_sid, private=False, root=staged)
+    except Exception as exc:  # noqa: BLE001
+        raise InstallError("staged-invalid", f"the staged release cannot be enumerated safely: "
+                           f"{sanitize(str(exc), 300)}") from None
+    want = {f["path"].lower(): f for f in catalog["files"]}
+    if sorted(p.lower() for p in staged_files) != sorted(want):
+        extra = sorted(set(p.lower() for p in staged_files) - set(want))[:5]
+        missing = sorted(set(want) - set(p.lower() for p in staged_files))[:5]
+        raise InstallError("staged-invalid", f"the staged closure differs from the catalog (extra {extra}, "
+                           f"missing {missing})")
+    blobs = {}
+    for rel in staged_files:
+        # staged bytes are anchored by the catalog digest (no ACL requirement)
+        got = paths.file(ntpath.join(staged, *rel.split("/")), owner_sid, private=False, max_bytes=MAX_FILE,
+                         root=staged)
+        if got["sha256"] != want[rel.lower()]["sha256"] or got["bytes"] is None:
+            raise InstallError("staged-invalid", f"{rel} does not match its catalog sha256")
+        blobs[want[rel.lower()]["path"]] = got["bytes"]
+    return blobs, want
+
+
+def _copy_release(root, release_dir, tmp, blobs, want, catalog, owner_sid, paths):
+    """2) copy with the private shape; 3) re-measure by handle."""
     for folder in (root, ntpath.join(root, "releases"), release_dir, tmp):
         paths.mkdir(folder)
     present = paths.inventory(release_dir, owner_sid, private_root=root)
@@ -573,8 +629,6 @@ def install_runtime(*, user_data: str, catalog_path: str, staged: str, binding: 
         if not _same(parent, release_dir):
             paths.mkdir(parent)
         paths.write(target, data)
-
-    # 3) re-measure what is installed (handle-based), then the receipt
     if sorted(p.lower() for p in paths.inventory(release_dir, owner_sid, private_root=root)) != sorted(want):
         raise InstallError("install-failed", "the installed closure differs from the catalog")
     for f in catalog["files"]:
@@ -585,8 +639,6 @@ def install_runtime(*, user_data: str, catalog_path: str, staged: str, binding: 
     for folder in (root, tmp, release_dir):
         if not _same(paths.directory(folder, owner_sid, private_root=root), folder):
             raise InstallError("install-failed", f"{folder} is not the protected directory")
-    paths.write(ntpath.join(root, "authority.json"), json.dumps(receipt, indent=1).encode("utf-8"))
-    return receipt
 
 
 def platform_ok() -> bool:
