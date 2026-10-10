@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -318,6 +319,28 @@ func TestNB4OutputMustReachTrueEOFBeforeExited(t *testing.T) {
 	for _, e := range ev {
 		if e["event"] == "exited" {
 			t.Fatalf("exited emitted without EOF on stdout: %v", ev)
+		}
+	}
+	if code == 0 {
+		t.Fatalf("%d %v", code, ev)
+	}
+}
+
+// --- root finding on 61a43db: a failing STDERR reader is never a clean result ---------
+
+type failingStderrChild struct{ fakeChild }
+
+func (c *failingStderrChild) Stderr() io.Reader {
+	return iotest.ErrReader(errors.New("stderr pipe broken"))
+}
+
+func TestStderrReadFailureIsNeverExited(t *testing.T) {
+	c := &failingStderrChild{fakeChild{pid: 13, out: "ok", exit: make(chan exitResult, 1), termOK: true}}
+	c.exit <- exitResult{code: 0}
+	code, ev := runSpawn(t, spawnCfg(), io.MultiReader(authorized(""), blockingReader{}), func(config) (child, error) { return c, nil })
+	for _, e := range ev {
+		if e["event"] == "exited" || e["event"] == "released" {
+			t.Fatalf("result emitted after an unreadable stderr: %v", ev)
 		}
 	}
 	if code == 0 {

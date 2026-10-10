@@ -251,8 +251,11 @@ func runEntry(cfg config, keep *held, in io.Reader, out *os.File, spawn spawner)
 					if stdout.overflow || err != nil {
 						return stop("refused", 2, errors.New("entry output exceeds 64 KiB or is unreadable"))
 					}
-				case <-stderrEOF:
+				case err := <-stderrEOF:
 					stderrEOF = nil
+					if err != nil { // both pipes must reach a GENUINE end-of-file
+						return stop("refused", 2, fmt.Errorf("entry stderr unreadable: %v", err))
+					}
 				case <-drain.C:
 					return stop("refused", 2, errors.New("entry output did not reach end-of-file; result incomplete"))
 				}
