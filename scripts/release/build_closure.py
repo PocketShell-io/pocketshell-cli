@@ -54,6 +54,23 @@ GUARDIAN_PINS = {  # the reviewed 6cf7ae85 guardian source triple
     "native_api.py": "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
     "policy.py": "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
 }
+GUARDIAN3_PINS = {  # the e862645d successor (agreement §16.14): the generic catalog v3 trio
+    "guardian.py": "e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
+    "native_api.py": "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
+    "policy.py": "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
+}
+# --- catalog v3: the generic endpoint backend (root decision B2 + owned CI rebuild) ----------
+GIT_URL = "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/Git-2.56.0.2-64-bit.tar.bz2"
+GIT_SHA256 = "16ca394bdb94b372267d79e1e10b68763674f73e03e0648202a7971a8a730a84"
+GIT_VERSION = "2.56.0.2"
+GIT_MEMBERS = 9622                     # 9525 regular + 92 hard links + 5 symlinks, all materialized
+MSYS_ORIGINAL = "2a89b7c31b323c42e2fb37900af087aeb27417694e630a210bc75b0369410bc7"
+APLEXER_ZIP_SHA256 = "676d516b71568070e7925f40aba66be538fc6c4cd308432b846febdbd15fbfa6"  # root-accepted fc396 artifact 11660695501
+APLEXER = {"exe": "e3c741789e6306d037c883294c0e2b9d61702b7994fd844bc761bb5f56389b13",
+           "pyd": "4a70877e4fccb4a81e971a7fe3f051586e574f3cbf7dceddec3ec2dfaf7700db",
+           "cliWheel": "7bf0f8197a4999b678b699c0f798a8185c839943aa8b54b7acc1f4e50c757747", "clientWheel": "28b4586e9ee57d40b7a402d60158dac18db3ac56a2e4caa8abb83158757af91d", "head": "fc396eb0"}
+OPENSSH_FILES = ("sshd.exe", "sshd-session.exe", "sshd-auth.exe", "ssh-shellhost.exe", "sftp-server.exe",
+                 "libcrypto.dll", "LICENSE.txt", "NOTICE.txt")
 POLICY_VERSION = 1
 GO_TOOLCHAIN = "go1.26.8"
 TOP_FILES = {"python.exe", "python312.dll", "python3.dll", "vcruntime140.dll", "vcruntime140_1.dll", "LICENSE.txt"}
@@ -209,6 +226,8 @@ def build(out: Path, args, py: str, work: Path) -> dict:
     if any(site.rglob("*.pyd")):
         raise SystemExit(f"extension modules left for the zip: {list(site.rglob('*.pyd'))}")
     deterministic_zip(pyd / "app.zip", tree_with_pyc(site, py, work / "pyc-site", keep_source=True))
+    if args.v3:
+        meta3 = add_aplexer_client(native, args)
     for rel, data in tree_with_pyc(native, py, work / "pyc-native", keep_source=False).items():
         target = pyd / "site-native" / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -216,7 +235,7 @@ def build(out: Path, args, py: str, work: Path) -> dict:
 
     # 3. guardian triple, helper, launcher
     (release / "guardian").mkdir()
-    for name, pin in GUARDIAN_PINS.items():
+    for name, pin in (GUARDIAN3_PINS if args.v3 else GUARDIAN_PINS).items():
         src = Path(args.guardian_dir) / name
         if sha256(src) != pin:
             raise SystemExit(f"{src} is not the reviewed {name} ({pin[:12]}…)")
@@ -230,13 +249,119 @@ def build(out: Path, args, py: str, work: Path) -> dict:
     run("go", "-C", REPO / "native" / "launcher", "build", "-trimpath", "-buildvcs=false",
         "-ldflags=-s -w -buildid= -H=windowsgui",
         "-o", release / "pocketshell.exe", ".", env=benv)
-    return {"wheel": wheel.name, "wheelSHA256": sha256(wheel), "requirementsSHA256": sha256(reqs)}
+    meta = {"wheel": wheel.name, "wheelSHA256": sha256(wheel), "requirementsSHA256": sha256(reqs)}
+    if args.v3:
+        meta.update(meta3)
+        meta.update(add_backend(release, args))
+    return meta
+
+
+def _verified_receipt(directory: Path, part: str) -> dict:
+    receipt = json.loads((directory / f"{part}-build-receipt.json").read_text())
+    if receipt.get("accepted") is not True or receipt.get("executedOutputs") is not False:
+        raise SystemExit(f"the {part} backend build receipt is not an accepted build")
+    for name, digest in receipt["outputs"].items():
+        if sha256(directory / part / name) != digest:
+            raise SystemExit(f"{part}/{name} is not the bytes its build receipt records")
+    return receipt
+
+
+def add_aplexer_client(native: Path, args) -> dict:
+    """The accepted fresh aplexer fc396 pair: the client package (with
+    _native.pyd 4a70877e) into site-native; the exe pair is placed by
+    add_backend next to python.exe."""
+    z = Path(args.aplexer_zip)
+    if sha256(z) != APLEXER_ZIP_SHA256:
+        raise SystemExit("the aplexer artifact is not the accepted fc396 ZIP")
+    with zipfile.ZipFile(z) as outer:
+        exe, pyd = outer.read("native/aplexer.exe"), outer.read("native/_native.pyd")
+        cli = next(n for n in outer.namelist() if n.startswith("cli-dist/") and n.endswith(".whl"))
+        client = next(n for n in outer.namelist() if n.startswith("client-dist/") and n.endswith(".whl"))
+        cli_bytes, client_bytes = outer.read(cli), outer.read(client)
+    if hashlib.sha256(exe).hexdigest() != APLEXER["exe"] or hashlib.sha256(pyd).hexdigest() != APLEXER["pyd"]:
+        raise SystemExit("the aplexer native pair is not the accepted e3c74178/4a70877e")
+    for data, pin in ((cli_bytes, APLEXER["cliWheel"]), (client_bytes, APLEXER["clientWheel"])):
+        if hashlib.sha256(data).hexdigest() != pin:
+            raise SystemExit("an aplexer wheel is not the accepted one")
+    import io
+
+    with zipfile.ZipFile(io.BytesIO(cli_bytes)) as w:
+        if w.read("aplexer_cli/bin/aplexer.exe") != exe:
+            raise SystemExit("the CLI wheel's aplexer.exe is not the native exe")
+    with zipfile.ZipFile(io.BytesIO(client_bytes)) as w:
+        if w.read("aplexer/_native.pyd") != pyd:
+            raise SystemExit("the client wheel's _native.pyd is not the native pyd")
+        for name in w.namelist():
+            if name.startswith("aplexer/") and not name.endswith("/"):
+                target = native / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(w.read(name))
+    args.aplexer_exe = exe
+    return {"aplexer": {"zipSHA256": sha256(z), "exeSHA256": APLEXER["exe"], "pydSHA256": APLEXER["pyd"],
+                        "cliWheelSHA256": hashlib.sha256(cli_bytes).hexdigest(),
+                        "clientWheelSHA256": hashlib.sha256(client_bytes).hexdigest(), "head": APLEXER["head"]}}
+
+
+SYMLINK_COOKIE = b"!<symlink>\xff\xfe"
+
+
+def add_backend(release: Path, args) -> dict:
+    """endpoint/bin: the owned OpenSSH 10.3p1 build; endpoint/shell: the
+    Git-for-Windows 2.56.0.2 tree (every member; hard links materialized as
+    copies of their target, symlinks as Cygwin symlink-cookie files), with
+    usr/bin/msys-2.0.dll replaced by the owned 717e49fe MSYS build; python/
+    a.exe + aplexer.exe: the accepted fc396 exe."""
+    ossh = _verified_receipt(Path(args.backend_openssh), "openssh")
+    msys = _verified_receipt(Path(args.backend_msys), "msys")
+    bin_dir = release / "endpoint" / "bin"
+    bin_dir.mkdir(parents=True)
+    for name in OPENSSH_FILES:
+        shutil.copyfile(Path(args.backend_openssh) / "openssh" / name, bin_dir / name)
+    shell = release / "endpoint" / "shell"
+    shell.mkdir(parents=True)
+    members = 0
+    with tarfile.open(args.git_archive) as tar:
+        for m in tar.getmembers():
+            if m.isdir():
+                continue
+            name = m.name.lstrip("./")
+            target = shell.joinpath(*name.split("/"))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if m.issym():
+                data = SYMLINK_COOKIE + (m.linkname.encode("utf-16-le")) + b"\0\0"
+            elif m.islnk():
+                data = tar.extractfile(tar.getmember(m.linkname)).read()
+            elif m.isfile():
+                data = tar.extractfile(m).read()
+            else:
+                raise SystemExit(f"unexpected member type in the Git archive: {name}")
+            target.write_bytes(data)
+            members += 1
+    if members != GIT_MEMBERS:
+        raise SystemExit(f"the Git archive has {members} file members, not {GIT_MEMBERS}")
+    dll = shell / "usr" / "bin" / "msys-2.0.dll"
+    if sha256(dll) != MSYS_ORIGINAL:
+        raise SystemExit("the archive's msys-2.0.dll is not the reviewed original 2a89b7c3")
+    shutil.copyfile(Path(args.backend_msys) / "msys" / "msys-2.0.dll", dll)
+    for name in ("a.exe", "aplexer.exe"):
+        (release / "python" / name).write_bytes(args.aplexer_exe)
+    return {"backend": {"openssh": {"receiptSHA256": sha256(Path(args.backend_openssh) / "openssh-build-receipt.json"),
+                                    "checkout": ossh["checkout"], "outputs": ossh["outputs"]},
+                        "msys": {"receiptSHA256": sha256(Path(args.backend_msys) / "msys-build-receipt.json"),
+                                 "checkout": msys["checkout"], "outputs": msys["outputs"]},
+                        "git": {"url": GIT_URL, "sha256": GIT_SHA256, "version": GIT_VERSION, "members": members,
+                                "replaced": {"usr/bin/msys-2.0.dll": {"before": MSYS_ORIGINAL,
+                                                                     "after": msys["outputs"]["msys-2.0.dll"]}}}}}
 
 
 def catalog_for(release: Path, args, commit: str) -> dict:
     roles = {"pocketshell.exe": "cli", "python/python.exe": "interpreter", "guardian/guardian.py": "guardian",
              "guardian/native_api.py": "native-api", "guardian/policy.py": "policy",
              "bin/pocketshell-link.exe": "helper"}
+    if args.v3:
+        roles.update({"endpoint/bin/sshd.exe": "sshd", "endpoint/bin/sftp-server.exe": "sftp",
+                      "endpoint/shell/usr/bin/bash.exe": "backend-shell",
+                      "endpoint/shell/usr/bin/msys-2.0.dll": "backend-dll"})
     files = []
     for p in sorted(release.rglob("*")):
         if p.is_file():
@@ -244,10 +369,11 @@ def catalog_for(release: Path, args, commit: str) -> dict:
             files.append({"path": rel, "sha256": sha256(p), "role": roles.get(rel, "module")})
     by = {f["role"]: f["sha256"] for f in files if f["role"] != "module"}
     project = run("uv", "version", "--short", cwd=REPO).strip()
-    c = {"version": 2, "release": f"cli-{project.replace('.', '-')}-{commit[:12]}", "source": commit,
+    c = {"version": 3 if args.v3 else 2, "release": f"cli-{project.replace('.', '-')}-{commit[:12]}",
+         "source": commit,
          "platform": "win32-x64", "api": "ordinary-v2",
          "lineage": {"cliVersion": project, "cliCommit": commit, "agentApi": 1,
-                     "guardian": {"abi": "6cf7ae85", "sourceSHA256": by["guardian"]},
+                     "guardian": {"abi": "e862645d" if args.v3 else "6cf7ae85", "sourceSHA256": by["guardian"]},
                      "nativeApi": {"sourceSHA256": by["native-api"]},
                      "policy": {"version": POLICY_VERSION, "sourceSHA256": by["policy"]},
                      "interpreter": {"distribution": "python-build-standalone", "version": PBS_VERSION,
@@ -255,6 +381,12 @@ def catalog_for(release: Path, args, commit: str) -> dict:
                      "helper": {"version": args.helper_version, "sha256": by["helper"]},
                      "lockSHA256": sha256(REPO / "uv.lock")},
          "files": files}
+    if args.v3:
+        c["lineage"]["endpoint"] = {
+            "openssh": {"version": "OpenSSH_for_Windows_10.3p1", "sourceCommit": "e302fe1ed190e408573cf0139252e5db26eeba2f",
+                        "buildReceiptSHA256": sha256(Path(args.backend_openssh) / "openssh-build-receipt.json")},
+            "sftp": {"version": "OpenSSH_for_Windows_10.3p1", "sha256": by["sftp"]},
+            "backendShell": {"distribution": "git-for-windows", "version": GIT_VERSION, "sha256": by["backend-shell"]}}
     data = json.dumps(c, indent=1, sort_keys=True).encode()
     inst.parse_catalog(data)  # the producer's own closed validator (roles, pins, path guards)
     return c
@@ -266,10 +398,19 @@ def main() -> int:
     ap.add_argument("--helper", required=True)
     ap.add_argument("--helper-sha256", required=True)
     ap.add_argument("--helper-version", required=True)
-    ap.add_argument("--guardian-dir", default=str(REPO / "release" / "inputs" / "guardian-6cf7ae85"))
+    ap.add_argument("--guardian-dir", default=None)
+    ap.add_argument("--backend-openssh", help="catalog v3: the owned OpenSSH build artifact dir")
+    ap.add_argument("--backend-msys", help="catalog v3: the owned MSYS build artifact dir")
+    ap.add_argument("--git-archive", help="catalog v3: Git-2.56.0.2-64-bit.tar.bz2 (16ca394b; fetched if absent)")
+    ap.add_argument("--aplexer-zip", help="catalog v3: the accepted fc396 windows-native ZIP")
     ap.add_argument("--pbs-archive")
     ap.add_argument("--twice", action="store_true")
     args = ap.parse_args()
+    args.v3 = bool(args.backend_openssh)
+    if args.v3 and not (args.backend_msys and args.aplexer_zip):
+        raise SystemExit("catalog v3 needs --backend-openssh, --backend-msys and --aplexer-zip")
+    args.guardian_dir = args.guardian_dir or str(REPO / "release" / "inputs" /
+                                                 ("guardian-e862645d" if args.v3 else "guardian-6cf7ae85"))
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     if sha256(Path(args.helper)) != args.helper_sha256:
@@ -279,6 +420,13 @@ def main() -> int:
         urllib.request.urlretrieve(PBS_URL, args.pbs_archive)
     if sha256(Path(args.pbs_archive)) != PBS_SHA256:
         raise SystemExit("the interpreter archive does not match the pinned sha256")
+    if args.v3:
+        if not args.git_archive:
+            args.git_archive = str(out / "git.tar.bz2")
+            if not Path(args.git_archive).exists():
+                urllib.request.urlretrieve(GIT_URL, args.git_archive)
+        if sha256(Path(args.git_archive)) != GIT_SHA256:
+            raise SystemExit("the Git archive does not match the pinned sha256")
     commit = run("git", "rev-parse", "HEAD", cwd=REPO).strip()
     dirty = run("git", "status", "--porcelain", cwd=REPO).strip()
     args.source_date_epoch = run("git", "log", "-1", "--format=%ct", cwd=REPO).strip()
@@ -299,7 +447,7 @@ def main() -> int:
         "schema": "pocketshell-ordinary-v2-release-build/v1",
         "source": commit, "sourceDirty": bool(dirty),
         "inputs": {"pbs": {"url": PBS_URL, "sha256": PBS_SHA256, "version": PBS_VERSION},
-                   "guardian": GUARDIAN_PINS, "helper": {"sha256": args.helper_sha256, "version": args.helper_version},
+                   "guardian": GUARDIAN3_PINS if args.v3 else GUARDIAN_PINS, "helper": {"sha256": args.helper_sha256, "version": args.helper_version},
                    "uvLockSHA256": sha256(REPO / "uv.lock"), **builds[0][1]},
         "tools": {"uv": run("uv", "--version").strip(),
                   "go": run("go", "env", "GOVERSION", env=dict(os.environ, GOTOOLCHAIN=GO_TOOLCHAIN)).strip(),
@@ -310,7 +458,8 @@ def main() -> int:
                     "reproducibleAcrossRoots": bool(args.twice)},
         "bounds": {"catalogFitsVerifierDocument": len(data) <= inst.MAX_DOCUMENT,
                    "filesWithinVerifierRequests": len(catalogs[0]["files"]) + 3 <= inst.MAX_REQUESTS,
-                   "inventoryWithin4096": len(catalogs[0]["files"]) <= inst.MAX_FILES},
+                   "inventoryWithinBound": len(catalogs[0]["files"]) <= (inst.CATALOG3_MAX_FILES if args.v3
+                                                                           else inst.MAX_FILES)},
     }
     (out / "build-receipt.json").write_text(json.dumps(receipt, indent=1))
     print(json.dumps(receipt["outputs"] | receipt["bounds"], indent=1))
