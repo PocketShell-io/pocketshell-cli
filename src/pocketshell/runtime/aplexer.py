@@ -63,6 +63,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -132,9 +133,16 @@ def _bundled_bin_dirs() -> list[Path]:
     return bundled_bin_dirs()
 
 
+def _exe(name: str) -> str:
+    """The console-script file name: ``a.exe`` / ``aplexer.exe`` on Windows (the
+    generic release closure ships the one aplexer binary under both names next
+    to python.exe), the bare name elsewhere."""
+    return name + ".exe" if sys.platform == "win32" else name
+
+
 def _sibling_worker(cli_path: str) -> Optional[str]:
     """The ``aplexer`` worker binary shipped next to ``cli_path``, if any."""
-    worker = Path(cli_path).parent / "aplexer"
+    worker = Path(cli_path).parent / _exe("aplexer")
     return str(worker) if worker.exists() else None
 
 
@@ -189,7 +197,7 @@ def _bundled_resolution(
     """First bundled ``a`` with a sibling worker; ``None`` keeps looking."""
     tried.append(f"{BIN_ENV} (unset)")
     for bin_dir in bin_dirs:
-        found = _bundled_candidate(bin_dir / "a", tried)
+        found = _bundled_candidate(bin_dir / _exe("a"), tried)
         if found is not None:
             return found
     return None

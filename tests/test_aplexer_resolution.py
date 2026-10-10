@@ -685,3 +685,33 @@ def test_bundled_a_starts_a_session_with_no_aplexer_on_path(tmp_path: Path) -> N
             [report.path, "kill", "--workspace", str(workspace), "--tag", tag],
             capture_output=True, text=True, env=env, timeout=60,
         )
+
+
+# --- Windows: the generic release closure ships a.exe / aplexer.exe next to python.exe ----
+
+
+def test_windows_resolves_the_bundled_exe_pair_next_to_python(tmp_path, monkeypatch):
+    py = tmp_path / "python"
+    py.mkdir()
+    (py / "python.exe").write_bytes(b"")
+    monkeypatch.setattr(_aplexer.sys, "platform", "win32")
+    monkeypatch.setattr(_console_scripts.sys, "executable", str(py / "python.exe"))
+    found = _aplexer.resolve_a({})
+    assert found.path is None  # nothing there yet
+    (py / "a.exe").write_bytes(b"x")
+    found = _aplexer.resolve_a({})
+    assert found.path is None and "half-installed" in " ".join(found.tried)
+    (py / "aplexer.exe").write_bytes(b"x")
+    found = _aplexer.resolve_a({})
+    assert found.path == str(py / "a.exe") and found.worker == str(py / "aplexer.exe")
+
+
+def test_windows_ignores_an_extensionless_a(tmp_path, monkeypatch):
+    py = tmp_path / "python"
+    py.mkdir()
+    (py / "python.exe").write_bytes(b"")
+    for name in ("a", "aplexer"):
+        (py / name).write_bytes(b"x")
+    monkeypatch.setattr(_aplexer.sys, "platform", "win32")
+    monkeypatch.setattr(_console_scripts.sys, "executable", str(py / "python.exe"))
+    assert _aplexer.resolve_a({}).path is None
