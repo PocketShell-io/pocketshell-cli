@@ -134,9 +134,21 @@ def test_new_machine_complete_runtime(closure, tmp_path):
                                                       "env, suspended until assigned to the owned job)",
                                              "environment": manifest0["environment"]}, ensure_ascii=False))
     for diag in ([manifest0["daemon"], "-V"], [manifest0["daemon"], "-t", "-f", manifest0["config"]]):
-        dcode, dout = run_unelevated([CMD, "/d", "/c", subprocess.list2cmdline(diag) + " 2>&1"], env=env,
-                                     cwd=str(Path(manifest0["daemon"]).parent), timeout=60)
-        print("DIAG", diag[1:], "->", dcode, hex(dcode & 0xFFFFFFFF), dout.decode("utf-8", "replace")[-2000:])
+        # a DIRECT argv (no cmd.exe): the harness gives the child one pipe for stdout+stderr
+        dcode, dout = run_unelevated(diag, env=env, cwd=str(Path(manifest0["daemon"]).parent), timeout=60)
+        print("DIAG", diag[1:], "->", dcode, hex(dcode & 0xFFFFFFFF), "ascii:", ascii(dout[-2000:]),
+              "base64:", __import__("base64").b64encode(dout[-4000:]).decode())
+    # the daemon in the guardian's CLOSED environment block and cwd (no private
+    # desktop, no owned job, runner token): sshd -d -D prints its startup trace
+    closed_env = dict(manifest0["environment"])
+    try:
+        proc = subprocess.run([manifest0["daemon"], "-d", "-D", "-f", manifest0["config"]], env=closed_env,
+                              cwd=manifest0["root"], capture_output=True, timeout=15)
+        dcode, dout = proc.returncode, proc.stdout + proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        dcode, dout = "running-after-15s", (exc.stdout or b"") + (exc.stderr or b"")
+    print("DIAG closed-env -d -D ->", dcode, hex(dcode & 0xFFFFFFFF) if isinstance(dcode, int) else "",
+          "ascii:", ascii(dout[-3000:]), "base64:", __import__("base64").b64encode(dout[-4000:]).decode())
     print("SCOPE: acceptJob is a report-only CI seam (job membership accepted and reported), NOT NoJob "
           "qualification; the Aplexer session lifecycle is NOT YET QUALIFIED by this test")
     try:  # the finally also stops a start whose READY assertion fails
