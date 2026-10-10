@@ -106,6 +106,9 @@ type config struct {
 	Hold          bool
 	Entry         string
 	HoldSeconds   int
+	SpawnEntry    bool     // v4.2: the verifier itself creates the entry from the held file
+	EntryArgs     []string // the entry's argv after its path, ordered
+	EntrySeconds  int      // the entry's deadline (default: the hold timeout)
 }
 
 type usageError struct{ msg string }
@@ -153,6 +156,18 @@ func parseArgs(args []string) (config, error) {
 			cfg.Entry = v
 		case "--hold":
 			cfg.Hold = true
+		case "--spawn-entry":
+			cfg.SpawnEntry = true
+		case "--entry-arg":
+			v, err = value(&i, args[i])
+			cfg.EntryArgs = append(cfg.EntryArgs, v)
+		case "--entry-timeout":
+			v, err = value(&i, args[i])
+			if err == nil {
+				if _, e := fmt.Sscanf(v, "%d", &cfg.EntrySeconds); e != nil || cfg.EntrySeconds < 1 || cfg.EntrySeconds > maxHold {
+					return cfg, usageError{fmt.Sprintf("--entry-timeout must be 1..%d seconds", maxHold)}
+				}
+			}
 		case "--hold-timeout":
 			v, err = value(&i, args[i])
 			if err == nil {
@@ -224,6 +239,22 @@ func validate(cfg config) ([]root, error) {
 	} else if cfg.Entry != "" {
 		return nil, usageError{"--entry is only meaningful with --hold"}
 	}
+	if cfg.SpawnEntry && !cfg.Hold {
+		return nil, usageError{"--spawn-entry needs --hold --entry"}
+	}
+	if !cfg.SpawnEntry && (len(cfg.EntryArgs) > 0 || cfg.EntrySeconds != 0) {
+		return nil, usageError{"--entry-arg/--entry-timeout are only meaningful with --spawn-entry"}
+	}
+	total := 0
+	for _, a := range cfg.EntryArgs {
+		total += len(a)
+		if strings.ContainsRune(a, 0) {
+			return nil, usageError{"--entry-arg contains NUL"}
+		}
+	}
+	if len(cfg.EntryArgs) > 64 || total > 8192 {
+		return nil, usageError{"entry argv too long"}
+	}
 	return roots, nil
 }
 
@@ -266,12 +297,17 @@ type reply struct {
 
 // event is a hold-handshake line (never the protocol-v2 reply itself).
 type event struct {
-	Version      int     `json:"version"`
-	OperationID  string  `json:"operationId"`
-	Event        string  `json:"event"`
-	PID          *int    `json:"pid,omitempty"`
-	ImageMatches *bool   `json:"imageMatches,omitempty"`
-	Problem      *string `json:"problem"`
+	Version          int     `json:"version"`
+	OperationID      string  `json:"operationId"`
+	Event            string  `json:"event"`
+	PID              *int    `json:"pid,omitempty"`
+	CreationFILETIME *string `json:"creationFILETIME,omitempty"`
+	ImageMatches     *bool   `json:"imageMatches,omitempty"`
+	ExitCode         *int    `json:"exitCode,omitempty"`
+	StdoutBase64     *string `json:"stdoutBase64,omitempty"`
+	StdoutBytes      *int    `json:"stdoutBytes,omitempty"`
+	StderrTail       *string `json:"stderrTail,omitempty"`
+	Problem          *string `json:"problem"`
 }
 
 type message struct {

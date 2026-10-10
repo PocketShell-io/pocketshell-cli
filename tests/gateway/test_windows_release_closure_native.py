@@ -146,3 +146,38 @@ def private_binding_roots(base):
     data = b'{"version": 1}'
     ws.write_private(manifest, data)
     return str(config), str(manifest), _h.sha256(data).hexdigest()
+
+
+def test_verifier_spawns_the_held_release_entry(release, tmp_path):
+    """The final bootstrap bridge on the real closure: the verifier verifies the
+    full closure, holds it, creates pocketshell.exe from the held file and
+    returns the CLI's JSON (not-bound here) — Desktop spawns nothing by path."""
+    import base64
+
+    if not VERIFY:
+        pytest.skip("verifier not built")
+    from pocketshell.gateway import service_windows as win
+
+    sid = win.WindowsApi().current_sid()
+    root = release["root"]
+    entry = str(root / "pocketshell.exe")
+    reqs = ["--request", f"inventory={root}"]
+    for f in release["catalog"]["files"]:
+        reqs += ["--request", "binary=" + str(root / f["path"].replace("/", "\\"))]
+    args = ["gateway", "agent", "status", "--json", "--operation-id", "bridge-1"]
+    # stdin stays OPEN for the whole command (its EOF means "controller gone")
+    proc = subprocess.Popen([VERIFY, "verify", "--operation-id", "bridge-1", "--owner-sid", sid,
+                             "--resources-root", str(Path(OUT)), *reqs, "--hold", "--entry", entry, "--spawn-entry",
+                             *[x for a in args for x in ("--entry-arg", a)], "--entry-timeout", "120"],
+                            env=closed_env(tmp_path), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            creationflags=0x00000008)  # DETACHED, as a GUI parent
+    lines = [json.loads(x) for x in proc.stdout]
+    code = proc.wait(timeout=60)
+    proc.stdin.close()
+    events = lines[1:]
+    print(code, [e.get("event") for e in events])
+    assert code == 0 and lines[0]["ok"]
+    assert [e["event"] for e in events] == ["launched", "exited", "released"]
+    exited = events[1]
+    doc = json.loads(base64.b64decode(exited["stdoutBase64"]))
+    assert exited["exitCode"] == 1 and doc["error"]["code"] == "not-bound" and doc["operationId"] == "bridge-1"

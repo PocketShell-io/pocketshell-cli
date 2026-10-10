@@ -236,3 +236,65 @@ def test_r1_oversized_line_after_release_is_refused(tree):
     proc.stdin.close()
     ev = json.loads(proc.stdout.readline())
     assert ev["event"] == "refused" and proc.wait(timeout=10) == 2, ev
+
+
+# --- v4.2 final bootstrap bridge: the verifier creates the entry from the HELD file ----
+
+
+def _spawn_entry(tree, entry_args, *, extra=(), stdin_close_early=False, timeout=120):
+    import base64
+
+    reqs = [("binary", tree["entry"]), ("inventory", tree["release"]), ("document", tree["authority"])]
+    argv_ = argv(tree, reqs, extra=["--hold", "--entry", tree["entry"], "--spawn-entry",
+                                    *[x for a in entry_args for x in ("--entry-arg", a)], *extra])
+    proc = subprocess.Popen(argv_, stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=0x08000000)
+    first = json.loads(proc.stdout.readline())
+    assert first["ok"], first
+    events = []
+    launched = json.loads(proc.stdout.readline())
+    events.append(launched)
+    if stdin_close_early:
+        proc.stdin.close()
+    for line in proc.stdout:
+        events.append(json.loads(line))
+    code = proc.wait(timeout=timeout)
+    for e in events:
+        if "stdoutBase64" in e:
+            e["stdout"] = base64.b64decode(e["stdoutBase64"]).decode(errors="replace")
+    print(code, json.dumps(events)[:1500])
+    return code, events
+
+
+def test_spawn_entry_runs_the_held_file_and_reports_its_result(tree):
+    from pocketshell.gateway import service_windows as win
+
+    code, ev = _spawn_entry(tree, ["-n", "1", "127.0.0.1"])
+    assert code == 0 and [e["event"] for e in ev] == ["launched", "exited", "released"], ev
+    launched, exited = ev[0], ev[1]
+    assert launched["imageMatches"] is True and launched["pid"] == exited["pid"]
+    assert exited["exitCode"] == 0 and "127.0.0.1" in exited["stdout"]
+    assert win.WindowsApi().process_identity(launched["pid"])["state"] == "absent"
+    with open(tree["entry"], "r+b"):
+        pass  # released
+
+
+def test_spawn_entry_timeout_ends_the_exact_child(tree):
+    from pocketshell.gateway import service_windows as win
+
+    code, ev = _spawn_entry(tree, ["-n", "60", "127.0.0.1"], extra=["--entry-timeout", "2"])
+    assert code == 5 and ev[-1]["event"] == "timeout", ev
+    assert win.WindowsApi().process_identity(ev[0]["pid"])["state"] == "absent"
+
+
+def test_spawn_entry_controller_gone_ends_the_child(tree):
+    from pocketshell.gateway import service_windows as win
+
+    code, ev = _spawn_entry(tree, ["-n", "60", "127.0.0.1"], stdin_close_early=True)
+    assert code == 4 and ev[-1]["event"] == "closed", ev
+    assert win.WindowsApi().process_identity(ev[0]["pid"])["state"] == "absent"
+
+
+def test_spawn_entry_requires_hold(tree):
+    p = subprocess.run(argv(tree, [("binary", tree["entry"])], extra=["--spawn-entry"]), capture_output=True,
+                       timeout=60, creationflags=0x08000000)
+    assert p.returncode == 2

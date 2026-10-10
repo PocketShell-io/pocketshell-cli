@@ -10,9 +10,12 @@ import (
 	"time"
 )
 
-// Exit codes: 0 verified (and, with --hold, released), 1 refusal or image
-// mismatch at release, 2 malformed request or hold message, 4 stdin closed
-// while holding (the controller is gone), 5 hold timeout.
+// Exit codes: 0 verified (and, with --hold, released; with --spawn-entry, the
+// entry exited and its result was reported), 1 refusal (verification, or the
+// entry refused before resume), 2 malformed request/hold message or entry
+// output over 64 KiB, 4 stdin closed (controller gone; the entry was ended),
+// 5 timeout (the entry was ended), 6 the entry's termination could not be
+// proven (custody unknown).
 func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout)) }
 
 func emit(out *os.File, v any) {
@@ -66,6 +69,9 @@ func run(args []string, in io.Reader, out *os.File) int {
 	}
 	if !cfg.Hold {
 		return 0
+	}
+	if cfg.SpawnEntry {
+		return runEntry(cfg, keep, in, out, func(c config) (child, error) { return spawnHeldEntry(c, keep) })
 	}
 	return hold(cfg, keep, in, out)
 }
