@@ -54,7 +54,11 @@ OPENSSH = {
             "f0e0a17ec66079ee16201abf92041034af2c502973e5a886fc14da2e2ac02c0d"),
     },
 }
-VCPKG = {"repo": "https://github.com/microsoft/vcpkg", "commit": "a345bbdc68cdfda65603e24413b21afb28f110fb"}
+# The registry checkout must CONTAIN the manifest's override versions (zlib 1.3.2,
+# libcbor 0.14.0); the manifest's builtin-baseline a345bbdc is older than them. Pinned
+# master commit; the four dependency SOURCE archives are checked against the dossier.
+VCPKG = {"repo": "https://github.com/microsoft/vcpkg", "commit": "e456309491fd875487bf02b8a0dca76c1b1b00cc",
+         "manifestBaseline": "a345bbdc68cdfda65603e24413b21afb28f110fb"}
 DEPENDENCY_SOURCES = {  # dependency-source-downloads.json (reviewed dossier)
     "zlib": "b99a0b86c0ba9360ec7e78c4f1e43b1cbdf1e6936c8fa0f6835c0cd694a495a1",
     "libcbor": "a8c1516e741562cf95aa4479c64916c3d4d2623e24fdc35e414e2320e7300aae",
@@ -163,7 +167,7 @@ def build_openssh(work: Path, out: Path, rec: Recorder) -> dict:
 
     # dependencies: the source's own vcpkg manifest, pinned baseline, overlay ports/triplets
     vcpkg = work / "vcpkg"
-    rec.run("vcpkg-clone", ["git", "clone", "--quiet", VCPKG["repo"], vcpkg])
+    rec.run("vcpkg-clone", ["git", "clone", "--quiet", VCPKG["repo"], vcpkg])  # full history: baseline lookups
     rec.run("vcpkg-checkout", ["git", "-C", vcpkg, "checkout", "--quiet", VCPKG["commit"]])
     rec.run("vcpkg-bootstrap", [vcpkg / "bootstrap-vcpkg.bat", "-disableMetrics"], cwd=vcpkg)
     downloads = work / "vcpkg-downloads"
