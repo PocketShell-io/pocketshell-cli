@@ -106,3 +106,18 @@ func checkContext(c nativeContext) error {
 }
 
 func sortStrings(s []string) []string { sort.Strings(s); return s }
+
+// elevationFrom reads TokenElevation through an ERROR-RETURNING query: the
+// call must succeed and return exactly one DWORD; anything else is a
+// measurement error (never "not elevated").
+func elevationFrom(query func(buf []byte) (uint32, error)) (bool, error) {
+	buf := make([]byte, 4)
+	n, err := query(buf)
+	if err != nil {
+		return false, errors.New("TokenElevation could not be measured")
+	}
+	if n != 4 {
+		return false, errors.New("TokenElevation returned an unexpected length")
+	}
+	return buf[0]|buf[1]|buf[2]|buf[3] != 0, nil
+}

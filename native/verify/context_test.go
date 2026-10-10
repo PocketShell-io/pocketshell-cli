@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -71,5 +72,35 @@ func TestContextRefusesElevatedOrUnmeasurable(t *testing.T) {
 	}
 	if code, _, _ := runCtx(t, []string{"context", "--operation-id", "c"}, session0); code != 1 {
 		t.Fatal("session 0 accepted")
+	}
+}
+
+// --- CTX1: elevation is MEASURED with an error-returning call; unknown is never false --
+
+func TestElevationFromQuery(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    func(buf []byte) (uint32, error)
+		elevated bool
+		ok       bool
+	}{
+		{"call failed", func([]byte) (uint32, error) { return 0, errors.New("access denied") }, false, false},
+		{"short result", func(b []byte) (uint32, error) { return 2, nil }, false, false},
+		{"long result", func(b []byte) (uint32, error) { return 8, nil }, false, false},
+		{"known zero", func(b []byte) (uint32, error) { b[0], b[1], b[2], b[3] = 0, 0, 0, 0; return 4, nil }, false, true},
+		{"non-zero", func(b []byte) (uint32, error) { b[0] = 1; return 4, nil }, true, true},
+	}
+	for _, c := range cases {
+		got, err := elevationFrom(c.query)
+		if (err == nil) != c.ok || (c.ok && got != c.elevated) {
+			t.Errorf("%s: %v %v", c.name, got, err)
+		}
+	}
+}
+
+func TestContextMeasurementErrorIsNeverSuccess(t *testing.T) {
+	failing := func() (nativeContext, error) { return nativeContext{}, errors.New("TokenElevation unmeasurable") }
+	if code, reply, _ := runCtx(t, []string{"context", "--operation-id", "c"}, failing); code != 1 || reply["ok"] != false {
+		t.Fatalf("%d %v", code, reply)
 	}
 }
