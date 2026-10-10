@@ -26,7 +26,7 @@ def bb():
 def test_msys_configure_declares_the_cygwin_build_triplet_and_the_matching_dll_path(bb, tmp_path):
     script = bb.msys_build_script("/C/bw/src")
     assert "--build=x86_64-pc-cygwin" in script and "--with-msys2-runtime-commit=" + bb.MSYS["commit"] in script
-    assert "x86_64-w64-mingw32-gcc" in script and "--with-cross-bootstrap" in script  # the winsup cross compiler is checked, never assumed
+    assert "x86_64-w64-mingw32-gcc" in script and "--with-cross-bootstrap" in script and "--disable-dumper" in script  # the winsup cross compiler is checked, never assumed
     assert bb.msys_dll(tmp_path) == tmp_path / "x86_64-pc-cygwin" / "winsup" / "cygwin" / "new-msys-2.0.dll"
     assert "x86_64-pc-msys" not in str(bb.msys_dll(tmp_path))
 
