@@ -272,7 +272,9 @@ def test_spawn_entry_runs_the_held_file_and_reports_its_result(tree):
     assert code == 0 and [e["event"] for e in ev] == ["launched", "exited", "released"], ev
     launched, exited = ev[0], ev[1]
     assert launched["imageMatches"] is True and launched["pid"] == exited["pid"]
-    assert exited["exitCode"] == 0 and "127.0.0.1" in exited["stdout"]
+    # PING prints nothing without a console (CREATE_NO_WINDOW); captured stdout is
+    # proven with the real CLI in test_verifier_spawns_the_held_release_entry
+    assert exited["exitCode"] == 0 and isinstance(exited["stdoutBytes"], int)
     assert win.WindowsApi().process_identity(launched["pid"])["state"] == "absent"
     with open(tree["entry"], "r+b"):
         pass  # released
