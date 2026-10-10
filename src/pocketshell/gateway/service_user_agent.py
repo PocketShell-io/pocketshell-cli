@@ -999,6 +999,7 @@ def _install_endpoint(doc, *, user_data, catalog, staged, dry_run, api, runner, 
     return doc(True, receipt), EXIT_READY
 
 
+CONSENT_LOG = "authorizations.jsonl"
 AUTHORIZED_TYPES = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-rsa")
 MIN_RSA_BITS = 3072
 
@@ -1026,7 +1027,10 @@ def parse_authorized_key(text) -> object:
     lines = [line for line in text.splitlines() if line.strip()]
     if len(lines) != 1 or "PRIVATE KEY" in text:
         raise AgentError("key-refused", "exactly ONE public-key line is required (never a private key)")
-    fields = lines[0].split()
+    fields = lines[0].split(" ")
+    if lines[0] != lines[0].strip() or "" in fields[:2] or "\t" in " ".join(fields[:2]):
+        raise AgentError("key-refused", "the public key must be canonical: `type base64[ comment]`, single "
+                         "spaces, no leading whitespace")
     if len(fields) < 2 or fields[0] not in AUTHORIZED_TYPES:
         raise AgentError("key-refused", f"the key type must be one of {', '.join(AUTHORIZED_TYPES)} (no "
                          "authorized_keys options, no certificates)")
@@ -1034,12 +1038,15 @@ def parse_authorized_key(text) -> object:
         key = gateway_pins.parse_host_key(" ".join(fields[:2]))
     except gateway_pins.PinError as exc:
         raise AgentError("key-refused", sanitize(str(exc), 300)) from None
+    if base64.b64encode(base64.b64decode(fields[1], validate=True)).decode("ascii") != fields[1] \
+            or key.blob_b64 != fields[1]:
+        raise AgentError("key-refused", "the public key's base64 is not canonical")
     if key.key_type == "ssh-rsa" and _rsa_bits(base64.b64decode(key.blob_b64)) < MIN_RSA_BITS:
         raise AgentError("key-refused", f"an RSA key must have at least {MIN_RSA_BITS} bits")
     return key
 
 
-def authorize_key_command(text, *, api, runner, operation_id=None) -> tuple:
+def authorize_key_command(text, *, api, runner, operation_id=None, confirmed: bool = False) -> tuple:
     """`gateway agent authorize-key --public-key-stdin` (revision D): append the
     user's OWN client public key to the generated authorized_keys, atomically
     and owner-private. The gateway never brokers user keys (docs/gateway.md
@@ -1050,6 +1057,9 @@ def authorize_key_command(text, *, api, runner, operation_id=None) -> tuple:
                 "authorized": authorized,
                 "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600)}}
 
+    if not confirmed:
+        return doc(False, error=AgentError("usage", "authorize-key needs --confirmed: the user explicitly "
+                                           "confirmed this own client key")), EXIT_USAGE
     if sys.platform != "win32":
         return doc(False, error=AgentError("unsupported-platform", "Windows-only")), EXIT_ERROR
     try:
@@ -1067,11 +1077,90 @@ def authorize_key_command(text, *, api, runner, operation_id=None) -> tuple:
             if key.line not in lines:
                 lines.append(key.line)
                 _write_private(target, ("\n".join(lines) + "\n").encode("utf-8"))
+            # the recorded explicit consent (public facts only)
+            log = (_read_private(_path(CONSENT_LOG), 4 * 1024 * 1024) or b"").decode("utf-8").splitlines()
+            log.append(json.dumps({"operationId": operation_id, "type": key.key_type, "fingerprint": key.fingerprint,
+                                   "consent": "user-confirmed", "authority": b["authority"], "at": int(time.time())}))
+            _write_private(_path(CONSENT_LOG), ("\n".join(log[-1000:]) + "\n").encode("utf-8"))
     except AgentError as exc:
         return doc(False, error=exc), EXIT_USAGE if exc.code == "usage" else EXIT_ERROR
     except Exception as exc:  # noqa: BLE001 - a refusal, never a traceback
         return doc(False, error=AgentError("error", str(exc) or type(exc).__name__)), EXIT_ERROR
     return doc(True, {"type": key.key_type, "fingerprint": key.fingerprint}), EXIT_READY
+
+
+ENROLL_TIMEOUT = 180
+
+
+def _run_enroll_helper(argv, *, input, timeout):
+    """The helper enroll as a bounded hidden child: the scoped token is its
+    whole stdin (never argv, env, file or output)."""
+    import subprocess
+
+    flags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+    p = subprocess.run(argv, input=input, capture_output=True, timeout=timeout, creationflags=flags)
+    return p.returncode, p.stdout, p.stderr
+
+
+def enroll_command(config_dir, helper, *, api, runner, operation_id=None) -> tuple:
+    """`gateway agent enroll` (§16.17): the supported helper enrollment of a
+    pre-enrollment binding against its GENERATED host key, as one terminal
+    JSON document. The scoped gateway token is minted from the stored login
+    session and handed to the helper on stdin; it never reaches any output."""
+    from pocketshell.gateway import helper as gateway_helper
+    from pocketshell.gateway import pins as gateway_pins
+    from pocketshell.gateway import service_windows as win
+    from pocketshell.gateway import tokens as gateway_tokens
+
+    def doc(ok, state=None, enrollment=None, error=None):
+        return {"version": API_VERSION, "operationId": operation_id, "action": "enroll", "ok": ok, "state": state,
+                "enrollment": enrollment,
+                "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600)}}
+
+    if sys.platform != "win32":
+        return doc(False, error=AgentError("unsupported-platform", "Windows-only")), EXIT_ERROR
+    token = None
+    try:
+        with _OperationLock():
+            b, m, host_key = load_binding(api=api, runner=runner, revalidate=True)
+            if b.get("enrolled") is not False:
+                raise AgentError("already-enrolled", "this binding is already enrolled (or is not a new-machine "
+                                 "install); nothing to enroll")
+            _sha, receipt = _authority_trust(m, b["authority"], b["ownerSID"], api)
+            keys = _generated_keys(receipt)
+            try:
+                config_dir = win.validate_path(config_dir, "config dir")
+                binary = win.resolve_helper(helper, runner)  # the reviewed helper, BEFORE any token exists
+            except ServiceError as exc:
+                raise AgentError("usage", str(exc)) from None
+            try:
+                token = gateway_tokens.obtain_token(gateway_tokens.default_token_provider)
+            except gateway_tokens.NotLoggedInError as exc:
+                raise AgentError("not-logged-in", f"{exc} (run agent login-start / login-complete first)") from None
+            except gateway_tokens.GatewayTokenError as exc:
+                raise AgentError("token-failed", str(exc)) from None
+            argv = [binary, *gateway_helper.build_helper_argv(
+                "enroll", config_dir=config_dir, token_stdin=True, ssh_host=f"127.0.0.1:{b['port']}",
+                expect_host_key=keys["hostKeyPublic"])]
+            code, _out, err = _run_enroll_helper(argv, input=(token + "\n").encode("ascii"), timeout=ENROLL_TIMEOUT)
+            if code != 0:
+                detail = (err or b"").decode("utf-8", "replace").replace(token, "[redacted]")[-400:]
+                raise AgentError("enroll-failed", f"the helper enroll exited {code}: {detail}")
+            show = common.check_enrollment(binary, config_dir, runner)
+            fields = common.parse_show(show)
+            pinned = gateway_pins.parse_host_key(fields.get("pinned ssh host key", ""))
+            if pinned.line != keys["hostKeyPublic"] or (fields.get("local ssh") or "").split()[:1] != \
+                    [f"127.0.0.1:{b['port']}"]:
+                raise AgentError("enroll-failed", "the enrollment did not pin this endpoint's generated host key")
+    except AgentError as exc:
+        return doc(False, error=exc), EXIT_USAGE if exc.code == "usage" else EXIT_ERROR
+    except Exception as exc:  # noqa: BLE001 - a refusal, never a traceback
+        text = str(exc) or type(exc).__name__
+        if token:
+            text = text.replace(token, "[redacted]")
+        return doc(False, error=AgentError("error", text)), EXIT_ERROR
+    return doc(True, "enrolled", {"deviceId": fields.get("device id", ""), "configDir": config_dir,
+                                  "server": fields.get("server", ""), "helper": binary}), EXIT_READY
 
 
 def verify_paths_command(*, owner_sid, operation_id, private_roots, resources_roots, requests, api,

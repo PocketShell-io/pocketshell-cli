@@ -625,16 +625,68 @@ def agent_install(user_data, catalog, staged, dry_run, config_dir, endpoint_inpu
 
 
 @agent_group.command("authorize-key")
-@click.option("--public-key-stdin", is_flag=True, required=True,
-              help="Read ONE OpenSSH public-key line (your own client device's) from stdin.")
+@click.option("--public-key-stdin", is_flag=True, help="Read ONE OpenSSH public-key line from stdin.")
+@click.option("--public-key-file", default=None, metavar="PATH",
+              help="Read ONE OpenSSH public-key line from this file (at most 16 KiB; a public key, not a secret).")
+@click.option("--confirmed", is_flag=True, help="The user explicitly confirmed this is their own client key.")
 @_JSON
 @_OPERATION_ID
-def agent_authorize_key(public_key_stdin, as_json, operation_id):
+def agent_authorize_key(public_key_stdin, public_key_file, confirmed, as_json, operation_id):
     """Authorize one of your own client public keys for this endpoint (new-machine installs)."""
     _check_operation_id(operation_id)
     api, runner = _api_runner()
-    text = click.get_text_stream("stdin").read(16 * 1024 + 1)
-    _emit_raw(*_agent.authorize_key_command(text, api=api, runner=runner, operation_id=operation_id))
+    if public_key_stdin == (public_key_file is not None):
+        _emit_raw({"version": 1, "operationId": operation_id, "action": "authorize-key", "ok": False,
+                   "authorized": None, "error": {"code": "usage", "message": "exactly one of --public-key-stdin / "
+                                                 "--public-key-file"}}, 2)
+    if public_key_file is not None:
+        try:
+            with open(public_key_file, "rb") as handle:
+                text = handle.read(16 * 1024 + 1).decode("utf-8", "replace")
+        except OSError as exc:
+            text = None
+            _emit_raw({"version": 1, "operationId": operation_id, "action": "authorize-key", "ok": False,
+                       "authorized": None, "error": {"code": "usage", "message": f"cannot read the key file: "
+                                                     f"{exc.strerror}"}}, 2)
+    else:
+        text = click.get_text_stream("stdin").read(16 * 1024 + 1)
+    _emit_raw(*_agent.authorize_key_command(text, api=api, runner=runner, operation_id=operation_id,
+                                            confirmed=confirmed))
+
+
+@agent_group.command("login-start")
+@click.option("--label", default=None, metavar="TEXT", help="Session name on the approval page.")
+@_JSON
+@_OPERATION_ID
+def agent_login_start(label, as_json, operation_id):
+    """Start the account device flow: one JSON document with the PUBLIC code (§16.17)."""
+    from pocketshell.gateway import service_agent_firstuse as fu
+
+    _emit_raw(*fu.login_start(operation_id=operation_id, label=label))
+
+
+@agent_group.command("login-complete")
+@click.option("--login", "login_op", required=True, metavar="OP", help="The login-start operation id.")
+@click.option("--timeout", type=float, default=60.0, help="Polling deadline in seconds (1..120).")
+@_JSON
+@_OPERATION_ID
+def agent_login_complete(login_op, timeout, as_json, operation_id):
+    """Wait (bounded) for the browser approval of a started login (§16.17)."""
+    from pocketshell.gateway import service_agent_firstuse as fu
+
+    _emit_raw(*fu.login_complete(operation_id=operation_id, login=login_op, timeout=timeout))
+
+
+@agent_group.command("enroll")
+@click.option("--config-dir", required=True, metavar="DIR", help="The NEW enrollment config dir.")
+@click.option("--helper", required=True, metavar="PATH", help="The release's pocketshell-link.exe.")
+@_JSON
+@_OPERATION_ID
+def agent_enroll(config_dir, helper, as_json, operation_id):
+    """Enroll this new machine against its generated endpoint host key (§16.17)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit_raw(*_agent.enroll_command(config_dir, helper, api=api, runner=runner, operation_id=operation_id))
 
 
 @agent_group.command("verify-paths")
