@@ -272,10 +272,16 @@ def build_msys(work: Path, out: Path, rec: Recorder) -> dict:
     if not dll.is_file():  # an aggregate make natural 0 alone is never acceptance
         raise SystemExit(f"the build emitted no {dll.relative_to(src)}")
     out.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(dll, out / "msys-2.0.dll")
+    shutil.copyfile(dll, out / "new-msys-2.0.unstripped.dll")
+    # the shipped runtime is debug-stripped like the vendor's (3.37 MB vs ~25 MB with DWARF)
+    rec.run("msys-strip", [sdk / "usr" / "bin" / "strip.exe", "--strip-debug", "-o", out / "msys-2.0.dll", dll],
+            cwd=src, env=env)
     tools = {"bash": tool(bash), "gcc": tool(sdk / "usr" / "bin" / "gcc.exe"),
              "make": tool(sdk / "usr" / "bin" / "make.exe")}
-    return {"inputs": inputs, "tools": tools, "outputs": {"msys-2.0.dll": sha256(out / "msys-2.0.dll")}}
+    tools["strip"] = tool(sdk / "usr" / "bin" / "strip.exe")
+    return {"inputs": inputs, "tools": tools,
+            "outputs": {"msys-2.0.dll": sha256(out / "msys-2.0.dll"),
+                        "new-msys-2.0.unstripped.dll": sha256(out / "new-msys-2.0.unstripped.dll")}}
 
 
 def main() -> int:
