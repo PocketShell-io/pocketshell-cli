@@ -223,14 +223,17 @@ MSYS_BUILD = "x86_64-pc-cygwin"  # the pinned configure selects target-winsup on
 
 
 def msys_build_script(posix_src: str) -> str:
-    """The upstream recipe with the source-supported explicit build triplet. The
-    winsup configure needs the MinGW cross compiler (cygserver/utils); the SDK
-    keeps it in /opt/bin, which is checked and logged, never assumed."""
+    """The upstream recipe with the source-supported explicit build triplet.
+    ``--with-cross-bootstrap`` (winsup/configure.ac) skips ONLY the MinGW-built
+    utils/testsuite (winsup/utils, winsup/testsuite Makefile.am CROSS_BOOTSTRAP),
+    which need an i686 MinGW compiler the pinned SDK does not carry; the runtime
+    DLL is built from the same sources either way. The x86_64 MinGW compiler is
+    still checked and logged."""
     return (f"set -e; export PATH=/opt/bin:$PATH; cd '{posix_src}'; "
             "command -v x86_64-w64-mingw32-gcc || { echo 'no x86_64-w64-mingw32-gcc in the SDK' >&2; exit 3; }; "
             "x86_64-w64-mingw32-gcc --version | head -1; gcc -dumpmachine; "
             "(cd winsup && ./autogen.sh); "
-            f"./configure --disable-dependency-tracking --build={MSYS_BUILD} "
+            f"./configure --disable-dependency-tracking --build={MSYS_BUILD} --with-cross-bootstrap "
             f"--with-msys2-runtime-commit={MSYS['commit']}; make -j4")
 
 
