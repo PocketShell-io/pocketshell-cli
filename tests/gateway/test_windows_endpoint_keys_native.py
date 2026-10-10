@@ -79,7 +79,10 @@ def test_system_roles_are_measured_natively_with_the_servicing_authority():
     refs = eps.system_references(checked)
     assert [r["name"] for r in refs] == ["cmd.exe", "conhost.exe"]
     # real refusals on the same production function
-    wow = {k.replace("System32", "SysWOW64"): v for k, v in roles.items()}
+    import re
+
+    wow = {re.sub("(?i)system32", "SysWOW64", k): v for k, v in roles.items()}
+    assert all("SysWOW64" in k for k in wow)
     one = dict(list(roles.items())[:1])
     for bad in (wow, one, {**roles, **{next(iter(roles)): "X" * 64}}):
         with pytest.raises(inst.InstallError):
