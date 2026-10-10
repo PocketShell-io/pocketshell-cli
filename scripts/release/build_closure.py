@@ -302,6 +302,34 @@ def add_aplexer_client(native: Path, args) -> dict:
                         "clientWheelSHA256": hashlib.sha256(client_bytes).hexdigest(), "head": APLEXER["head"]}}
 
 
+def pe_exports(data: bytes) -> set:
+    """Exported names of a PE32+ image (the export directory's name table)."""
+    import struct
+
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    if data[pe:pe + 4] != b"PE\0\0":
+        raise SystemExit("not a PE image")
+    nsec = struct.unpack_from("<H", data, pe + 6)[0]
+    opt = pe + 24
+    size_opt = struct.unpack_from("<H", data, pe + 20)[0]
+    export_rva = struct.unpack_from("<I", data, opt + 112)[0]  # PE32+: DataDirectory[0]
+    sections = [struct.unpack_from("<IIII", data, opt + size_opt + 40 * i + 8) for i in range(nsec)]
+
+    def off(rva):
+        for vsize, va, rawsize, raw in sections:
+            if va <= rva < va + max(vsize, rawsize):
+                return raw + rva - va
+        raise SystemExit("export RVA outside the sections")
+
+    e = off(export_rva)
+    count, names_rva = struct.unpack_from("<I", data, e + 24)[0], struct.unpack_from("<I", data, e + 32)[0]
+    out = set()
+    for i in range(count):
+        n = off(struct.unpack_from("<I", data, off(names_rva) + 4 * i)[0])
+        out.add(data[n:data.index(b"\0", n)].decode("ascii"))
+    return out
+
+
 SYMLINK_COOKIE = b"!<symlink>\xff\xfe"
 
 
@@ -342,7 +370,12 @@ def add_backend(release: Path, args) -> dict:
     dll = shell / "usr" / "bin" / "msys-2.0.dll"
     if sha256(dll) != MSYS_ORIGINAL:
         raise SystemExit("the archive's msys-2.0.dll is not the reviewed original 2a89b7c3")
-    shutil.copyfile(Path(args.backend_msys) / "msys" / "msys-2.0.dll", dll)
+    baseline = pe_exports(dll.read_bytes())
+    rebuilt = (Path(args.backend_msys) / "msys" / "msys-2.0.dll").read_bytes()
+    missing = baseline - pe_exports(rebuilt)
+    if missing:  # ABI: every vendor export must still be there
+        raise SystemExit(f"the rebuilt msys-2.0.dll lacks {len(missing)} vendor exports: {sorted(missing)[:5]}")
+    dll.write_bytes(rebuilt)
     for name in ("a.exe", "aplexer.exe"):
         (release / "python" / name).write_bytes(args.aplexer_exe)
     return {"backend": {"openssh": {"receiptSHA256": sha256(Path(args.backend_openssh) / "openssh-build-receipt.json"),
@@ -351,7 +384,9 @@ def add_backend(release: Path, args) -> dict:
                                  "checkout": msys["checkout"], "outputs": msys["outputs"]},
                         "git": {"url": GIT_URL, "sha256": GIT_SHA256, "version": GIT_VERSION, "members": members,
                                 "replaced": {"usr/bin/msys-2.0.dll": {"before": MSYS_ORIGINAL,
-                                                                     "after": msys["outputs"]["msys-2.0.dll"]}}}}}
+                                                                     "after": msys["outputs"]["msys-2.0.dll"],
+                                                                     "vendorExports": len(baseline),
+                                                                     "missingExports": 0}}}}}
 
 
 def catalog_for(release: Path, args, commit: str) -> dict:
