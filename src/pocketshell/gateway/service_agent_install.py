@@ -264,6 +264,23 @@ class NativePaths:
         return {"canonicalPath": canonical, "size": size, "sha256": digest.hexdigest(),
                 "bytes": bytes(head) if size <= max_bytes else None}
 
+    def system_reference(self, path: str, owner_sid: str) -> dict:
+        """§16.13: exactly <GetSystemWindowsDirectory>\\System32\\{cmd,conhost}.exe,
+        the guardian's servicing path_authority, canonical final path, digest."""
+        import ctypes as c
+
+        buf = c.create_unicode_buffer(261)
+        if not c.WinDLL("kernel32", use_last_error=True).GetSystemWindowsDirectoryW(buf, 261):
+            raise ServiceError("cannot measure the system directory")
+        system32 = buf.value.rstrip("\\") + "\\System32"
+        head, _sep, name = path.rpartition("\\")
+        if "/" in path or "~" in path or name.lower() not in SYSTEM_REFERENCES or head.casefold() != system32.casefold():
+            raise ServiceError("not an allowed canonical system reference")
+        self.api.path_authority(path, owner_sid, role="file", servicing=True)
+        from pocketshell.gateway import service_windows as win
+
+        return {"canonicalPath": path, "size": None, "sha256": win.file_sha256(path)}
+
     def metadata(self, path: str, owner_sid: str) -> dict:
         """Setup ABI v3 key files: owner-only, protected, single-link, reparse-free
         regular file whose parent is a private root. Opened with
@@ -412,7 +429,8 @@ def known_folders() -> dict:
 
 
 OPERATION_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-VERIFY_KINDS = ("document", "binary", "directory", "inventory")
+VERIFY_KINDS = ("document", "binary", "directory", "inventory", "system-reference")
+SYSTEM_REFERENCES = ("cmd.exe", "conhost.exe")  # agreement §16.13 (guardian 6cf servicing roles)
 MAX_REQUESTS = 512
 MAX_DOCUMENT = 64 * 1024          # bytes returned per document (the adapter's bound)
 MAX_REPLY = 1024 * 1024           # the verifier's own channel, independent of the agent adapter
@@ -467,6 +485,13 @@ def verify_paths(*, owner_sid: str, operation_id: str, private_roots=(), resourc
         try:
             if not _abs(path):
                 raise ServiceError("not a plain drive-absolute path")
+            if kind == "system-reference":
+                if any(_under(path, r) for r, _p in roots):
+                    raise ServiceError("a system-reference is never inside a declared root")
+                got = paths.system_reference(path, owner_sid)
+                item.update(canonicalPath=got["canonicalPath"], size=got["size"], sha256=got["sha256"], ok=True)
+                results.append(item)
+                continue
             owners = [(r, private) for r, private in roots if _under(path, r)]
             if len(owners) != 1:
                 raise ServiceError("the path is not inside exactly one declared root")

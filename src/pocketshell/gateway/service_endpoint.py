@@ -325,6 +325,31 @@ def check_trust(m: GuardianManifest, *, file_sha256: Callable[[str], str]) -> No
             raise ServiceError(f"pinned endpoint file {sanitize(path)} does not match the manifest")
 
 
+SYSTEM_REFERENCE_NAMES = ("cmd.exe", "conhost.exe")
+
+
+def system_references(refs, system_root) -> dict:
+    """§16.13 endpoint.systemReferences: EXACTLY [{role:"system-reference",
+    name, path, sha256}] for cmd.exe then conhost.exe, each path the plain
+    <measured SystemRoot>\\System32\\<name> spelling (no 8.3, \\\\?\\, SysWOW64,
+    other directory) and a guardian servicing image. Returns casefolded
+    path -> sha256."""
+    if not isinstance(system_root, str) or not isinstance(refs, list) or len(refs) != len(SYSTEM_REFERENCE_NAMES):
+        raise ServiceError("the authority's systemReferences are not exactly cmd.exe and conhost.exe")
+    out = {}
+    for ref, name in zip(refs, SYSTEM_REFERENCE_NAMES):
+        want = ntpath.join(system_root, "System32", name)
+        if not isinstance(ref, dict) or set(ref) != {"role", "name", "path", "sha256"} \
+                or ref["role"] != "system-reference" or ref["name"] != name \
+                or not isinstance(ref["path"], str) or ref["path"].casefold() != want.casefold() \
+                or any(c in ref["path"] for c in "/~?") or not is_servicing_image(ref["path"]) \
+                or not isinstance(ref["sha256"], str) or not _HEX64.fullmatch(ref["sha256"]):
+            raise ServiceError(f"the authority's system reference for {name} is not the exact measured "
+                               "<SystemRoot>\\System32 image")
+        out[ntpath.normcase(ref["path"])] = ref["sha256"]
+    return out
+
+
 def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable[[str], str],
                           release_pins: Optional[dict] = None) -> None:
     """Setup ABI v3 trust: the installed authority (receipt v3) records THIS
@@ -333,7 +358,8 @@ def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable
     path -> catalog sha256) every release pin equal to its catalog row.
     No structural-only acceptance and no compiled per-host digest."""
     e = receipt.get("endpoint") if isinstance(receipt, dict) and receipt.get("version") == 3 else None
-    if not isinstance(e, dict) or set(e) != {"root", "manifest", "manifestSHA256", "config", "state"}:
+    if not isinstance(e, dict) or set(e) != {"root", "manifest", "manifestSHA256", "config", "state",
+                                             "systemReferences"}:
         raise ServiceError("no installed authority (receipt v3) records an endpoint manifest; run `agent install`")
     if m.sha256 != e["manifestSHA256"]:
         raise ServiceError(f"endpoint manifest sha256 {m.sha256[:12]}… is not the one recorded by the installed "
@@ -364,13 +390,21 @@ def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable
     # closure is pinned at its catalog digest (no missing startup member).
     base = ntpath.normcase(ntpath.normpath(root)) + "\\"
     keys = {ntpath.normcase(p) for p in m.pins}
-    for path in m.pins:
-        if not ntpath.normcase(path).startswith(base) and not is_servicing_image(path):
-            raise ServiceError(f"pinned file {sanitize(path)} is outside managed-runtime and not a System32 "
-                               "servicing role")
-    for image in SERVICING_IMAGES:
-        if image not in keys:
-            raise ServiceError(f"the manifest lacks the servicing role pin {image}")
+    refs = system_references(e["systemReferences"], (receipt.get("environment") or {}).get("SystemRoot"))
+    outside = {ntpath.normcase(p): h for p, h in m.pins.items() if not ntpath.normcase(p).startswith(base)}
+    for path in outside:
+        if path not in refs:
+            raise ServiceError(f"pinned file {sanitize(path)} is outside managed-runtime and not a recorded "
+                               "system reference")
+    roles = {"daemon": m.daemon, "python": m.python, "config": m.config,
+             **{k: m.config_bindings[k] for k in ("sftp", "backendExecutable", "backendDLL", "backendConfig")}}
+    for role, path in roles.items():
+        if not ntpath.normcase(path).startswith(base):
+            raise ServiceError(f"the {role} role must live below managed-runtime (a system reference serves only "
+                               "the guardian's servicing role)")
+    for path, digest in refs.items():
+        if outside.get(path) != digest:
+            raise ServiceError(f"the manifest lacks the recorded system reference pin {sanitize(path)}")
     for need in (m.config, m.config_bindings["backendConfig"]):
         if ntpath.normcase(need) not in keys:
             raise ServiceError(f"the manifest lacks a pin for {sanitize(need)}")

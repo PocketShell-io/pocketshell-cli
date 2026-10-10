@@ -48,7 +48,7 @@ TRIO = ("6cf7ae85ad21b23496e7187da7e3bb4f171adef5f63edd2fd01f6ce6435bd047",
         "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
         "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce")
 # natively measured System32 servicing roles (here: synthetic digests)
-SYSTEM_ROLES = {"C:\\Windows\\System32\\cmd.exe": "c" * 64, "C:\\Windows\\System32\\conhost.exe": "d" * 64}
+SYSTEM_ROLES = {"C:\\WINDOWS\\System32\\cmd.exe": "c" * 64, "C:\\WINDOWS\\System32\\conhost.exe": "d" * 64}
 KEY_LINE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK8B0Ctl2bl8wdg50ZKPY7t9WuU170cplZpzuMckYrSU"
 
 
@@ -184,7 +184,11 @@ def test_install_generates_the_manifest_and_anchors_it_in_authority_v3():
     receipt = install(host, paths)
     root = host.user_data + "\\managed-runtime"
     e = receipt["endpoint"]
-    assert sorted(e) == ["config", "manifest", "manifestSHA256", "root", "state"]
+    assert sorted(e) == ["config", "manifest", "manifestSHA256", "root", "state", "systemReferences"]
+    assert e["systemReferences"] == [
+        {"role": "system-reference", "name": "cmd.exe", "path": "C:\\WINDOWS\\System32\\cmd.exe", "sha256": "c" * 64},
+        {"role": "system-reference", "name": "conhost.exe", "path": "C:\\WINDOWS\\System32\\conhost.exe",
+         "sha256": "d" * 64}]
     assert e["root"] == root and e["manifest"] == root + "\\endpoint\\endpoint-manifest.json"
     assert e["config"] == root + "\\endpoint\\sshd.conf" and e["state"] == root + "\\endpoint\\state"
     data = paths.files[paths.key(e["manifest"])][1]
@@ -494,3 +498,74 @@ def test_a_closure_over_the_guardian_manifest_bound_refuses_with_its_measurement
         files[f"endpoint/shell/usr/share/f{i:04d}.txt"] = (b"x%d" % i, "module")
     with pytest.raises(inst.InstallError, match="64 KiB"):
         install(host, staged(host, files=files, catalog=catalog_v3(files)))
+
+
+# --- c1: the narrow measured system-reference role (§16.13) -----------------------------
+
+
+def _with_refs(receipt, refs):
+    r = json.loads(json.dumps(receipt))
+    r["endpoint"]["systemReferences"] = refs
+    return r
+
+
+@pytest.mark.parametrize("case", ["missing", "extra-path", "wrong-hash", "syswow64", "case-other-dir",
+                                  "short-name", "unc", "not-system-role", "outside-root-pin"])
+def test_system_references_are_exact_and_narrow(case):
+    host = Host()
+    _paths, receipt, e, data, digest = _installed(host)
+    m = ep.parse_manifest(data, e["manifest"])
+    refs = receipt["endpoint"]["systemReferences"]
+    rows = _rows(host)
+    ep.check_trust_authority(m, receipt, file_sha256=digest, release_pins=rows)  # the exact pair: accepted
+    r = receipt
+    if case == "missing":
+        r = _with_refs(receipt, refs[:1])
+    elif case == "extra-path":
+        r = _with_refs(receipt, refs + [dict(refs[0], name="cmd.exe", path="C:\\Temp\\cmd.exe")])
+    elif case == "wrong-hash":
+        r = _with_refs(receipt, [refs[0], dict(refs[1], sha256="e" * 64)])
+    elif case == "syswow64":
+        r = _with_refs(receipt, [dict(refs[0], path="C:\\WINDOWS\\SysWOW64\\cmd.exe"), refs[1]])
+    elif case == "case-other-dir":
+        r = _with_refs(receipt, [dict(refs[0], path="C:\\windows\\system\\cmd.exe"), refs[1]])
+    elif case == "short-name":
+        r = _with_refs(receipt, [dict(refs[0], path="C:\\WINDOW~1\\System32\\cmd.exe"), refs[1]])
+    elif case == "unc":
+        r = _with_refs(receipt, [dict(refs[0], path="\\\\?\\C:\\WINDOWS\\System32\\cmd.exe"), refs[1]])
+    elif case == "not-system-role":
+        r = _with_refs(receipt, [dict(refs[0], role="sftp"), refs[1]])
+    elif case == "outside-root-pin":
+        m, r = _rewritten(host, receipt, e, data,
+                          lambda doc: doc["pins"].__setitem__("C:\\WINDOWS\\System32\\whoami.exe", "f" * 64))
+    with pytest.raises(ep.ServiceError):
+        ep.check_trust_authority(m, r, file_sha256=digest, release_pins=rows)
+
+
+def test_system_references_follow_the_measured_system_root():
+    host = Host()
+    host.folders["SystemRoot"] = "C:\\Windows"
+    receipt = install(host, staged(host), system_roles={"C:\\Windows\\System32\\cmd.exe": "c" * 64,
+                                                       "C:\\Windows\\System32\\conhost.exe": "d" * 64})
+    assert [x["path"] for x in receipt["endpoint"]["systemReferences"]] == [
+        "C:\\Windows\\System32\\cmd.exe", "C:\\Windows\\System32\\conhost.exe"]
+    with pytest.raises(inst.InstallError, match="system"):
+        install(Host(), staged(Host()), system_roles={"C:\\Windows\\System32\\cmd.exe": "c" * 64,
+                                                     "D:\\Windows\\System32\\conhost.exe": "d" * 64})
+
+
+@pytest.mark.parametrize("role", ["sftp", "backendExecutable", "backendDLL", "python"])
+def test_a_system_reference_cannot_serve_a_non_system_role(role):
+    host = Host()
+    _paths, receipt, e, data, digest = _installed(host)
+    cmd = "C:/WINDOWS/System32/cmd.exe"
+
+    def mutate(doc):
+        if role == "python":
+            doc["python"] = cmd.replace("/", "\\")
+        else:
+            doc["configBindings"][role] = cmd
+
+    m, r = _rewritten(host, receipt, e, data, mutate)
+    with pytest.raises(ep.ServiceError, match="system reference|managed-runtime"):
+        ep.check_trust_authority(m, r, file_sha256=digest, release_pins=_rows(host))

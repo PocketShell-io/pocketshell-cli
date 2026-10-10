@@ -175,18 +175,29 @@ def generate(*, lay: dict, catalog: dict, owner_sid: str, account: str, port: in
 SYSTEM_ROLE_NAMES = ("cmd.exe", "conhost.exe")
 
 
-def check_system_roles(system_roles) -> dict:
-    """Exactly the guardian's servicing images (C:\\Windows\\System32\\cmd.exe and
-    conhost.exe; policy.servicing_role) with lowercase sha256 digests."""
+def check_system_roles(system_roles, system_root: str) -> dict:
+    """Exactly <measured SystemRoot>\\System32\\{cmd.exe, conhost.exe}, which must
+    also be the guardian's servicing images (policy.servicing_role), with
+    lowercase sha256 digests (agreement §16.13)."""
     from pocketshell.gateway import service_endpoint as ep
 
-    if not isinstance(system_roles, dict) or len(system_roles) != len(ep.SERVICING_IMAGES) \
-            or {ntpath.normcase(ntpath.normpath(k)) for k in system_roles if isinstance(k, str)} \
-            != set(ep.SERVICING_IMAGES) \
+    want = {ntpath.normcase(ntpath.join(system_root, "System32", n)) for n in SYSTEM_ROLE_NAMES}
+    if not isinstance(system_roles, dict) or len(system_roles) != len(SYSTEM_ROLE_NAMES) \
+            or not all(isinstance(k, str) for k in system_roles) \
+            or {ntpath.normcase(k) for k in system_roles} != want \
+            or not all(ep.is_servicing_image(k) for k in system_roles) \
             or not all(isinstance(v, str) and re.fullmatch(r"[a-f0-9]{64}", v) for v in system_roles.values()):
         raise InstallError("environment", "the natively measured system roles must be exactly "
-                           "C:\\Windows\\System32\\cmd.exe and conhost.exe with their sha256")
-    return {ntpath.normpath(k): v for k, v in system_roles.items()}
+                           "<SystemRoot>\\System32\\cmd.exe and conhost.exe (C:\\Windows) with their sha256")
+    by = {ntpath.normcase(k): v for k, v in system_roles.items()}
+    return {ntpath.join(system_root, "System32", n): by[ntpath.normcase(ntpath.join(system_root, "System32", n))]
+            for n in SYSTEM_ROLE_NAMES}
+
+
+def system_references(system_roles: dict) -> list:
+    """The receipt's endpoint.systemReferences (§16.13), ordered by name."""
+    return [{"role": "system-reference", "name": ntpath.basename(p), "path": p, "sha256": h}
+            for p, h in sorted(system_roles.items(), key=lambda x: ntpath.basename(x[0]).lower())]
 
 
 def measure_system_roles(api, owner_sid: str) -> dict:
@@ -276,7 +287,7 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
         raise InstallError("catalog-mismatch", f"this CLI is {cli_version}; the catalog is release "
                            f"{catalog['lineage']['cliVersion']}")
     folders = _system_environment(folders)
-    system_roles = check_system_roles(system_roles)
+    system_roles = check_system_roles(system_roles, folders["SystemRoot"])
 
     # existing enrollment + the key files: measured, never read, never re-ACLed
     try:
@@ -334,7 +345,8 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
         "installer": {"cliVersion": cli_version, "cliCommit": catalog["source"],
                       "installedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))},
         "endpoint": {"root": lay["root"], "manifest": lay["manifest"], "manifestSHA256": manifest_sha,
-                     "config": lay["config"], "state": lay["state"]},
+                     "config": lay["config"], "state": lay["state"],
+                     "systemReferences": system_references(system_roles)},
     }
     if dry_run:
         return receipt

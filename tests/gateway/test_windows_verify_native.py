@@ -491,3 +491,55 @@ def test_7a_held_root_cannot_be_replaced_while_held(scoped):
     finally:
         proc.stdin.close()
         proc.wait(timeout=10)
+
+
+# --- c1: the narrow measured system reference (agreement §16.13) -------------------------
+
+
+def _sys32(name):
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(261)
+    assert ctypes.windll.kernel32.GetSystemWindowsDirectoryW(buf, 261)
+    return os.path.join(buf.value, "System32", name)
+
+
+def _sha(path):
+    import hashlib
+
+    with open(path, "rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def test_system_reference_accepts_exactly_the_measured_system_roles(tree):
+    reqs = [("system-reference", _sys32(n), _sha(_sys32(n))) for n in ("cmd.exe", "conhost.exe")]
+    code, reply = verify(tree, reqs)
+    assert code == 0 and reply["ok"], reply
+    for r, (_k, path, digest) in zip(reply["results"], reqs):
+        assert r["ok"] and r["sha256"] == digest and r["canonicalPath"].casefold() == path.casefold()
+
+
+@pytest.mark.parametrize("variant", ["wrong-hash", "syswow64", "other-name", "unc", "lookalike"])
+def test_system_reference_refusals(tree, tmp_path, variant):
+    cmd = _sys32("cmd.exe")
+    digest = _sha(cmd)
+    if variant == "wrong-hash":
+        req = ("system-reference", cmd, "0" * 64)
+    elif variant == "syswow64":
+        wow = cmd.replace("System32", "SysWOW64")
+        req = ("system-reference", wow, _sha(wow) if os.path.exists(wow) else digest)
+    elif variant == "other-name":
+        ps = _sys32("WindowsPowerShell\\v1.0\\powershell.exe")
+        req = ("system-reference", ps, _sha(ps))
+    elif variant == "unc":
+        req = ("system-reference", "\\\\?\\" + cmd, digest)
+    else:  # a user-writable conhost.exe outside the system directory
+        fake = tmp_path / "conhost.exe"
+        fake.write_bytes(Path(_sys32("conhost.exe")).read_bytes())
+        req = ("system-reference", str(fake), _sha(str(fake)))
+    p = subprocess.run(argv(tree, [req]), capture_output=True, timeout=60, creationflags=0x08000000)
+    assert p.returncode != 0
+    out = p.stdout.decode("utf-8").splitlines()
+    if out:
+        reply = json.loads(out[0])
+        assert not reply["ok"]
