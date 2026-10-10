@@ -352,6 +352,38 @@ def system_references(refs, system_root) -> dict:
     return out
 
 
+KEYS_FIELDS = {"mode", "hostKey", "hostKeyPublic", "hostKeyFingerprint", "authorizedKeys"}
+
+
+def check_keys_block(receipt, m: GuardianManifest) -> dict:
+    """Revision D ``keys``: exactly its five fields; mode generated|migrated;
+    the paths are the manifest's hostKey/authorizedKeys bindings (generated:
+    the fixed <root>\\endpoint\\keys files); the public line parses and its
+    fingerprint is the recorded one and the binding's."""
+    from pocketshell.gateway import pins as gateway_pins
+
+    k = receipt.get("keys")
+    if not isinstance(k, dict) or set(k) != KEYS_FIELDS or k["mode"] not in ("generated", "migrated"):
+        raise ServiceError("the authority's keys block is not the closed revision D shape")
+    for field_, binding in (("hostKey", "hostKey"), ("authorizedKeys", "authorizedKeys")):
+        if not isinstance(k[field_], str) or ntpath.normcase(ntpath.normpath(k[field_])) != \
+                ntpath.normcase(m.config_bindings[binding]):
+            raise ServiceError(f"the authority's keys.{field_} is not the endpoint's configured {binding}")
+    if k["mode"] == "generated":
+        keys_dir = ntpath.normcase(ntpath.join(m.root, "endpoint", "keys"))
+        if ntpath.normcase(ntpath.dirname(ntpath.normpath(k["hostKey"]))) != keys_dir \
+                or ntpath.normcase(ntpath.dirname(ntpath.normpath(k["authorizedKeys"]))) != keys_dir:
+            raise ServiceError("generated keys must live in <managed-runtime>\\endpoint\\keys")
+    try:
+        key = gateway_pins.parse_host_key(k["hostKeyPublic"])
+    except (gateway_pins.PinError, TypeError):
+        raise ServiceError("the authority's keys.hostKeyPublic is not a public host key line") from None
+    binding = receipt.get("binding") or {}
+    if key.fingerprint != k["hostKeyFingerprint"] or binding.get("hostKeyFingerprint") != k["hostKeyFingerprint"]:
+        raise ServiceError("the authority's host-key fingerprint does not match its public key")
+    return k
+
+
 def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable[[str], str],
                           closure: dict) -> None:
     """Setup ABI v3 trust: the installed authority (receipt v3) records THIS
@@ -387,6 +419,7 @@ def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable
             or not isinstance(binding.get("manifest"), str) \
             or ntpath.normcase(ntpath.normpath(binding["manifest"])) != ntpath.normcase(fixed["manifest"]):
         raise ServiceError("the authority binding does not name its endpoint manifest")
+    check_keys_block(receipt, m)
     if m.source_digests() not in ALLOWED_GUARDIAN_SOURCES:
         raise ServiceError("the pinned guardian.py/native_api.py/policy.py are not the reviewed generic guardian "
                            "source trio (ALLOWED_GUARDIAN_SOURCES)")

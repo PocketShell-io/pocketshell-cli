@@ -788,3 +788,85 @@ def test_a_toml_or_shlex_escape_lookalike_round_trips_literally():
     toml = tomllib.loads(paths.files[paths.key(m.config_bindings["backendConfig"])][1].decode("utf-8"))
     assert toml["engines"]["shell"]["command"][0] == m.raw_bindings["backendExecutable"]
     assert "/a/u0022b/" in m.raw_bindings["backendExecutable"]
+
+
+# --- revision D: the NEW-machine flow (fresh host key before enrollment) -------------------
+
+FIXED_PRIVATE = b"-----BEGIN OPENSSH PRIVATE KEY-----\nFIXTURE-NOT-A-REAL-KEY\n-----END OPENSSH PRIVATE KEY-----\n"
+
+
+def install_new(host, paths, **over):
+    kw = dict(user_data=host.user_data, catalog_path=host.catalog_path, staged=host.staged, owner_sid=host.sid,
+              account=host.user, system_roles=dict(SYSTEM_ROLES), paths=paths, folders=host.folders,
+              cli_version=__version__, keys_mode="generated", port=22100,
+              keygen=lambda: (FIXED_PRIVATE, KEY_LINE + " generated"), now=0)
+    kw.update(over)
+    return eps.install_endpoint_runtime(**kw)
+
+
+def test_new_machine_install_generates_owner_private_keys_and_records_the_keys_block():
+    host = Host()
+    paths = staged(host)
+    receipt = install_new(host, paths)
+    root = host.user_data + "\\managed-runtime"
+    k = receipt["keys"]
+    assert k == {"mode": "generated", "hostKey": root + "\\endpoint\\keys\\ssh_host_ed25519_key",
+                 "hostKeyPublic": KEY_LINE, "hostKeyFingerprint": k["hostKeyFingerprint"],
+                 "authorizedKeys": root + "\\endpoint\\keys\\authorized_keys"}
+    assert k["hostKeyFingerprint"].startswith("SHA256:")
+    b = receipt["binding"]
+    assert b["deviceId"] is None and b["configDir"] is None and b["server"] is None and b["port"] == 22100
+    assert b["hostKeyFingerprint"] == k["hostKeyFingerprint"]
+    assert paths.files[paths.key(k["hostKey"])][1] == FIXED_PRIVATE
+    assert paths.files[paths.key(k["authorizedKeys"])][1] == b""
+    # keys are written before the configs and the authority (which is last)
+    order = [ntpath.basename(w) for w in paths.writes]
+    assert order.index("ssh_host_ed25519_key") < order.index("sshd.conf") < order.index("authority.json")
+    assert order[-1] == "authority.json"
+    m = ep.parse_manifest(paths.files[paths.key(receipt["endpoint"]["manifest"])][1], receipt["endpoint"]["manifest"])
+    assert m.port == 22100 and ntpath.normcase(m.config_bindings["hostKey"]) == ntpath.normcase(k["hostKey"])
+    r, _sha, closure = eps.load_authority(root + "\\authority.json", host.sid, paths)
+    ep.check_trust_authority(m, r, file_sha256=lambda p: _disk(paths, p), closure=closure)
+
+
+def test_new_machine_install_never_needs_an_enrollment_or_show():
+    host = Host()
+    paths = staged(host)
+    install_new(host, paths)  # no config dir, no inputs, no show callback
+    with pytest.raises(inst.InstallError):
+        install_new(host, staged(host), config_dir=host.config_dir)
+    with pytest.raises(inst.InstallError):
+        install_new(host, staged(host), port=80)
+
+
+def test_the_real_keygen_is_a_fresh_ed25519_openssh_key():
+    a, b = eps.generate_host_key(), eps.generate_host_key()
+    assert a[0].startswith(b"-----BEGIN OPENSSH PRIVATE KEY-----") and a[1].startswith("ssh-ed25519 ")
+    assert a[0] != b[0] and a[1] != b[1]
+
+
+def test_migrated_install_records_the_enrolled_public_key_in_the_keys_block():
+    host = Host()
+    receipt = install(host, staged(host))
+    assert receipt["keys"]["mode"] == "migrated" and receipt["keys"]["hostKeyPublic"] == KEY_LINE
+    assert receipt["keys"]["hostKey"] == host.host_key
+
+
+@pytest.mark.parametrize("mutate", ["mode", "path", "public", "extra"])
+def test_trust_refuses_an_inconsistent_keys_block(mutate):
+    host = Host()
+    paths = staged(host)
+    receipt = install_new(host, paths)
+    e = receipt["endpoint"]
+    m = ep.parse_manifest(paths.files[paths.key(e["manifest"])][1], e["manifest"])
+    r = json.loads(json.dumps(receipt))
+    if mutate == "mode":
+        r["keys"]["mode"] = "borrowed"
+    elif mutate == "path":
+        r["keys"]["hostKey"] = host.user_data + "\\elsewhere\\k"
+    elif mutate == "public":
+        r["keys"]["hostKeyFingerprint"] = "SHA256:other"
+    else:
+        r["keys"]["privateKey"] = "x"
+    with pytest.raises(ep.ServiceError):
+        ep.check_trust_authority(m, r, file_sha256=lambda p: _disk(paths, p), closure=_closure(host))

@@ -62,7 +62,9 @@ def layout(user_data: str, release: str) -> dict:
             "endpoint": ep, "manifest": ntpath.join(ep, MANIFEST_NAME), "config": ntpath.join(ep, CONFIG_NAME),
             "backendConfig": ntpath.join(ep, BACKEND_CONFIG_NAME), "state": state,
             "stateTmp": ntpath.join(state, "tmp"), "pidFile": ntpath.join(state, "sshd.pid"),
-            "backend": ntpath.join(ep, "backend"), "catalogs": ntpath.join(root, "catalogs")}
+            "backend": ntpath.join(ep, "backend"), "catalogs": ntpath.join(root, "catalogs"),
+            "keys": ntpath.join(ep, "keys"), "hostKey": ntpath.join(ep, "keys", "ssh_host_ed25519_key"),
+            "authorizedKeys": ntpath.join(ep, "keys", "authorized_keys")}
 
 
 def catalog_closure(root: str, catalog: dict) -> dict:
@@ -143,7 +145,24 @@ def _measured_show(show_text: str) -> dict:
             or not 1024 <= int(m.group(1)) <= 65535:
         raise InstallError("binding-mismatch", "the catalog helper's show does not report an enrolled device "
                            "(public wss server, device id, loopback local ssh port, pinned ssh host key)")
-    return {"server": server, "deviceId": device, "port": int(m.group(1)), "hostKeyFingerprint": key.fingerprint}
+    return {"server": server, "deviceId": device, "port": int(m.group(1)), "hostKeyFingerprint": key.fingerprint,
+            "hostKeyPublic": key.line}
+
+
+KEYS_MODES = ("generated", "migrated")
+
+
+def generate_host_key() -> tuple:
+    """A FRESH ed25519 host key: (OpenSSH private-key bytes, public line). The
+    private bytes are written once to the owner-private store and never leave."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    key = ed25519.Ed25519PrivateKey.generate()
+    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                                serialization.NoEncryption())
+    public = key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
+    return private, public.decode("ascii")
 
 
 def _system_environment(folders: dict) -> dict:
@@ -286,26 +305,43 @@ def local_account(owner_sid: str) -> str:
     return name.value.lower()
 
 
-def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, config_dir: str,
-                             endpoint_inputs: bytes, owner_sid: str, account: str, show, system_roles: dict,
-                             paths, folders: dict, cli_version: str, dry_run: bool = False, now=None) -> dict:
+def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, owner_sid: str, account: str,
+                             system_roles: dict, paths, folders: dict, cli_version: str, keys_mode: str = "migrated",
+                             config_dir=None, endpoint_inputs=None, show=None, port=None, keygen=None,
+                             dry_run: bool = False, now=None) -> dict:
     """Install FIRST (no prior bind). Verify, copy, measure, generate, and
     commit authority.json (receipt v3) last; an interrupted install leaves no
     authority (unbound, never READY). ``show(helper_path) -> (text, sha256)``
     runs THIS catalog's helper ``show --config-dir`` (the caller checks the
     reviewed digest): the INSTALLED owner-private copy, or the staged one on
-    --dry-run (nothing is copied then)."""
+    --dry-run (nothing is copied then).
+
+    ``keys_mode`` (setup ABI v3 revision D): "migrated" references an existing
+    enrollment's key files (metadata only) and measures port/device/key from
+    ``show``; "generated" (a NEW machine, before enrollment) creates a fresh
+    ed25519 host key and an empty authorized_keys inside the owner-private
+    endpoint\\keys, on the given ``port``; enrollment and bind follow."""
     from pocketshell.gateway import service_endpoint as ep
 
-    for name, value in (("--user-data", user_data), ("--catalog", catalog_path), ("--staged", staged),
-                        ("--config-dir", config_dir)):
+    if keys_mode not in KEYS_MODES:
+        raise InstallError("usage", "--endpoint-keys is generate (new machine) or migrate (--config-dir + "
+                           "--endpoint-inputs)")
+    generated_mode = keys_mode == "generated"
+    if generated_mode and (config_dir is not None or endpoint_inputs is not None or show is not None):
+        raise InstallError("usage", "a generated-key install takes no --config-dir/--endpoint-inputs")
+    if generated_mode and (type(port) is not int or not 1024 <= port <= 65535):
+        raise InstallError("usage", "--port must be an unprivileged loopback port 1024-65535")
+    named = [("--user-data", user_data), ("--catalog", catalog_path), ("--staged", staged)]
+    if not generated_mode:
+        named.append(("--config-dir", config_dir))
+    for name, value in named:
         if not _abs(value):
             raise InstallError("usage", f"{name} must be an absolute local path")
     if not SID_RE.match(owner_sid or ""):
         raise InstallError("binding-mismatch", "not an own-account SID")
     if not ACCOUNT_RE.match(account or ""):
         raise InstallError("environment", "the account name cannot be an sshd AllowUsers entry")
-    inputs = parse_endpoint_inputs(endpoint_inputs)
+    inputs = None if generated_mode else parse_endpoint_inputs(endpoint_inputs)
     try:
         cat = paths.file(catalog_path, owner_sid, private=False, max_bytes=CATALOG3_MAX_BYTES,
                          root=ntpath.dirname(catalog_path))
@@ -322,26 +358,30 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
     folders = _system_environment(folders)
     system_roles = check_system_roles(system_roles, folders["SystemRoot"])
 
-    # existing enrollment + the key files: measured, never read, never re-ACLed
-    try:
-        if not _same(paths.directory(config_dir, owner_sid, private_root=config_dir), config_dir):
-            raise ServiceError("not the requested directory")
-    except Exception as exc:  # noqa: BLE001
-        raise InstallError("binding-mismatch", f"the enrolled config dir is not an owner-only protected private "
-                           f"root ({sanitize(str(exc), 200)}); the installer never changes its ACL") from None
-    for label in ("hostKey", "authorizedKeys"):
-        target = inputs[label]
+    # migration: the existing enrollment + key files are measured, never read, never re-ACLed
+    if not generated_mode:
         try:
-            paths.metadata(target, owner_sid)
+            if not _same(paths.directory(config_dir, owner_sid, private_root=config_dir), config_dir):
+                raise ServiceError("not the requested directory")
         except Exception as exc:  # noqa: BLE001
-            raise InstallError("endpoint-inputs", f"{label} {sanitize(target, 200)} is not an owner-protected "
-                               f"single-link regular file ({sanitize(str(exc), 200)}); it is never read or "
-                               "re-ACLed") from None
+            raise InstallError("binding-mismatch", f"the enrolled config dir is not an owner-only protected "
+                               f"private root ({sanitize(str(exc), 200)}); the installer never changes its "
+                               "ACL") from None
+        for label in ("hostKey", "authorizedKeys"):
+            target = inputs[label]
+            try:
+                paths.metadata(target, owner_sid)
+            except Exception as exc:  # noqa: BLE001
+                raise InstallError("endpoint-inputs", f"{label} {sanitize(target, 200)} is not an "
+                                   f"owner-protected single-link regular file ({sanitize(str(exc), 200)}); it is "
+                                   "never read or re-ACLed") from None
 
     blobs, want = _verify_staged(staged, catalog, owner_sid, paths)
     for role in ENDPOINT_ROLES:
         role_file(catalog, role)
     lay = layout(user_data, catalog["release"])
+    if generated_mode:
+        inputs = {"hostKey": lay["hostKey"], "authorizedKeys": lay["authorizedKeys"]}
     helper_rel = role_file(catalog, "helper")["path"].split("/")
     # the generated grammar is checked BEFORE anything is copied or written
     for value in (*(v for v in lay.values()), inputs["hostKey"], inputs["authorizedKeys"],
@@ -350,17 +390,29 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
         _fw(value)
     if not dry_run:  # the release closure first (no authority yet: still unbound)
         _copy_release(lay["root"], lay["release"], lay["tmp"], blobs, want, catalog, owner_sid, paths)
-    helper = ntpath.join(staged if dry_run else lay["release"], *helper_rel)
-    try:
-        show_text, helper_sha = show(helper)
-    except InstallError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise InstallError("binding-mismatch", f"the release helper's show refused: {sanitize(str(exc), 300)}") \
-            from None
-    if helper_sha != role_file(catalog, "helper")["sha256"]:
-        raise InstallError("binding-mismatch", "the show output must come from this catalog's own helper")
-    measured = _measured_show(show_text)
+    if generated_mode:
+        private, public = (keygen or generate_host_key)() if not dry_run else (None, None)
+        if public is not None:
+            from pocketshell.gateway import pins as gateway_pins
+
+            pub = gateway_pins.parse_host_key(" ".join(public.split()[:2]))
+            if pub.key_type != "ssh-ed25519":
+                raise InstallError("install-failed", "the generated host key is not ed25519")
+        measured = {"server": None, "deviceId": None, "port": port,
+                    "hostKeyFingerprint": None if public is None else pub.fingerprint,
+                    "hostKeyPublic": None if public is None else pub.line}
+    else:
+        helper = ntpath.join(staged if dry_run else lay["release"], *helper_rel)
+        try:
+            show_text, helper_sha = show(helper)
+        except InstallError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise InstallError("binding-mismatch", f"the release helper's show refused: "
+                               f"{sanitize(str(exc), 300)}") from None
+        if helper_sha != role_file(catalog, "helper")["sha256"]:
+            raise InstallError("binding-mismatch", "the show output must come from this catalog's own helper")
+        measured = _measured_show(show_text)
     generated = generate(lay=lay, catalog=catalog, owner_sid=owner_sid, account=account, port=measured["port"],
                          inputs=inputs, folders=folders, system_roles=system_roles)
     if len(generated["manifest"]) > ep.MAX_MANIFEST_BYTES:
@@ -375,7 +427,7 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
         "version": RECEIPT_VERSION, "release": catalog["release"], "catalogSHA256": cat["sha256"],
         "ownerSid": owner_sid,
         "binding": {"deviceId": measured["deviceId"], "manifest": lay["manifest"], "manifestSHA256": manifest_sha,
-                    "configDir": ntpath.normpath(config_dir), "port": measured["port"],
+                    "configDir": None if generated_mode else ntpath.normpath(config_dir), "port": measured["port"],
                     "hostKeyFingerprint": measured["hostKeyFingerprint"], "server": measured["server"]},
         "environment": env,
         "location": {"root": lay["root"], "ownerSid": owner_sid, "protectedDACL": True,
@@ -388,6 +440,8 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
         "endpoint": {"root": lay["root"], "manifest": lay["manifest"], "manifestSHA256": manifest_sha,
                      "config": lay["config"], "state": lay["state"],
                      "systemReferences": system_references(system_roles)},
+        "keys": {"mode": keys_mode, "hostKey": inputs["hostKey"], "hostKeyPublic": measured["hostKeyPublic"],
+                 "hostKeyFingerprint": measured["hostKeyFingerprint"], "authorizedKeys": inputs["authorizedKeys"]},
     }
     if dry_run:
         return receipt
@@ -395,6 +449,15 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
     for folder in (lay["endpoint"], lay["state"], lay["stateTmp"], lay["backend"],
                    *(ntpath.join(lay["backend"], v) for v in BACKEND_DIRS.values())):
         paths.mkdir(folder)
+    if generated_mode:  # the fresh keys, owner-private, before anything that names them
+        paths.mkdir(lay["keys"])
+        paths.write(lay["hostKey"], private)
+        paths.write(lay["authorizedKeys"], b"")
+        for target, data in ((lay["hostKey"], private), (lay["authorizedKeys"], b"")):
+            if paths.file(target, owner_sid, private=True, max_bytes=0,
+                          private_root=lay["root"])["sha256"] != hashlib.sha256(data).hexdigest():
+                raise InstallError("install-failed", f"{target} did not land intact")
+        del private
     paths.mkdir(lay["catalogs"])
     copy = catalog_copy(lay["root"], cat["sha256"])
     paths.write(copy, cat["bytes"])
@@ -442,7 +505,7 @@ def load_authority(authority: str, owner_sid: str, paths) -> tuple:
         raise bad("not UTF-8 JSON") from None
     if not isinstance(r, dict) or r.get("version") != RECEIPT_VERSION or r.get("ownerSid") != owner_sid \
             or set(r) != {"version", "release", "catalogSHA256", "ownerSid", "binding", "environment", "location",
-                          "installer", "endpoint"}:
+                          "installer", "endpoint", "keys"}:
         raise bad("not a receipt v3 of this user")
     e = r["endpoint"]
     if not isinstance(e, dict) or not isinstance(e.get("root"), str) or not _same(e["root"], root):
