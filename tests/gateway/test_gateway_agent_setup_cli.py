@@ -564,3 +564,31 @@ def test_an_unreadable_binding_never_satisfies_expect_none(agent, authority, tmp
     assert not [w for w in writes if w.endswith("binding.json")]
     monkeypatch.setattr(agent_mod, "_read_private", real)
     assert _bytes() == before
+
+
+# --- §16.19: public client-authorization state in status (no keys, no fingerprints) --------
+
+
+def test_status_reports_the_client_authorization_count_only(agent, authority, tmp_path):  # noqa: F811
+    from gateway_keyblobs import ED25519_LINE, ED25519_LINE_2
+
+    ak = _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    result, data = run("status", "--json")
+    assert data["clientAuthorization"] == {"mode": "generated", "authorized": False, "count": 0}
+    assert authorize(ED25519_LINE_2 + "\n")[0].exit_code == 0
+    result, data = run("status", "--json")
+    assert data["clientAuthorization"] == {"mode": "generated", "authorized": True, "count": 1}
+    text = json.dumps(data)
+    assert ED25519_LINE_2.split()[1] not in text and "SHA256:" not in json.dumps(data["clientAuthorization"])
+    ak.write_text(ED25519_LINE + "\n# a comment\n\n" + ED25519_LINE_2 + "\n")
+    result, data = run("status", "--json")
+    assert data["clientAuthorization"]["count"] == 2
+
+
+def test_status_never_reads_a_migrated_authorized_keys(agent, authority, tmp_path):  # noqa: F811
+    assert bind_authority()[0].exit_code == 0
+    authority["receipt"] = {"version": 3, "endpoint": {"manifest": MANIFEST},
+                            "keys": {"mode": "migrated", "authorizedKeys": "C:\\never\\read"}}
+    result, data = run("status", "--json")
+    assert data["clientAuthorization"] == {"mode": "migrated", "authorized": None, "count": None}

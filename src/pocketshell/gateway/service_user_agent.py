@@ -389,6 +389,7 @@ def load_binding(*, api, runner, revalidate: bool):
         if "authority" in b:
             try:
                 anchored, receipt = _authority_trust(m, b["authority"], b["ownerSID"], api)
+                _TRUSTED_RECEIPT["receipt"] = receipt  # this operation's verified authority (status projection)
                 keys = receipt.get("keys") if isinstance(receipt, dict) else None
                 if b.get("enrolled") is False:
                     if _generated_keys(receipt).get("hostKeyPublic") != host_key.line:
@@ -785,15 +786,48 @@ def _guarded(operation_id, fn, *, needs_binding=True):
         return _document(operation_id, state="failed", error=AgentError("error", str(exc))), EXIT_ERROR
 
 
+_TRUSTED_RECEIPT: dict = {}
+
+
+def _client_authorization():
+    """§16.19: PUBLIC client-authorization state from the verified authority.
+    Generated mode: whether the owner-private authorized_keys holds at least one
+    key and how many (lines that parse as a public key; no key, fingerprint or
+    comment is ever reported). Migrated mode: the user's existing file is never
+    read (metadata-only rule), so null."""
+    receipt = _TRUSTED_RECEIPT.get("receipt")
+    keys = receipt.get("keys") if isinstance(receipt, dict) else None
+    if not isinstance(keys, dict):
+        return None
+    if keys.get("mode") != "generated":
+        return {"mode": keys.get("mode"), "authorized": None, "count": None}
+    from pocketshell.gateway import pins as gateway_pins
+
+    try:
+        data = _read_private(keys["authorizedKeys"], 1024 * 1024)
+    except OSError:
+        return {"mode": "generated", "authorized": None, "count": None}  # unknown, never "none"
+    count = 0
+    for line in (data or b"").decode("utf-8", "replace").splitlines():
+        try:
+            gateway_pins.parse_host_key(" ".join(line.split()[:2]))
+            count += 1
+        except gateway_pins.PinError:
+            continue
+    return {"mode": "generated", "authorized": count > 0, "count": count}
+
+
 def status(*, api, runner, operation_id=None) -> tuple:
     def run():
         # the FULL anchored trust (authority/runtime pins/helper/enrollment): a
         # tampered install answers binding-invalid, never a prior READY. Only
         # stop skips it (identity-bound cleanup must work after a tamper).
+        _TRUSTED_RECEIPT.clear()
         b, m, host_key = load_binding(api=api, runner=runner, revalidate=True)
         owner, endpoint, outbound, state, code = _collect(b, m, host_key, api, runner)
-        return _document(operation_id, state=state, binding=b, owner=owner, endpoint=endpoint,
-                         outbound=outbound), code
+        doc = _document(operation_id, state=state, binding=b, owner=owner, endpoint=endpoint, outbound=outbound)
+        doc["clientAuthorization"] = _client_authorization()
+        return doc, code
     return _guarded(operation_id, run)
 
 
