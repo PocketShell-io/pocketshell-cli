@@ -548,14 +548,17 @@ def agent_group() -> None:
 @click.option("--helper", default=None, metavar="PATH", help="Reviewed pocketshell-link.exe.")
 @click.option("--authority", default=None, metavar="PATH",
               help="<userData>\\managed-runtime\\authority.json from `agent install` (setup ABI v3).")
+@click.option("--expect-binding-sha256", default=None, metavar="HEX|none",
+              help="Refuse unless the stored binding is exactly this (sha256 of binding.json, or none).")
 @_JSON
 @_OPERATION_ID
-def agent_bind(manifest, config_dir, helper, authority, as_json, operation_id):
+def agent_bind(manifest, config_dir, helper, authority, expect_binding_sha256, as_json, operation_id):
     """Validate and record the protected binding (once, from the owner's setup)."""
     _check_operation_id(operation_id)
     api, runner = _api_runner()
     _emit(*_agent.bind_command(manifest, config_dir, helper, api=api, runner=runner,
-                               operation_id=operation_id, authority=authority), as_json)
+                               operation_id=operation_id, authority=authority,
+                               expect_binding_sha256=expect_binding_sha256), as_json)
 
 
 @agent_group.command("status")

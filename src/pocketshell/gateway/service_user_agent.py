@@ -32,6 +32,7 @@ start calls ``start`` again. The S4U ``service`` path is unchanged.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import ntpath
 import os
@@ -195,6 +196,23 @@ def _generated_keys(receipt) -> dict:
 STOPPED_MARK = "stopped.json"
 
 
+SHA_RE = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _expect_prior(expect) -> None:
+    """§16.18: the bind WRITE role does not hold binding.json (it replaces it
+    atomically); the consumer's expected prior content is checked here, under
+    the operation lock: ``none`` (no binding yet) or its exact sha256."""
+    if expect is None:
+        return
+    if expect != "none" and not SHA_RE.match(expect):
+        raise AgentError("usage", "--expect-binding-sha256 is none or 64 lowercase hex")
+    current = _binding_sha256()
+    if (current or "none") != expect:
+        raise AgentError("binding-changed", "the stored binding is not the one this bind was prepared against "
+                         f"(expected {expect[:12]}, found {(current or 'none')[:12]}); nothing was replaced")
+
+
 def _replacement_guard(new: dict, api) -> None:
     """Never replace the agent binding across generations while the old one
     may still own processes (review 12be5a63). Allowed: no prior binding; the
@@ -244,7 +262,7 @@ def _replacement_guard(new: dict, api) -> None:
                          + " — stop it first; the binding and its processes are left untouched")
 
 
-def _bind_pre_enrollment(manifest_path: str, authority: Optional[str], *, api) -> dict:
+def _bind_pre_enrollment(manifest_path: str, authority: Optional[str], *, api, expect=None) -> dict:
     """Revision D step 2: an endpoint-only binding BEFORE enrollment (the
     supported enrollment probes this endpoint's generated host key). No
     helper, no enrollment, no link."""
@@ -275,19 +293,20 @@ def _bind_pre_enrollment(manifest_path: str, authority: Optional[str], *, api) -
     binding = {"version": API_VERSION, "manifest": m.path, "manifestSHA256": m.sha256, "configDir": None,
                "helper": None, "helperSHA256": None, "deviceId": "", "port": m.port, "ownerSID": user_sid,
                "hostKey": host_key.line, "authority": authority, "authoritySHA256": authority_sha,
-               "enrolled": False}
+               "enrolled": False, "server": None}
+    _expect_prior(expect)
     _replacement_guard(binding, api)
     _write_private(_path("binding.json"), json.dumps(binding, indent=1).encode("utf-8"))
     return binding
 
 
 def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, runner,
-         authority: Optional[str] = None) -> dict:
+         authority: Optional[str] = None, expect=None) -> dict:
     from pocketshell.gateway import service_windows as win
     from pocketshell.gateway import service_windows_endpoint as wep
 
     if config_dir is None:
-        return _bind_pre_enrollment(manifest_path, authority, api=api)
+        return _bind_pre_enrollment(manifest_path, authority, api=api, expect=expect)
     authority_sha = receipt = None
     try:
         config_dir = win.validate_path(config_dir, "config dir")
@@ -327,9 +346,11 @@ def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, run
         "port": m.port,
         "ownerSID": user_sid,
         "hostKey": host_key.line,
+        "server": common.parse_show(show).get("server") or None,  # §16.18: durable PUBLIC identity
     }
     if authority is not None:
         binding.update(authority=authority, authoritySHA256=authority_sha, enrolled=True)
+    _expect_prior(expect)
     _replacement_guard(binding, api)
     _write_private(_path("binding.json"), json.dumps(binding, indent=1).encode("utf-8"))
     return binding
@@ -687,13 +708,23 @@ def _document(operation_id, *, state: str, binding=None, owner=None, endpoint=No
         "state": state,
         "owner": owner,
         "binding": None if binding is None else {
-            k: binding[k] for k in ("manifest", "manifestSHA256", "deviceId", "port", "configDir")},
+            **{k: binding[k] for k in ("manifest", "manifestSHA256", "deviceId", "port", "configDir")},
+            "server": binding.get("server"), "sha256": _binding_sha256()},
         "endpoint": endpoint,
         "outbound": outbound,
         "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600),
                                              **({"recovery": error.recovery}
                                                 if getattr(error, "recovery", None) else {})},
     }
+
+
+def _binding_sha256():
+    """sha256 of the stored binding.json bytes (§16.18), or None."""
+    try:
+        data = _read_private(_path("binding.json"))
+    except OSError:
+        return None
+    return None if data is None else hashlib.sha256(data).hexdigest()
 
 
 def _owner(api) -> dict:
@@ -757,9 +788,11 @@ def status(*, api, runner, operation_id=None) -> tuple:
     return _guarded(operation_id, run)
 
 
-def bind_command(manifest_path, config_dir, helper, *, api, runner, operation_id=None, authority=None) -> tuple:
+def bind_command(manifest_path, config_dir, helper, *, api, runner, operation_id=None, authority=None,
+                 expect_binding_sha256=None) -> tuple:
     def run():
-        b = bind(manifest_path, config_dir, helper, api=api, runner=runner, authority=authority)
+        b = bind(manifest_path, config_dir, helper, api=api, runner=runner, authority=authority,
+                 expect=expect_binding_sha256)
         return _document(operation_id, state="stopped", binding=b, owner=_owner(api)), EXIT_READY
     return _guarded(operation_id, run, needs_binding=False)
 

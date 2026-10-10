@@ -52,7 +52,13 @@ def authority(agent, monkeypatch):  # noqa: F811
 def test_bind_with_authority_trusts_the_recorded_manifest_and_records_the_authority(authority):
     result, data = bind_authority()
     assert result.exit_code == 0, result.output
-    assert sorted(data["binding"]) == ["configDir", "deviceId", "manifest", "manifestSHA256", "port"]  # JSON v1
+    # JSON v1 + §16.18: the durable public server and the binding document's own sha256
+    assert sorted(data["binding"]) == ["configDir", "deviceId", "manifest", "manifestSHA256", "port", "server",
+                                       "sha256"]
+    assert data["binding"]["server"] == "wss://gateway.pocketshell.io"
+    import hashlib
+
+    assert data["binding"]["sha256"] == hashlib.sha256(agent_mod._read_private(agent_mod._path("binding.json"))).hexdigest()
     stored = json.loads(agent_mod._read_private(agent_mod._path("binding.json")))
     assert stored["authority"] == AUTHORITY and stored["authoritySHA256"] == "a" * 64
     assert authority["calls"] and authority["calls"][0][2] == ROWS
@@ -494,3 +500,42 @@ def test_authorize_key_argv_is_bounded_and_exclusive(authority, tmp_path):
     assert result.exit_code in (1, 2) and ak.read_bytes() == b""
     result, data = run("authorize-key", "--public-key", ED25519_LINE, "--public-key-stdin", "--confirmed", "--json")
     assert result.exit_code == 2 and data["error"]["code"] == "usage"
+
+
+
+# --- §16.18: the bind write role's prior-binding check, and the durable public identity ----
+
+
+def test_bind_with_an_expected_prior_binding_hash(agent, authority, tmp_path):  # noqa: F811
+    import hashlib
+
+    _generated(authority, tmp_path)
+    result, data = run("bind", "--manifest", MANIFEST, "--authority", AUTHORITY, "--expect-binding-sha256",
+                       "none", "--json")
+    assert result.exit_code == 0, result.output
+    before = _bytes()
+    prior = hashlib.sha256(before).hexdigest()
+    result, data = run("bind", "--manifest", MANIFEST, "--config-dir", WIN_CONFIG, "--helper", WIN_HELPER,
+                       "--authority", AUTHORITY, "--expect-binding-sha256", "0" * 64, "--json")
+    assert result.exit_code == 1 and data["error"]["code"] == "binding-changed" and _bytes() == before
+    result, data = run("bind", "--manifest", MANIFEST, "--config-dir", WIN_CONFIG, "--helper", WIN_HELPER,
+                       "--authority", AUTHORITY, "--expect-binding-sha256", "none", "--json")
+    assert result.exit_code == 1 and data["error"]["code"] == "binding-changed" and _bytes() == before
+    result, data = run("bind", "--manifest", MANIFEST, "--config-dir", WIN_CONFIG, "--helper", WIN_HELPER,
+                       "--authority", AUTHORITY, "--expect-binding-sha256", prior, "--json")
+    assert result.exit_code == 0, result.output
+    assert data["binding"]["server"] == "wss://gateway.pocketshell.io"
+    assert data["binding"]["deviceId"] == "host-laptop-pha6tcnc-75fu"
+
+
+def test_status_after_a_restart_reports_the_durable_public_identity(agent, authority, tmp_path):  # noqa: F811
+    _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    result, data = run("status", "--json")
+    assert data["binding"]["server"] is None and data["binding"]["deviceId"] == ""
+    assert bind_authority()[0].exit_code == 0
+    stored = json.loads(_bytes())
+    assert stored["server"] == "wss://gateway.pocketshell.io" and "token" not in json.dumps(stored).lower()
+    result, data = run("status", "--json")  # a fresh process: everything from binding.json
+    assert data["binding"]["server"] == "wss://gateway.pocketshell.io"
+    assert data["binding"]["deviceId"] == "host-laptop-pha6tcnc-75fu" and data["binding"]["configDir"] == WIN_CONFIG
