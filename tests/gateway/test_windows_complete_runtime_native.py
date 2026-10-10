@@ -215,6 +215,10 @@ def test_new_machine_complete_runtime(closure, tmp_path):
         # 38043511773: "Jos\ufffd ... is not recognized"), so the exec stays ASCII: it reaches the
         # release through the backend environment the endpoint's SetEnv delivers (APLEXER_STATE_DIR =
         # <root>/endpoint/backend/state; three levels up is managed-runtime).
+        # the backend environment the generated SetEnv must deliver into the session (diagnostic print;
+        # the assertion follows)
+        rc, out = exec_("set APLEXER & set XDG & set BASH_ENV & cd")
+        assert "APLEXER_STATE_DIR=" in out and "APLEXER_RUN_IN_PLACE=1" in out, "SetEnv did not reach the session"
         release = manifest["daemon"].replace("/", "\\").split("\\releases\\")[1].split("\\")[0]
         to_rel = f'cd /d "%APLEXER_STATE_DIR%\\..\\..\\..\\releases\\{release}'
         bash_cmd = (f'{to_rel}\\endpoint\\shell\\usr\\bin" && bash.exe --noprofile --norc -c '
