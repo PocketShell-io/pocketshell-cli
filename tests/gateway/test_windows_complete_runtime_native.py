@@ -190,7 +190,8 @@ def test_new_machine_complete_runtime(closure, tmp_path):
         # 3. authorize ONE own client key
         key = tmp_path / "client_ed25519"
         subprocess.run([str(SSH_DIR / "ssh-keygen.exe"), "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
-        code, data = agent("authorize-key", "--public-key-stdin", "--confirmed", stdin_file=str(key) + ".pub")
+        public_line = Path(str(key) + ".pub").read_text(encoding="ascii").strip()
+        code, data = agent("authorize-key", "--public-key", public_line, "--confirmed")  # direct argv, no cmd.exe
         assert code == 0 and data["authorized"]["type"] == "ssh-ed25519", data
         known = tmp_path / "known_hosts"
         known.write_text(f"[127.0.0.1]:{port} {keys['hostKeyPublic']}\n", encoding="ascii")
