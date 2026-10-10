@@ -552,10 +552,15 @@ def _collect(b, m, host_key, api, runner) -> tuple:
     return owner, endpoint, outbound, state, code
 
 
-def _guarded(operation_id, fn):
+def _guarded(operation_id, fn, *, needs_binding=True):
     if sys.platform != "win32":
         err = AgentError("unsupported-platform",
                          "the ordinary-user agent is Windows-only; Linux uses `gateway service` (systemd --user)")
+        return _document(operation_id, state="unavailable", error=err), EXIT_ERROR
+    if needs_binding and not os.path.exists(_path("binding.json")):
+        # unbound: answer without creating any agent state (no agent.lock); the
+        # binding is re-read under the lock by every real operation
+        err = AgentError("not-bound", "no agent binding; run `pocketshell gateway agent bind` first")
         return _document(operation_id, state="unavailable", error=err), EXIT_ERROR
     try:
         with _OperationLock():
@@ -580,7 +585,7 @@ def bind_command(manifest_path, config_dir, helper, *, api, runner, operation_id
     def run():
         b = bind(manifest_path, config_dir, helper, api=api, runner=runner)
         return _document(operation_id, state="stopped", binding=b, owner=_owner(api)), EXIT_READY
-    return _guarded(operation_id, run)
+    return _guarded(operation_id, run, needs_binding=False)
 
 
 def win_same(a, b) -> bool:

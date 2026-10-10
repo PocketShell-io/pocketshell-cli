@@ -100,6 +100,25 @@ def descendants(root: int) -> list[tuple[int, int, str]]:
     return found
 
 
+def process_birth(pid: int):
+    """Creation FILETIME of a live process, or None (diagnostics only)."""
+    import ctypes
+    from ctypes import wintypes
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.restype = wintypes.HANDLE
+    h = k.OpenProcess(0x1000, False, pid)
+    if not h:
+        return None
+    try:
+        t = [wintypes.FILETIME() for _ in range(4)]
+        if not k.GetProcessTimes(wintypes.HANDLE(h), *[ctypes.byref(x) for x in t]):
+            return None
+        return t[0].dwHighDateTime << 32 | t[0].dwLowDateTime
+    finally:
+        k.CloseHandle(wintypes.HANDLE(h))
+
+
 def console_pids() -> list[int]:
     from ctypes import wintypes
 
@@ -339,6 +358,10 @@ class Qualifier:
         tree = descendants(proc.pid)
         cons = set(console_pids())
         visible = set(visible_window_pids())
+        # measured while the tree is live (diagnostics: a child born BEFORE its
+        # parent is a stale-ppid match through pid reuse, not a real child)
+        births = {t[0]: process_birth(t[0]) for t in tree}
+        births.update({t[1]: process_birth(t[1]) for t in tree if t[1] not in births})
         try:
             out, err = proc.communicate(timeout=self.a.timeout)
         except subprocess.TimeoutExpired:
@@ -360,9 +383,16 @@ class Qualifier:
             problems.append("a child is outside this console")
         if {t[0] for t in tree} & visible:
             problems.append("a child owns a visible window")
-        tree_s = ", ".join(f"{t[2]}:{t[0]}" for t in tree)
+        def describe(t):
+            pid, ppid, exe = t
+            older = births.get(pid) and births.get(ppid) and births[pid] < births[ppid]
+            return (f"{exe}:{pid}<-{ppid} born={births.get(pid)}" + ("[console]" if pid in cons else "")
+                    + ("[WINDOW]" if pid in visible else "") + ("[OLDER-THAN-PARENT: stale ppid]" if older else ""))
+
+        tree_s = ", ".join(describe(t) for t in tree)
         return self.record("console", not problems and proc.returncode == 0,
-                           "; ".join(problems) or f"all in this console, no window [{tree_s}]")
+                           ("; ".join(problems) + f" [{tree_s}]") if problems
+                           else f"all in this console, no window [{tree_s}]")
 
     def check_transport_loss(self) -> bool:
         proc, first = self._start_session(90)

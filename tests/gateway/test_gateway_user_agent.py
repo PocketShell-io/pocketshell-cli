@@ -799,3 +799,15 @@ def test_r3_failed_cleanup_of_a_refused_child_is_recovery_custody(agent, monkeyp
     assert data["error"]["code"] == "custody-recovery"
     result, data = run("stop", "--json")
     assert result.exit_code == 0 and (rec["pid"], rec["creationFILETIME"], PYTHON) in agent["api"].terminated
+
+
+# --- Fleet caveat: an unbound status/start/stop writes nothing (no agent.lock) ----------
+
+
+@pytest.mark.parametrize("action", ["status", "start", "stop"])
+def test_unbound_commands_create_no_agent_state(agent, action):
+    from pocketshell.gateway import service_user_agent as agent_mod
+
+    result, data = run(action, "--json")
+    assert result.exit_code == 1 and data["error"]["code"] == "not-bound"
+    assert not os.path.exists(agent_mod.agent_dir()), os.listdir(agent_mod.agent_dir())
