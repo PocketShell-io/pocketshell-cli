@@ -49,16 +49,38 @@ type child interface {
 	Terminate() bool // the WHOLE tree; true only when its end is PROVEN
 }
 
-// custodyError: the suspended entry was refused but could not be proven
-// terminated; its exact identity (and handles) are retained.
+// NE1 typed outcomes between authorize and launched:
+
+// notStartedError: no child process was created (positive absence proof).
+type notStartedError struct{ why error }
+
+func (e *notStartedError) Error() string {
+	return fmt.Sprintf("%v; no entry process was created", e.why)
+}
+
+// cleanedError: a child was created SUSPENDED, refused, and PROVEN terminated
+// before it ever ran (positive absence proof with its identity).
+type cleanedError struct {
+	pid   int
+	birth string // "" when it could not be measured (never fabricated)
+	why   error
+}
+
+func (e *cleanedError) Error() string {
+	return fmt.Sprintf("%v; the suspended entry %d was proven terminated before resume", e.why, e.pid)
+}
+
+// custodyError: the suspended (or resuming) entry could not be proven
+// terminated; its handles are retained and its identity reported.
 type custodyError struct {
 	pid   int
-	birth string
+	birth string // "" when it could not be measured (never fabricated)
+	phase string // "suspended" | "resume"
 	why   error
 }
 
 func (e *custodyError) Error() string {
-	return fmt.Sprintf("%v; the suspended entry %d (birth %s) could not be proven terminated", e.why, e.pid, e.birth)
+	return fmt.Sprintf("%v; the entry %d could not be proven terminated (%s)", e.why, e.pid, e.phase)
 }
 
 type spawner func(cfg config) (child, error)
@@ -143,15 +165,36 @@ func runEntry(cfg config, keep *held, in io.Reader, out *os.File, spawn spawner)
 	// 2) create, prove, resume
 	c, err := spawn(cfg)
 	if err != nil {
-		var custody *custodyError
-		if errors.As(err, &custody) {
-			pid, birth := custody.pid, custody.birth
-			ev(event{Event: "unknown", PID: &pid, CreationFILETIME: &birth, Problem: problem(err)})
-			return 6 // handles retained until this process ends; the consumer stays busy
+		birthPtr := func(b string) *string {
+			if b == "" {
+				return nil // never fabricated
+			}
+			return &b
 		}
-		keep.closeAll()
-		ev(event{Event: "refused", Problem: problem(err)})
-		return 1
+		var custody *custodyError
+		var cleaned *cleanedError
+		var notStarted *notStartedError
+		no := false
+		switch {
+		case errors.As(err, &custody):
+			pid := custody.pid
+			ev(event{Event: "unknown", PID: &pid, CreationFILETIME: birthPtr(custody.birth), Phase: custody.phase,
+				Authority: "verifier-held-handles", Problem: problem(err)})
+			return 6 // handles retained until this process ends; the consumer stays busy
+		case errors.As(err, &cleaned):
+			keep.closeAll()
+			pid := cleaned.pid
+			ev(event{Event: "cleaned", PID: &pid, CreationFILETIME: birthPtr(cleaned.birth), Phase: "suspended",
+				Problem: problem(err)})
+			return 1
+		case errors.As(err, &notStarted):
+			keep.closeAll()
+			ev(event{Event: "not-started", ChildCreated: &no, Problem: problem(err)})
+			return 1
+		}
+		// an untyped failure proves nothing about a child: never absence
+		ev(event{Event: "unknown", Phase: "spawn", Authority: "verifier-held-handles", Problem: problem(err)})
+		return 6
 	}
 	pid, birth, yes := c.PID(), c.Birth(), true
 	ev(event{Event: "launched", PID: &pid, CreationFILETIME: &birth, ImageMatches: &yes})
@@ -177,8 +220,9 @@ func runEntry(cfg config, keep *held, in io.Reader, out *os.File, spawn spawner)
 			}
 			time.Sleep(time.Second)
 		}
-		ev(event{Event: "unknown", PID: &pid, CreationFILETIME: &birth,
-			Problem: strp(sanitize(fmt.Sprintf("%v; the entry's termination could not be proven", why)))})
+		ev(event{Event: "unknown", PID: &pid, CreationFILETIME: &birth, Phase: "running",
+			Authority: "verifier-held-handles",
+			Problem:   strp(sanitize(fmt.Sprintf("%v; the entry's termination could not be proven", why)))})
 		return 6
 	}
 	stdoutDone := false

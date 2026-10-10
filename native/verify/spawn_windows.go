@@ -124,17 +124,17 @@ func inheritablePipe() (r, w windows.Handle, err error) {
 // through its own handle; nothing ran.
 func spawnHeldEntry(cfg config, keep *held) (child, error) {
 	if keep.entry == nil {
-		return nil, errors.New("the entry is not held")
+		return nil, &notStartedError{errors.New("the entry is not held")}
 	}
 	outR, outW, err := inheritablePipe()
 	if err != nil {
-		return nil, err
+		return nil, &notStartedError{err}
 	}
 	errR, errW, err := inheritablePipe()
 	if err != nil {
 		windows.CloseHandle(outR)
 		windows.CloseHandle(outW)
-		return nil, err
+		return nil, &notStartedError{err}
 	}
 	nulName, _ := windows.UTF16PtrFromString("NUL")
 	sa := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), InheritHandle: 1}
@@ -144,7 +144,7 @@ func spawnHeldEntry(cfg config, keep *held) (child, error) {
 		for _, h := range []windows.Handle{outR, outW, errR, errW} {
 			windows.CloseHandle(h)
 		}
-		return nil, err
+		return nil, &notStartedError{err}
 	}
 	childEnds := []windows.Handle{nul, outW, errW}
 	defer func() {
@@ -154,12 +154,12 @@ func spawnHeldEntry(cfg config, keep *held) (child, error) {
 	}()
 	attrs, err := windows.NewProcThreadAttributeList(1)
 	if err != nil {
-		return nil, err
+		return nil, &notStartedError{err}
 	}
 	defer attrs.Delete()
 	if err := attrs.Update(windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, unsafe.Pointer(&childEnds[0]),
 		uintptr(len(childEnds))*unsafe.Sizeof(childEnds[0])); err != nil {
-		return nil, err
+		return nil, &notStartedError{err}
 	}
 	si := windows.StartupInfoEx{}
 	si.Cb = uint32(unsafe.Sizeof(si))
@@ -169,17 +169,17 @@ func spawnHeldEntry(cfg config, keep *held) (child, error) {
 	si.ProcThreadAttributeList = attrs.List()
 	app, err := windows.UTF16PtrFromString(cfg.Entry)
 	if err != nil {
-		return nil, err
+		return nil, &notStartedError{err}
 	}
 	cmd, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(append([]string{cfg.Entry}, cfg.EntryArgs...)))
 	if err != nil {
-		return nil, err
+		return nil, &notStartedError{err}
 	}
 	job, err := ownedJob()
 	if err != nil {
 		windows.CloseHandle(outR)
 		windows.CloseHandle(errR)
-		return nil, fmt.Errorf("cannot create the entry's job: %v", err)
+		return nil, &notStartedError{fmt.Errorf("cannot create the entry's job: %v", err)}
 	}
 	var pi windows.ProcessInformation
 	flags := uint32(windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW | windows.EXTENDED_STARTUPINFO_PRESENT |
@@ -188,7 +188,7 @@ func spawnHeldEntry(cfg config, keep *held) (child, error) {
 		windows.CloseHandle(outR)
 		windows.CloseHandle(errR)
 		windows.CloseHandle(job)
-		return nil, fmt.Errorf("cannot create the entry: %v", err)
+		return nil, &notStartedError{fmt.Errorf("cannot create the entry: %v", err)}
 	}
 	c := &winChild{process: pi.Process, thread: pi.Thread, job: job, pid: int(pi.ProcessId), exited: make(chan exitResult, 1),
 		stdout: os.NewFile(uintptr(outR), "entry-stdout"), stderr: os.NewFile(uintptr(errR), "entry-stderr")}
@@ -198,17 +198,19 @@ func spawnHeldEntry(cfg config, keep *held) (child, error) {
 			// NB1: keep EVERY handle (process, thread, job, pipes) and report the
 			// exact identity; custody stays with this process
 			keep.retain(pi.Process, pi.Thread, job)
-			return nil, &custodyError{pid: c.pid, birth: c.birth, why: why}
+			return nil, &custodyError{pid: c.pid, birth: c.birth, phase: "suspended", why: why}
 		}
 		windows.CloseHandle(pi.Thread)
 		windows.CloseHandle(pi.Process)
 		windows.CloseHandle(job)
 		c.stdout.Close()
 		c.stderr.Close()
-		return nil, why
+		return nil, &cleanedError{pid: c.pid, birth: c.birth, why: why}
 	}
-	if c.birth, err = birthOf(pi.Process); err != nil {
-		return refuse(errors.New("cannot read the entry's creation time"))
+	if b, err := birthOf(pi.Process); err != nil {
+		return refuse(errors.New("cannot read the entry's creation time")) // birth stays "" (never fabricated)
+	} else {
+		c.birth = b
 	}
 	// the suspended process's kernel image must be the held, verified file
 	buf := make([]uint16, 32768)
@@ -226,9 +228,9 @@ func spawnHeldEntry(cfg config, keep *held) (child, error) {
 	if r, err := windows.ResumeThread(pi.Thread); err != nil || r == 0xFFFFFFFF {
 		if !terminateTree(job, pi.Process) {
 			keep.retain(pi.Process, pi.Thread, job)
-			return nil, &custodyError{pid: c.pid, birth: c.birth, why: errors.New("cannot resume the entry")}
+			return nil, &custodyError{pid: c.pid, birth: c.birth, phase: "resume", why: errors.New("cannot resume the entry")}
 		}
-		return nil, errors.New("cannot resume the entry")
+		return nil, &cleanedError{pid: c.pid, birth: c.birth, why: errors.New("cannot resume the entry")}
 	}
 	windows.CloseHandle(pi.Thread)
 	keep.retain(job) // KILL_ON_JOB_CLOSE: the job lives exactly as long as the verifier's custody

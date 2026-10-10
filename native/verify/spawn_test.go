@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -121,12 +122,75 @@ func TestSpawnEntryOversizedOutputIsRefused(t *testing.T) {
 	}
 }
 
-func TestSpawnEntryRefusedBeforeResumeNeverLaunches(t *testing.T) {
+func TestSpawnEntryUntypedSpawnFailureIsNeverAbsence(t *testing.T) {
 	code, ev := runSpawn(t, spawnCfg(), authorized(""), func(config) (child, error) {
-		return nil, errors.New("the suspended entry's image is not the held, verified file")
+		return nil, errors.New("something failed")
 	})
-	if code != 1 || strings.Join(names(ev), ",") != "refused" {
+	if code != 6 || ev[len(ev)-1]["event"] != "unknown" {
 		t.Fatalf("%d %v", code, ev)
+	}
+}
+
+// --- NE1: typed, correlated outcomes between authorize and launched -----------------
+
+func TestNE1NoChildCreatedIsPositiveAbsence(t *testing.T) {
+	code, ev := runSpawn(t, spawnCfg(), authorized(""), func(config) (child, error) {
+		return nil, &notStartedError{errors.New("CreateProcess: bad exe format")}
+	})
+	last := ev[len(ev)-1]
+	if code != 1 || last["event"] != "not-started" || last["childCreated"] != false || last["operationId"] != "o" ||
+		last["pid"] != nil {
+		t.Fatalf("%d %v", code, ev)
+	}
+}
+
+func TestNE1CleanedSuspendedChildIsPositiveAbsenceWithItsIdentity(t *testing.T) {
+	code, ev := runSpawn(t, spawnCfg(), authorized(""), func(config) (child, error) {
+		return nil, &cleanedError{pid: 31, birth: "133000000000000031", why: errors.New("image mismatch")}
+	})
+	last := ev[len(ev)-1]
+	if code != 1 || last["event"] != "cleaned" || last["pid"].(float64) != 31 ||
+		last["creationFILETIME"] != "133000000000000031" || last["phase"] != "suspended" {
+		t.Fatalf("%d %v", code, ev)
+	}
+}
+
+func TestNE1FailedCleanupIsStructuredUnknownWithoutAFabricatedBirth(t *testing.T) {
+	code, ev := runSpawn(t, spawnCfg(), authorized(""), func(config) (child, error) {
+		return nil, &custodyError{pid: 32, birth: "", phase: "suspended", why: errors.New("terminate denied")}
+	})
+	last := ev[len(ev)-1]
+	if code != 6 || last["event"] != "unknown" || last["pid"].(float64) != 32 || last["phase"] != "suspended" ||
+		last["authority"] != "verifier-held-handles" {
+		t.Fatalf("%d %v", code, ev)
+	}
+	if _, present := last["creationFILETIME"]; present {
+		t.Fatalf("a birth was fabricated: %v", last)
+	}
+}
+
+func TestRequestsStdinLine(t *testing.T) {
+	cfg := config{OperationID: "o"}
+	line := `{"version":2,"operationId":"o","requests":[{"kind":"binary","path":"C:\\r\\a.exe","expect":"` +
+		strings.Repeat("a", 64) + `"},{"kind":"directory","path":"C:\\r"}]}` + "\n" + "rest"
+	br := bufio.NewReader(strings.NewReader(line))
+	if err := readRequests(br, &cfg); err != nil || len(cfg.Requests) != 2 || cfg.Requests[0].Expect == "" {
+		t.Fatalf("%v %+v", err, cfg.Requests)
+	}
+	rest, _ := io.ReadAll(br)
+	if string(rest) != "rest" {
+		t.Fatalf("the following stdin bytes were lost: %q", rest)
+	}
+	for _, bad := range []string{
+		`{"version":2,"operationId":"x","requests":[]}` + "\n",
+		`{"version":2,"operationId":"o","requests":[],"extra":1}` + "\n",
+		`{"version":2,"operationId":"o","requests":[]} {}` + "\n",
+		"",
+	} {
+		c := config{OperationID: "o"}
+		if err := readRequests(bufio.NewReader(strings.NewReader(bad)), &c); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
 	}
 }
 

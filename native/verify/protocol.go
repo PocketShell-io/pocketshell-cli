@@ -114,6 +114,7 @@ type config struct {
 	SpawnEntry    bool     // v4.2: the verifier itself creates the entry from the held file
 	EntryArgs     []string // the entry's argv after its path, ordered
 	EntrySeconds  int      // the entry's deadline (default: the hold timeout)
+	RequestsStdin bool     // the ordered requests arrive as the FIRST stdin line (no command-line limit)
 }
 
 type usageError struct{ msg string }
@@ -164,6 +165,8 @@ func parseArgs(args []string) (config, error) {
 			cfg.Hold = true
 		case "--spawn-entry":
 			cfg.SpawnEntry = true
+		case "--requests-stdin":
+			cfg.RequestsStdin = true
 		case "--entry-arg":
 			v, err = value(&i, args[i])
 			cfg.EntryArgs = append(cfg.EntryArgs, v)
@@ -320,6 +323,9 @@ type event struct {
 	StdoutBase64     *string `json:"stdoutBase64,omitempty"`
 	StdoutBytes      *int    `json:"stdoutBytes,omitempty"`
 	StderrTail       *string `json:"stderrTail,omitempty"`
+	Phase            string  `json:"phase,omitempty"`
+	Authority        string  `json:"authority,omitempty"`
+	ChildCreated     *bool   `json:"childCreated,omitempty"`
 	Problem          *string `json:"problem"`
 }
 
@@ -469,6 +475,54 @@ func parseAuthorize(line []byte, operationID string) error {
 	}
 	if m.Version != protocolVersion || m.Op != "authorize" || m.OperationID != operationID {
 		return errors.New("not the correlated authorize for this operation")
+	}
+	return nil
+}
+
+// requestsLine: the --requests-stdin first line.
+type requestsLine struct {
+	Version     int    `json:"version"`
+	OperationID string `json:"operationId"`
+	Requests    []struct {
+		Kind   string `json:"kind"`
+		Path   string `json:"path"`
+		Expect string `json:"expect,omitempty"`
+	} `json:"requests"`
+}
+
+const maxRequestsLine = 1024 * 1024
+
+// readRequests reads and parses the first stdin line (<= 1 MiB, one JSON
+// value, the correlated operation) into cfg.Requests.
+func readRequests(br interface{ ReadByte() (byte, error) }, cfg *config) error {
+	var line []byte
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			return errors.New("no requests line on stdin")
+		}
+		if b == '\n' {
+			break
+		}
+		line = append(line, b)
+		if len(line) > maxRequestsLine {
+			return errors.New("the requests line exceeds 1 MiB")
+		}
+	}
+	var m requestsLine
+	dec := json.NewDecoder(strings.NewReader(string(line)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&m); err != nil {
+		return errors.New("malformed requests line")
+	}
+	if rest := strings.TrimSpace(string(line[dec.InputOffset():])); rest != "" {
+		return errors.New("trailing data after the requests line")
+	}
+	if m.Version != protocolVersion || m.OperationID != cfg.OperationID {
+		return errors.New("the requests line is not for this operation")
+	}
+	for _, r := range m.Requests {
+		cfg.Requests = append(cfg.Requests, request{Kind: r.Kind, Path: r.Path, Expect: r.Expect})
 	}
 	return nil
 }

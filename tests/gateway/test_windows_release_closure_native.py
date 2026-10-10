@@ -165,16 +165,19 @@ def test_verifier_spawns_the_held_release_entry(release, tmp_path):
 
     files = release["catalog"]["files"]
     inv = hashlib.sha256("\n".join(sorted(f["path"].lower() for f in files)).encode()).hexdigest()
-    reqs = ["--request", f"inventory:{inv}={root}"]
-    for f in files:  # every catalogued file natively pinned (BI1)
-        reqs += ["--request", f"binary:{f['sha256']}=" + str(root / f["path"].replace("/", "\\"))]
+    requests = [{"kind": "inventory", "path": str(root), "expect": inv}]
+    requests += [{"kind": "binary", "path": str(root / f["path"].replace("/", "\\")), "expect": f["sha256"]}
+                 for f in files]  # every catalogued file natively pinned (BI1)
     args = ["gateway", "agent", "status", "--json", "--operation-id", "bridge-1"]
     # stdin stays OPEN for the whole command (its EOF means "controller gone")
     proc = subprocess.Popen([VERIFY, "verify", "--operation-id", "bridge-1", "--owner-sid", sid,
-                             "--resources-root", str(Path(OUT)), *reqs, "--hold", "--entry", entry, "--spawn-entry",
+                             "--resources-root", str(Path(OUT)), "--requests-stdin", "--hold", "--entry", entry,
+                             "--spawn-entry",
                              *[x for a in args for x in ("--entry-arg", a)], "--entry-timeout", "120"],
                             env=closed_env(tmp_path), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             creationflags=0x00000008)  # DETACHED, as a GUI parent
+    proc.stdin.write(json.dumps({"version": 2, "operationId": "bridge-1", "requests": requests}).encode() + b"\n")
+    proc.stdin.flush()
     first = json.loads(proc.stdout.readline())
     assert first["ok"], [r for r in first["results"] if not r["ok"]][:3]
     proc.stdin.write(b'{"version":2,"operationId":"bridge-1","op":"authorize"}\n')

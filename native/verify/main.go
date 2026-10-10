@@ -33,6 +33,16 @@ func run(args []string, in io.Reader, out *os.File) int {
 	if err != nil {
 		return refuse(2, err.Error())
 	}
+	if cfg.RequestsStdin {
+		if len(cfg.Requests) > 0 {
+			return refuse(2, "--requests-stdin excludes --request")
+		}
+		br := bufio.NewReaderSize(in, 64*1024)
+		if err := readRequests(br, &cfg); err != nil {
+			return refuse(2, err.Error())
+		}
+		in = br // the same buffered reader carries authorize / hold messages
+	}
 	roots, err := validate(cfg)
 	if err != nil {
 		return refuse(2, err.Error())

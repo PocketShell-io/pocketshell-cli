@@ -246,12 +246,14 @@ def test_r1_oversized_line_after_release_is_refused(tree):
 def _spawn_entry(tree, entry_args, *, extra=(), stdin_close_early=False, timeout=120):
     import base64
 
-    reqs = [("binary", tree["entry"], file_sha(tree["entry"])),
-            ("inventory", tree["release"], inventory_digest(tree["release"])),
-            ("document", tree["authority"], file_sha(tree["authority"]))]
-    argv_ = argv(tree, reqs, extra=["--hold", "--entry", tree["entry"], "--spawn-entry",
-                                    *[x for a in entry_args for x in ("--entry-arg", a)], *extra])
+    requests = [{"kind": "binary", "path": tree["entry"], "expect": file_sha(tree["entry"])},
+                {"kind": "inventory", "path": tree["release"], "expect": inventory_digest(tree["release"])},
+                {"kind": "document", "path": tree["authority"], "expect": file_sha(tree["authority"])}]
+    argv_ = argv(tree, [], extra=["--requests-stdin", "--hold", "--entry", tree["entry"], "--spawn-entry",
+                                  *[x for a in entry_args for x in ("--entry-arg", a)], *extra])
     proc = subprocess.Popen(argv_, stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=0x08000000)
+    proc.stdin.write(json.dumps({"version": 2, "operationId": "op-1", "requests": requests}).encode() + b"\n")
+    proc.stdin.flush()
     first = json.loads(proc.stdout.readline())
     assert first["ok"], first
     # C-Fleet-native-entry-v1: ONE correlated authorize line after the consumer's own check
