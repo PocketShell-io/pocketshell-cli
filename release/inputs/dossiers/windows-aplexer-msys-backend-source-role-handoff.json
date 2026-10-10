@@ -1,0 +1,915 @@
+{
+  "scope": "Read-only recovered generic Windows native backend inputs; no build/install/probe/key/config contents",
+  "nativeAplexer": {
+    "sourceCommit": "a7cca1eb9b47a0e5001bf2fb2b491e1111f81c5e",
+    "parent": "48813ddd99d4d20560b41a8ec1bba3258b83503a",
+    "tree": "17bec32033892db434d538c57555a53439078ca6",
+    "sourceModified": true,
+    "compileFix": {
+      "file": "COMPILE-FIX.patch",
+      "sha256": "c7de399009474879f3b3e69440a9e3644f4cdd8c9afbb1403967a9d0a7067a97",
+      "patched_python_rs_sha256": "2d0cc2513b6712c9868b57c7c4a672378fd4d4f5b281e1bddf5f4148f00ff90d",
+      "reason": "E0433 platform-specific libc::SIGHUP reference",
+      "diff_line_endings": "normalized LF; patched file exact bytes hashed separately",
+      "original_python_rs_sha256": "e6503929b8fca39e0c819bf487bab606513dbe54f5c68fa2fd0d23e6d134b0a2",
+      "original_crlf_lines": 303,
+      "patched_crlf_lines": 301
+    },
+    "sourceAndArtifacts": [
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/win35/aplexer-build-handoff/aplexer-build-source-patched.tar",
+        "bytes": 7485440,
+        "sha256": "42db5a31b590c230318344833461c531b9e9ed94e904aef2d7a8ce6d28aa531e"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/win35/aplexer-build-handoff/BUILD-PROVENANCE.json",
+        "bytes": 22494,
+        "sha256": "5c9b4e1994c8a7c421bf9ca1500a85a7754e477e5807afaf2d2246b89b292722"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/win35/aplexer-build-handoff/NATIVE-TEST.json",
+        "bytes": 2134,
+        "sha256": "ded28517c984b9fc9440c59661340140def7bf464f5088bb1954fccc429c1c45"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/win35/aplexer-build-handoff/COMPILE-FIX.patch",
+        "bytes": 525,
+        "sha256": "c7de399009474879f3b3e69440a9e3644f4cdd8c9afbb1403967a9d0a7067a97"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/laptop-cli-native-6d1fee/artifacts/aplexer-0.1.10-py3-none-win_amd64.whl",
+        "bytes": 2653505,
+        "sha256": "6280878b40ad8a40f916d6bff45c126cf36d7d2c87a3a1df8a73be29d75d7d1a"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/fleet/laptop-cli-native-6d1fee/artifacts/aplexer_client-0.1.10-cp311-abi3-win_amd64.whl",
+        "bytes": 1183375,
+        "sha256": "e4c594bce48c10686031c95d5a27536fb5636f7b8574d44f0398d6cc0bc465fd"
+      }
+    ],
+    "cargoLockSHA256": "7872833732bfefe10eb4b42ba77e8b81c4b420904ace37162e3fcf5d5232e75d",
+    "toolchain": {
+      "1": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2\n",
+      "2": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)\n",
+      "3": "uv 0.12.23 (46b84fd0b 2026-10-03 x86_64-pc-windows-msvc)\n",
+      "4": "1.95.0-x86_64-pc-windows-msvc (default)\n",
+      "6": "Python 3.14.8\n",
+      "11": "maturin 1.15.0\n",
+      "MSVC_linker": "Microsoft (R) Incremental Linker Version 14.44.35229.0"
+    },
+    "commands": [
+      {
+        "argv": [
+          "rustc",
+          "-vV"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\01.log"
+      },
+      {
+        "argv": [
+          "cargo",
+          "-V"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\02.log"
+      },
+      {
+        "argv": [
+          "uv",
+          "--version"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\03.log"
+      },
+      {
+        "argv": [
+          "rustup",
+          "show",
+          "active-toolchain"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\04.log"
+      },
+      {
+        "argv": [
+          "uv",
+          "venv",
+          "--python",
+          "3.14.8",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\05.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\python.exe",
+          "--version"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\06.log"
+      },
+      {
+        "argv": [
+          "uv",
+          "pip",
+          "install",
+          "--python",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\python.exe",
+          "maturin>=1.7,<2"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\07.log"
+      },
+      {
+        "argv": [
+          "cargo",
+          "+1.95.0",
+          "build",
+          "--locked",
+          "--release",
+          "--bin",
+          "aplexer"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\source",
+        "exit": 0,
+        "log": "receipts\\08.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\maturin.exe",
+          "build",
+          "--locked",
+          "--release",
+          "--out",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\source\\python",
+        "exit": 1,
+        "log": "receipts\\09.log"
+      },
+      {
+        "argv": [
+          "cargo",
+          "+1.95.0",
+          "build",
+          "--locked",
+          "--release",
+          "--bin",
+          "aplexer"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\source",
+        "exit": 0,
+        "log": "receipts\\10.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\maturin.exe",
+          "--version"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\11.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\maturin.exe",
+          "build",
+          "--locked",
+          "--release",
+          "--out",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\source\\python",
+        "exit": 0,
+        "log": "receipts\\12.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\source\\scripts\\build-wheels.py",
+          "--platform",
+          "windows-amd64",
+          "--binaries-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\staging",
+          "--output-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\13.log"
+      },
+      {
+        "argv": [
+          "uv",
+          "venv",
+          "--python",
+          "3.14.8",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\14.log"
+      },
+      {
+        "argv": [
+          "uv",
+          "pip",
+          "install",
+          "--no-index",
+          "--python",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer-0.1.10-py3-none-win_amd64.whl",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer_client-0.1.10-cp311-abi3-win_amd64.whl"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\15.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\native-test.py"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 1,
+        "log": "receipts\\16.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\source\\scripts\\build-wheels.py",
+          "--platform",
+          "windows-amd64",
+          "--binaries-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\staging",
+          "--output-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\17.log"
+      },
+      {
+        "argv": [
+          "uv",
+          "pip",
+          "install",
+          "--no-index",
+          "--python",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer-0.1.10-py3-none-win_amd64.whl",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer_client-0.1.10-cp311-abi3-win_amd64.whl"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\18.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\native-test.py"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 1,
+        "log": "receipts\\19.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\source\\scripts\\build-wheels.py",
+          "--platform",
+          "windows-amd64",
+          "--binaries-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\staging",
+          "--output-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\20.log"
+      },
+      {
+        "argv": [
+          "uv",
+          "pip",
+          "install",
+          "--no-index",
+          "--python",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer-0.1.10-py3-none-win_amd64.whl",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer_client-0.1.10-cp311-abi3-win_amd64.whl"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\21.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\native-test.py"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 1,
+        "log": "receipts\\22.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\source\\scripts\\build-wheels.py",
+          "--platform",
+          "windows-amd64",
+          "--binaries-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\staging",
+          "--output-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\23.log"
+      },
+      {
+        "argv": [
+          "uv",
+          "pip",
+          "install",
+          "--no-index",
+          "--python",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer-0.1.10-py3-none-win_amd64.whl",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer_client-0.1.10-cp311-abi3-win_amd64.whl"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\24.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\native-test.py"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 1,
+        "log": "receipts\\25.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\buildtools\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\source\\scripts\\build-wheels.py",
+          "--platform",
+          "windows-amd64",
+          "--binaries-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\staging",
+          "--output-dir",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\26.log"
+      },
+      {
+        "argv": [
+          "uv",
+          "pip",
+          "install",
+          "--no-index",
+          "--python",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer-0.1.10-py3-none-win_amd64.whl",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\dist\\aplexer_client-0.1.10-cp311-abi3-win_amd64.whl"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\27.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\native-test.py"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\28.log"
+      },
+      {
+        "argv": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe",
+          "-products",
+          "*",
+          "-latest",
+          "-property",
+          "installationPath"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\29.log"
+      },
+      {
+        "argv": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 1100,
+        "log": "receipts\\30.log"
+      },
+      {
+        "argv": [
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+          "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\d22-extra.py"
+        ],
+        "cwd": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e",
+        "exit": 0,
+        "log": "receipts\\31.log"
+      }
+    ],
+    "exeSHA256": "07ae4821f9e13c8d4083dd490e8b664286f033678688b7c79f8b77a5f8cfeadd",
+    "nativePydSHA256": "f56f717aa37fd3eafb842685f362b179069aba57b994aa8c7d3a9d24a95f4992",
+    "wheelPair": "aplexer0.1.10 py3-none-win_amd64 requires exact aplexer-client0.1.10 cp311-abi3-win_amd64; RequiresPython>=3.11",
+    "qualification": {
+      "native_import": "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Lib\\site-packages\\aplexer\\_native.pyd",
+      "metadata": {
+        "aplexer": {
+          "Metadata-Version": "2.1",
+          "Name": "aplexer",
+          "Version": "0.1.10",
+          "Summary": "Prebuilt CLI binaries for aplexer, the daemonless PTY session runtime",
+          "License": "Apache-2.0",
+          "Requires-Python": ">=3.11",
+          "Requires-Dist": "aplexer-client==0.1.10"
+        },
+        "aplexer-client": {
+          "Metadata-Version": "2.4",
+          "Name": "aplexer-client",
+          "Version": "0.1.10",
+          "Summary": "Python bindings for the aplexer PTY session runtime",
+          "License": "Apache-2.0",
+          "Requires-Python": ">=3.11"
+        }
+      },
+      "APLEXER_BIN_unset": true,
+      "poisoned_PATH": true,
+      "fixture_ids": [
+        "110b9ee2-72e7-4383-a1f3-36210f489963",
+        "eb7a9f76-a076-4056-b01d-840785e020c2"
+      ],
+      "bundled_executable_sha256": "07ae4821f9e13c8d4083dd490e8b664286f033678688b7c79f8b77a5f8cfeadd",
+      "cli_commands": [
+        {
+          "argv": [
+            "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+            "-m",
+            "aplexer_cli",
+            "--version"
+          ],
+          "exit": 0,
+          "output": "a 0.1.10\n"
+        },
+        {
+          "argv": [
+            "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+            "-m",
+            "aplexer_cli",
+            "list"
+          ],
+          "exit": 0,
+          "output": ""
+        }
+      ],
+      "initial_sanitized_listing": [],
+      "sanitized_owned_listing": [
+        {
+          "id": "110b9ee2-72e7-4383-a1f3-36210f489963",
+          "tag": "private-native-a7cca1e-owned",
+          "phase": "running"
+        }
+      ],
+      "kill_owned_id": "110b9ee2-72e7-4383-a1f3-36210f489963",
+      "lifecycle": {
+        "capture_marker": true,
+        "kill": true,
+        "natural_exit": true,
+        "forget": "auto-removed; no record remains",
+        "owned_id": "eb7a9f76-a076-4056-b01d-840785e020c2"
+      },
+      "final_sanitized_listing": [],
+      "D22": "PASS",
+      "status": "PASS"
+    },
+    "extra": {
+      "status": "PASS",
+      "APLEXER_BIN_unset": true,
+      "PATH_only_poison": true,
+      "console_scripts": [
+        {
+          "argv": [
+            "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\a.exe",
+            "--version"
+          ],
+          "exit": 0,
+          "stdout": "a 0.1.10\n",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\aplexer.exe",
+            "--version"
+          ],
+          "exit": 0,
+          "stdout": "a 0.1.10\n",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "C:\\Users\\User\\git\\pocketshell-win35-deployment\\aplexer-build-a7cca1e\\lab\\venv\\Scripts\\python.exe",
+            "-m",
+            "aplexer_cli",
+            "--version"
+          ],
+          "exit": 1,
+          "stdout": "",
+          "stderr": "Error: no bundled 'aplexer' binary for this platform (win32 AMD64).\n\nSupported platforms:\n  - Linux x86_64\n  - Linux aarch64 (arm64)\n  - Windows x86_64\n\nYou can build from source with: cargo install --path .\n"
+        }
+      ],
+      "missing_bundle_rejects_PATH_fallback": true,
+      "bundle_restored_sha256": "07ae4821f9e13c8d4083dd490e8b664286f033678688b7c79f8b77a5f8cfeadd"
+    },
+    "limits": "Historical private native D22 proof, not a newly built maintained artifact. Original Aplexer owner ~/git/aplexer owns source maintenance/any new Windows build. 170PASS cited in historical coordination not independently located in this finite review; no invented full-suite claim."
+  },
+  "msys": {
+    "sourceCommit": "5a1665c8a0fb24930e55f1621441dfd98a798c15",
+    "sourceAndArtifacts": [
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/msys2-runtime-5a166.tar.gz",
+        "bytes": 12424227,
+        "sha256": "ce1a003f647119738875010630a25c032c161b5c72cceb8416c5b551781391a9"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/console.before.cc",
+        "bytes": 147152,
+        "sha256": "ec3092a13fc7237d7136cc86401a83549b39cf718136f38bf2f902e236b89e03"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/console.after-v2.cc",
+        "bytes": 147596,
+        "sha256": "717e49fe10e8a31df0a21035b8b1f74987460a61b4a2bf34a498ee9ff4710e46"
+      },
+      {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/new-msys-2.0.dll",
+        "bytes": 4127671,
+        "sha256": "3674908a60758965f142bb4cc01ca268f9ca9524df92c2820d15db3b92179d6d"
+      }
+    ],
+    "sourceURL": "https://github.com/git-for-windows/msys2-runtime",
+    "originalPortableGitArchiveSHA256": "16ca394bdb94b372267d79e1e10b68763674f73e03e0648202a7971a8a730a84",
+    "portableVersion": "2.56.0.2",
+    "candidateRoot": "C:/Users/alexey/PocketShellFleet/20261009-6cbe21e/runtime/portablegit-msys-private-717e49fe",
+    "allOther9621FilesUnchanged": true,
+    "total9622": 9622,
+    "materializedLinks": 97,
+    "patchSemantics": "Defer SIGWINCH release/delivery until resize peeked records discarded; no editing/status/viewport workaround.",
+    "proofs": {
+      "proposal.json": {
+        "pin": {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/proposal.json",
+          "bytes": 1308,
+          "sha256": "dd2cd67194379e5d52b7aff32dbf995cdd65177d08276948d2bc861b122c7d54"
+        },
+        "value": {
+          "sourceCommit": "5a1665c8a0fb24930e55f1621441dfd98a798c15",
+          "sourceURL": "https://github.com/git-for-windows/msys2-runtime/blob/5a1665c8a0fb24930e55f1621441dfd98a798c15/winsup/cygwin/fhandler/console.cc",
+          "beforeSHA256": "ec3092a13fc7237d7136cc86401a83549b39cf718136f38bf2f902e236b89e03",
+          "afterSHA256": "1e8d0a9f1358c43208b91335e8e1f2db162f8f44847e6a41fb808a5ce0022bf3",
+          "actualEvidence": [
+            "Win35 native-msys-lifecycle-v48: first command intact, resize36x113, following printf loses p",
+            "Laptop native-worker-trace-v47: WriteFile requested86/written86 ~38.88ms postresize, Bash loses p"
+          ],
+          "candidate": "send_winch_maybe releases input_mutex before process_input_message discards peeked resize record; master can remove resize record during that gap",
+          "change": "Defer SIGWINCH release/delivery until peeked records have been discarded. Both current helper callers are inside process_input_message; preserve update/return contract and release around callback longjmp.",
+          "controls": {
+            "controls": 4,
+            "baselineLeadingByteLost": true,
+            "correctedFirstBytesPreserved": true,
+            "scope": "Source-order deterministic interleaving only"
+          },
+          "limits": "No built runtime or causal instrumented DLL evidence yet. No default terminal/settings/viewport/editing workaround."
+        }
+      },
+      "PRIVATE-DLL-PACKET.json": {
+        "pin": {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/PRIVATE-DLL-PACKET.json",
+          "bytes": 1269,
+          "sha256": "7373fa2fb2153a2e82b3804fa95f731ef7baa0539c60d3427ec14d91e64af460"
+        },
+        "value": {
+          "files": [
+            {
+              "path": "new-msys-2.0.dll",
+              "bytes": 4127671,
+              "sha256": "3674908a60758965f142bb4cc01ca268f9ca9524df92c2820d15db3b92179d6d"
+            },
+            {
+              "path": "DLL-PE-ABI.json",
+              "bytes": 638,
+              "sha256": "abb46008f4c5f30edb50640d4952423edffe5788e3990eef8fa22fdbd265368c"
+            },
+            {
+              "path": "PRIVATE-DLL-QUALIFICATION.json",
+              "bytes": 1558,
+              "sha256": "374ca61050d4d1b2b330eb97befcb1626fcdd7554d9ccdd9791fc35db7885304"
+            },
+            {
+              "path": "DLL-ONLY-INSTALLATION.txt",
+              "bytes": 925,
+              "sha256": "fb2e69b22e1b3252cef9dec1cf33b3dde788d5ec16c16bc3fb4f9d101d00295f"
+            },
+            {
+              "path": "BUILD-V5-RESULT.json",
+              "bytes": 1166872,
+              "sha256": "a0eb738f1d5691b61f79dc647cb362cd20db66db63c8ca25dc30d75404fc4c66"
+            },
+            {
+              "path": "BUILD-V5.stdout.log",
+              "bytes": 9331,
+              "sha256": "8e75686db787caa3abcbaedd4a2a5ebfbb3dbf9ff574730e94930106a5ac0f62"
+            },
+            {
+              "path": "BUILD-V5.stderr.log",
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "path": "V5-output-name-source.txt",
+              "bytes": 406,
+              "sha256": "f25bb84f43cd306502323810635f2547234d99360e5757b2b00ba7ffbb5bd461"
+            }
+          ]
+        }
+      },
+      "PRIVATE-DLL-QUALIFICATION.json": {
+        "pin": {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/PRIVATE-DLL-QUALIFICATION.json",
+          "bytes": 1558,
+          "sha256": "374ca61050d4d1b2b330eb97befcb1626fcdd7554d9ccdd9791fc35db7885304"
+        },
+        "value": {
+          "schema": 1,
+          "sourceCommit": "5a1665c8a0fb24930e55f1621441dfd98a798c15",
+          "sourceArchiveSHA256": "ce1a003f647119738875010630a25c032c161b5c72cceb8416c5b551781391a9",
+          "consoleBeforeSHA256": "ec3092a13fc7237d7136cc86401a83549b39cf718136f38bf2f902e236b89e03",
+          "consoleAfterSHA256": "717e49fe10e8a31df0a21035b8b1f74987460a61b4a2bf34a498ee9ff4710e46",
+          "sdkCommit": "de64efdafd991b2ddf8d9fccd7f549286d039328",
+          "sdkArchiveSHA256": "a904e4721c599aa36e01ff1660ffa4619b022f0d289f0aafe29e6ae7079c6d85",
+          "driverSHA256": "b6af0f750b9c43d5f8f75c676171ea61f256b1ea4485f46cad67ece7635e4906",
+          "recipeSHA256": "45f21d434d62d87fe3c382a1313bf57520aab9f82ca2c35122bbe4c99e42d8bf",
+          "actualCompilerNaturalExit": 0,
+          "overallHarnessAccepted": false,
+          "overallHarnessFailure": "Expected obsolete msys0.dll output path; actual Makefile produces new-msys-2.0.dll",
+          "ownedActiveAtClose": 0,
+          "desktopClosed": true,
+          "cleanupErrors": [],
+          "artifact": {
+            "path": "new-msys-2.0.dll",
+            "bytes": 4127671,
+            "sha256": "3674908a60758965f142bb4cc01ca268f9ca9524df92c2820d15db3b92179d6d",
+            "signed": false,
+            "authority": "Private patched official-source build; not signed vendor release"
+          },
+          "abi": {
+            "baselineSHA256": "2a89b7c31b323c42e2fb37900af087aeb27417694e630a210bc75b0369410bc7",
+            "machine": "AMD64",
+            "missingBaselineExports": 0,
+            "changedOrdinals": 0,
+            "changedForwarders": 0,
+            "exports": 1767,
+            "imports": [
+              "kernel32.dll",
+              "ntdll.dll"
+            ],
+            "additionalImports": []
+          },
+          "candidateExecuted": false
+        }
+      },
+      "laptop-private-vendor-copy-receipt.json": {
+        "pin": {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/laptop-private-vendor-copy-receipt.json",
+          "bytes": 788,
+          "sha256": "7d3c685b1fc0a066d7eb0b6f90eb373cb9393e6150fadfeac84787fa39c5f6c5"
+        },
+        "value": {
+          "originalRoot": "C:/Users/alexey/PocketShellFleet/20261009-6cbe21e/runtime/portablegit-2.56.0.2",
+          "candidateRoot": "C:/Users/alexey/PocketShellFleet/20261009-6cbe21e/runtime/portablegit-msys-private-717e49fe",
+          "originalArchiveSHA256": "16ca394bdb94b372267d79e1e10b68763674f73e03e0648202a7971a8a730a84",
+          "total": 9622,
+          "allOther9621FilesUnchanged": true,
+          "materializedLinksRetained": 97,
+          "changed": {
+            "path": "usr/bin/msys-2.0.dll",
+            "before": "2a89b7c31b323c42e2fb37900af087aeb27417694e630a210bc75b0369410bc7",
+            "after": "3674908a60758965f142bb4cc01ca268f9ca9524df92c2820d15db3b92179d6d"
+          },
+          "source": "console.after-v2.cc SHA717e49fe10e8a31df0a21035b8b1f74987460a61b4a2bf34a498ee9ff4710e46",
+          "executedCandidate": false,
+          "at": "2026-10-09T09:48:11.626Z"
+        }
+      },
+      "sdk-download.json": {
+        "pin": {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/sdk-download.json",
+          "bytes": 498,
+          "sha256": "7158ffad5149d39f99d10b07f407c3770063c922ee31ec2e38d631e72266ee91"
+        },
+        "value": {
+          "source": "https://github.com/git-for-windows/git-sdk-64",
+          "commit": "de64efdafd991b2ddf8d9fccd7f549286d039328",
+          "tree": "115817ac46fab58808dcfcfa417b1a2e10f7ec61",
+          "archive": "C:\\Users\\alexey\\Documents\\Codex\\2026-10-08\\i-wa\\work\\msys-private-input-fix-5a166/git-sdk-64-de64efdafd991b2ddf8d9fccd7f549286d039328.tar.gz",
+          "bytes": 1028430332,
+          "sha256": "a904e4721c599aa36e01ff1660ffa4619b022f0d289f0aafe29e6ae7079c6d85",
+          "gitCommitSignature": "unsigned",
+          "executed": false
+        }
+      }
+    },
+    "build": {
+      "pin": {
+        "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/BUILD-V5-RESULT.json",
+        "bytes": 1166872,
+        "sha256": "a0eb738f1d5691b61f79dc647cb362cd20db66db63c8ca25dc30d75404fc4c66"
+      },
+      "naturalExitCode": 0,
+      "overallAccepted": false,
+      "failure": "Expected runtime output absent or redirected",
+      "ownedActiveAtClose": 0,
+      "desktopClosed": true,
+      "cleanupErrors": [],
+      "recipes": [
+        {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/build-runtime-v2.sh",
+          "bytes": 529,
+          "sha256": "d6da2e274e046e9d16fa1339a7e9e53b80a5a9d6c10246fa8c5a586b7156f75d"
+        },
+        {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/build-runtime-v5.sh",
+          "bytes": 141,
+          "sha256": "45f21d434d62d87fe3c382a1313bf57520aab9f82ca2c35122bbe4c99e42d8bf"
+        },
+        {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/build-win35-v5.py",
+          "bytes": 15741,
+          "sha256": "b6af0f750b9c43d5f8f75c676171ea61f256b1ea4485f46cad67ece7635e4906"
+        },
+        {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/build-v5-manifest.json",
+          "bytes": 662,
+          "sha256": "58190a7ffd121aa3a5de880fdc25703dab3e552428094664d6976b1b8cf14a7d"
+        },
+        {
+          "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/msys-private-input-fix-5a166/root-v5-review.json",
+          "bytes": 981,
+          "sha256": "b85e22889d5bec904b66a0e4a2d1916ab03ac7586fe9db191b344b5b0e42e61f"
+        }
+      ]
+    },
+    "limits": "Unsigned private rebuilt DLL; compiler natural0, harness refused obsolete output-name oracle. Later actual execution is separate. SDK1GB archive hash is retained provenance; not rehashed this finite pass."
+  },
+  "actualLifecycle": {
+    "pin": {
+      "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/desktop-windows-host-cli/laptop-native-private-msys-lifecycle-v50/result.json",
+      "bytes": 33514,
+      "sha256": "f83e63b5f439d377666485131e84e2e12cb337efc10bee7e04895ff05dbead83"
+    },
+    "complete": {
+      "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/desktop-windows-host-cli/laptop-native-private-msys-lifecycle-v50/complete.json",
+      "bytes": 212,
+      "sha256": "3a1fbfe410a614b83481c716519e3fde2b374fb9a56b31ade4ea15f0c160c620"
+    },
+    "sourceEnvelope": {
+      "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/desktop-windows-host-cli/laptop-native-private-msys-lifecycle-v50/source-envelope.json",
+      "bytes": 919,
+      "sha256": "16b2bf39b98044530350eceeecebf4858a06add41456fc9a3109e46bc3334175"
+    },
+    "scope": "One default-status normal-editing full resize/detach/reconnect UUID lifecycle",
+    "started": "2026-10-09T10:03:44.046Z",
+    "createdUUID": "808d67ab-8edb-47e2-8bac-f3a055c6e747",
+    "renameSameUUID": true,
+    "killConfirmed": true,
+    "cleanupListingEmpty": true,
+    "cleanupErrors": [],
+    "attempts": [
+      {
+        "mode": "first-attach",
+        "id": "808d67ab-8edb-47e2-8bac-f3a055c6e747",
+        "events": [
+          {
+            "kind": "pty-open",
+            "atUtc": "2026-10-09T10:03:45.440Z"
+          },
+          {
+            "kind": "actual-prompt-status-ready",
+            "atUtc": "2026-10-09T10:03:45.718Z"
+          },
+          {
+            "kind": "first-input-sent",
+            "atUtc": "2026-10-09T10:03:45.718Z"
+          },
+          {
+            "kind": "first-input-cwd-proved",
+            "atUtc": "2026-10-09T10:03:45.810Z"
+          },
+          {
+            "kind": "resize-requested",
+            "atUtc": "2026-10-09T10:03:45.811Z",
+            "outerRows": 37,
+            "outerCols": 113,
+            "expectedEngineRows": 36
+          },
+          {
+            "kind": "resized-footer-observed",
+            "atUtc": "2026-10-09T10:03:48.800Z"
+          },
+          {
+            "kind": "resize-engine-proved",
+            "atUtc": "2026-10-09T10:03:48.986Z"
+          },
+          {
+            "kind": "keyboard-detach-sent",
+            "atUtc": "2026-10-09T10:03:48.987Z"
+          },
+          {
+            "kind": "stream-close",
+            "atUtc": "2026-10-09T10:03:49.025Z",
+            "exitCode": 0
+          }
+        ]
+      },
+      {
+        "mode": "reconnect-same-UUID",
+        "id": "808d67ab-8edb-47e2-8bac-f3a055c6e747",
+        "events": [
+          {
+            "kind": "pty-open",
+            "atUtc": "2026-10-09T10:03:49.794Z"
+          },
+          {
+            "kind": "actual-prompt-status-ready",
+            "atUtc": "2026-10-09T10:03:50.108Z"
+          },
+          {
+            "kind": "first-input-sent",
+            "atUtc": "2026-10-09T10:03:50.108Z"
+          },
+          {
+            "kind": "first-input-cwd-proved",
+            "atUtc": "2026-10-09T10:03:50.234Z"
+          },
+          {
+            "kind": "resize-requested",
+            "atUtc": "2026-10-09T10:03:50.235Z",
+            "outerRows": 37,
+            "outerCols": 113,
+            "expectedEngineRows": 36
+          },
+          {
+            "kind": "resized-footer-observed",
+            "atUtc": "2026-10-09T10:03:53.197Z"
+          },
+          {
+            "kind": "resize-engine-proved",
+            "atUtc": "2026-10-09T10:03:53.321Z"
+          },
+          {
+            "kind": "keyboard-detach-sent",
+            "atUtc": "2026-10-09T10:03:53.322Z"
+          },
+          {
+            "kind": "stream-close",
+            "atUtc": "2026-10-09T10:03:53.355Z",
+            "exitCode": 0
+          }
+        ]
+      }
+    ],
+    "limits": "Historical directLaptop22024 Aplexer+Bash actual PTY/default footer/firstinput/resize/detach/sameUUID reattach/rename/stop/emptycleanup. Not maintained generic new release, tray/login or current Win35 availability proof."
+  },
+  "roleHandoff": {
+    "required": [
+      "Native aplexer.exe AND _native.pyd matching pair",
+      "Python backend package/runtime plus supported config for actual native operations",
+      "SSH daemon/auth/session/shellhost/crypto",
+      "SFTP executable/crypto explicit source and pins",
+      "Engine executable and complete dependency closure where actual engine uses Bash"
+    ],
+    "bash": "Actual accepted historical shell engine uses private usr/bin/bash.exe and complete PortableGit closure with patched MSYS. Do not label Bash-only backend; native Aplexer session runtime stays required. For a maintained CMD/PowerShell engine alternative, owner must source-build/package and prove that actual engine behavior.",
+    "genericInstall": "Package generic reviewed roles under managed-runtime layout. Ordinary setup derives private per-host manifest/config/public enrolled tuple + authority digest after install; no private keys or personal config copies/no machine-specific compiled release.",
+    "maintenance": "Original CLI packaging owner owns generic bundle; original ~/git/aplexer author owns native pair source/build. Existing archives mean inputs are recoverable, not absent."
+  }
+}

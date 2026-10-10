@@ -1,0 +1,46 @@
+# Owned rebuild of the generic Windows endpoint backend (quiet OpenSSH 10.3p1 +
+# the reviewed MSYS runtime) from PUBLIC pinned inputs. It runs on push of the
+# exact branch head (not a PR merge commit), so the build checkout is the commit
+# that is recorded. Built binaries are never executed here.
+name: Backend
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - gateway-user-agent
+    paths:
+      - scripts/release/build_backend_windows.py
+      - release/inputs/openssh-quiet-e302fe1/**
+      - release/inputs/msys2-runtime-5a1665c8/**
+      - .github/workflows/backend.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: backend ${{ matrix.part }}
+    runs-on: windows-2022
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [openssh, msys]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build ${{ matrix.part }}
+        shell: pwsh
+        run: python scripts/release/build_backend_windows.py --part ${{ matrix.part }} --work C:\bw --out "${{ runner.temp }}\backend-out"
+      - name: Upload
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-${{ matrix.part }}
+          path: ${{ runner.temp }}/backend-out
+          if-no-files-found: error

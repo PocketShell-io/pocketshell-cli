@@ -242,8 +242,8 @@ def start_device(base_url: str, label: str) -> DeviceStart:
     )
 
 
-def poll_device(base_url: str, device_code: str) -> Response:
-    return request(base_url, "POST", "/auth/device/token", body={"device_code": device_code})
+def poll_device(base_url: str, device_code: str, timeout: float = DEFAULT_TIMEOUT) -> Response:
+    return request(base_url, "POST", "/auth/device/token", body={"device_code": device_code}, timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -300,12 +300,12 @@ def get_session(base_url: str, access_token: str, *, timeout: float = DEFAULT_TI
     )
 
 
-def logout(base_url: str, access_token: str) -> bool:
+def logout(base_url: str, access_token: str, timeout: float = 10) -> bool:
     """Revoke the session server-side. True on 2xx (or 401: already gone).
 
     Raises :class:`BrokerRateLimited` on 429: the session was NOT revoked.
     """
-    resp = request(base_url, "POST", "/cli/logout", bearer=access_token, timeout=10)
+    resp = request(base_url, "POST", "/cli/logout", bearer=access_token, timeout=timeout)
     _raise_if_rate_limited(resp)
     return 200 <= resp.status < 300 or resp.status == 401
 

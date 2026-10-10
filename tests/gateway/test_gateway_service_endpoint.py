@@ -165,6 +165,7 @@ class Guardian:
         self.close_accepted = True
         self.stop_requests = []
         self.runs = []
+        self.context = None  # override (e.g. the active-console user mode)
 
     def run(self, leaf):
         self.runs.append(leaf)
@@ -179,13 +180,15 @@ class Guardian:
         self.api.listeners[self.port] = [("127.0.0.1", daemon)]
         ready = {
             "accepted": False, "manifestSHA256": self.manifest_sha,
-            "context": {"ownerSID": USER_SID, "session": 0, "station": "Service-0x0-1a2b$",
-                        "stationVisible": False, "desktop": "Default", "activeConsoleSession": 1,
-                        "authenticationLUID": "123"},
+            "context": dict(self.context) if self.context else {
+                "ownerSID": USER_SID, "session": 0, "station": "Service-0x0-1a2b$",
+                "stationVisible": False, "desktop": "Default", "activeConsoleSession": 1,
+                "authenticationLUID": "123"},
             "cleanupErrors": [], "pid": daemon, "creationFILETIME": self.api.births[daemon],
             "guardianPID": guardian, "sourceSHA256": SHA_G, "port": self.port,
             "heldProcessHandle": True, "ownedJob": True,
-            "privateDesktop": "Service-0x0-1a2b$\\PocketShellPrivate_" + os.urandom(16).hex(),
+            "privateDesktop": (self.context or {}).get("station", "Service-0x0-1a2b$")
+            + "\\PocketShellPrivate_" + os.urandom(16).hex(),
             # native_api.verify_desktop_acl (cab601e2) schema
             "desktopACL": {"ownerSID": USER_SID, "protectedDACL": True,
                            "allowTrustees": sorted([USER_SID, "S-1-5-18", "S-1-5-32-544"]), "ACECount": 3},
@@ -436,9 +439,15 @@ def test_trust_reviewed_manifest_and_full_source_triple_and_disk(env, monkeypatc
         _plan(env)
 
 
-def test_reviewed_lists_start_empty():
+def test_reviewed_lists_no_per_host_manifest_and_only_the_generic_trio():
+    """Setup ABI v3: no compiled per-host manifest digest (the legacy S4U path
+    stays closed); exactly ONE reviewed generic guardian trio: the e862645d
+    successor of 6cf7ae85 (the agreed 8 MiB manifest bound, §16.14)."""
     assert ep.ALLOWED_ENDPOINT_MANIFEST_SHA256 == frozenset()
-    assert ep.ALLOWED_GUARDIAN_SOURCES == frozenset()
+    assert ep.ALLOWED_GUARDIAN_SOURCES == frozenset({(
+        "e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
+        "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
+        "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce")})
 
 
 def test_protected_ancestor_authority_is_checked_before_registration(env):

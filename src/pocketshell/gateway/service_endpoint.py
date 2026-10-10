@@ -43,7 +43,7 @@ ENDPOINT_LEAF = "GatewayEndpoint"
 ENDPOINT_BOOT_DELAY = "PT10S"  # the link keeps PT30S (soft ordering only)
 CHECK_ONLY_TIME_LIMIT = "PT5M"
 BOOTSTRAP_FLAGS = ("-I", "-S", "-B")  # isolated, no site, no bytecode writes
-MAX_MANIFEST_BYTES = 64 * 1024
+MAX_MANIFEST_BYTES = 8 << 20  # §16.14: the successor guardian's agreed manifest bound (whole closure pinned)
 MAX_PROTOCOL_BYTES = 64 * 1024
 MAX_STOP_BYTES = 4096
 SOURCE_NAMES = ("guardian.py", "native_api.py", "policy.py")
@@ -58,7 +58,16 @@ SERVICING_IMAGES = ("c:\\windows\\system32\\cmd.exe", "c:\\windows\\system32\\co
 # variable. EMPTY until the productized guardian and the manifests have been
 # reviewed (final candidate: 6cf7ae85…, cab601e2…, e92bbe02…).
 ALLOWED_ENDPOINT_MANIFEST_SHA256: frozenset = frozenset()
-ALLOWED_GUARDIAN_SOURCES: frozenset = frozenset()
+# Setup ABI v3 (Option B): the ONE generic reviewed trio, compiled once. Per-host
+# manifests are trusted only through the installed authority record
+# (check_trust_authority), never by a compiled per-manifest digest.
+# The trio is the e862645d successor of 6cf7ae85 (release/inputs/guardian-e862645d:
+# one line, the agreed 8 MiB manifest bound of §16.14; native_api/policy unchanged).
+ALLOWED_GUARDIAN_SOURCES: frozenset = frozenset({(
+    "e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
+    "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
+    "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
+)})
 
 MANIFEST_KEYS = frozenset(
     {"version", "ownerSID", "root", "state", "config", "port", "daemon", "python", "pins",
@@ -154,7 +163,7 @@ def parse_manifest(data: bytes, manifest_path: str) -> GuardianManifest:
     manifest and its three sources below root (path layout: the three
     sources sit together, HERE = the guardian's directory)."""
     if len(data) > MAX_MANIFEST_BYTES:
-        raise _fail("larger than 64 KiB")
+        raise _fail("larger than 8 MiB")
     try:
         m = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -313,6 +322,140 @@ def check_trust(m: GuardianManifest, *, file_sha256: Callable[[str], str]) -> No
             "the pinned guardian.py/native_api.py/policy.py are not a reviewed guardian/native_api/policy "
             "source triple (ALLOWED_GUARDIAN_SOURCES)"
         )
+    for path, digest in m.pins.items():
+        if file_sha256(path) != digest:
+            raise ServiceError(f"pinned endpoint file {sanitize(path)} does not match the manifest")
+
+
+SYSTEM_REFERENCE_NAMES = ("cmd.exe", "conhost.exe")
+
+
+def system_references(refs, system_root) -> dict:
+    """§16.13 endpoint.systemReferences: EXACTLY [{role:"system-reference",
+    name, path, sha256}] for cmd.exe then conhost.exe, each path the plain
+    <measured SystemRoot>\\System32\\<name> spelling (no 8.3, \\\\?\\, SysWOW64,
+    other directory) and a guardian servicing image. Returns casefolded
+    path -> sha256."""
+    if not isinstance(system_root, str) or not isinstance(refs, list) or len(refs) != len(SYSTEM_REFERENCE_NAMES):
+        raise ServiceError("the authority's systemReferences are not exactly cmd.exe and conhost.exe")
+    out = {}
+    for ref, name in zip(refs, SYSTEM_REFERENCE_NAMES):
+        want = ntpath.join(system_root, "System32", name)
+        if not isinstance(ref, dict) or set(ref) != {"role", "name", "path", "sha256"} \
+                or ref["role"] != "system-reference" or ref["name"] != name \
+                or not isinstance(ref["path"], str) or ref["path"].casefold() != want.casefold() \
+                or any(c in ref["path"] for c in "/~?") or not is_servicing_image(ref["path"]) \
+                or not isinstance(ref["sha256"], str) or not _HEX64.fullmatch(ref["sha256"]):
+            raise ServiceError(f"the authority's system reference for {name} is not the exact measured "
+                               "<SystemRoot>\\System32 image")
+        out[ntpath.normcase(ref["path"])] = ref["sha256"]
+    return out
+
+
+KEYS_FIELDS = {"mode", "hostKey", "hostKeyPublic", "hostKeyFingerprint", "authorizedKeys"}
+
+
+def check_keys_block(receipt, m: GuardianManifest) -> dict:
+    """Revision D ``keys``: exactly its five fields; mode generated|migrated;
+    the paths are the manifest's hostKey/authorizedKeys bindings (generated:
+    the fixed <root>\\endpoint\\keys files); the public line parses and its
+    fingerprint is the recorded one and the binding's."""
+    from pocketshell.gateway import pins as gateway_pins
+
+    k = receipt.get("keys")
+    if not isinstance(k, dict) or set(k) != KEYS_FIELDS or k["mode"] not in ("generated", "migrated"):
+        raise ServiceError("the authority's keys block is not the closed revision D shape")
+    for field_, binding in (("hostKey", "hostKey"), ("authorizedKeys", "authorizedKeys")):
+        if not isinstance(k[field_], str) or ntpath.normcase(ntpath.normpath(k[field_])) != \
+                ntpath.normcase(m.config_bindings[binding]):
+            raise ServiceError(f"the authority's keys.{field_} is not the endpoint's configured {binding}")
+    if k["mode"] == "generated":
+        keys_dir = ntpath.normcase(ntpath.join(m.root, "endpoint", "keys"))
+        if ntpath.normcase(ntpath.dirname(ntpath.normpath(k["hostKey"]))) != keys_dir \
+                or ntpath.normcase(ntpath.dirname(ntpath.normpath(k["authorizedKeys"]))) != keys_dir:
+            raise ServiceError("generated keys must live in <managed-runtime>\\endpoint\\keys")
+    try:
+        key = gateway_pins.parse_host_key(k["hostKeyPublic"])
+    except (gateway_pins.PinError, TypeError):
+        raise ServiceError("the authority's keys.hostKeyPublic is not a public host key line") from None
+    binding = receipt.get("binding") or {}
+    if key.fingerprint != k["hostKeyFingerprint"] or binding.get("hostKeyFingerprint") != k["hostKeyFingerprint"]:
+        raise ServiceError("the authority's host-key fingerprint does not match its public key")
+    return k
+
+
+def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable[[str], str],
+                          closure: dict) -> None:
+    """Setup ABI v3 trust: the installed authority (receipt v3) records THIS
+    manifest, in the fixed managed-runtime layout, with the generic reviewed
+    trio. ``closure`` is the recorded catalog's exact closure
+    (service_agent_endpoint.catalog_closure: casefolded installed path ->
+    sha256, and role -> path). The manifest pins EXACTLY: every catalog
+    member at its catalog path and digest, the fixed generated sshd.conf and
+    aplexer.toml, and the two recorded system references; every role is at
+    its catalog path. Anything else refuses (no extra private pin, no role
+    redirect). Then every pin re-hashes on disk."""
+    e = receipt.get("endpoint") if isinstance(receipt, dict) and receipt.get("version") == 3 else None
+    if not isinstance(e, dict) or set(e) != {"root", "manifest", "manifestSHA256", "config", "state",
+                                             "systemReferences"}:
+        raise ServiceError("no installed authority (receipt v3) records an endpoint manifest; run `agent install`")
+    if m.sha256 != e["manifestSHA256"]:
+        raise ServiceError(f"endpoint manifest sha256 {m.sha256[:12]}… is not the one recorded by the installed "
+                           "authority")
+    root = e["root"]
+    if not isinstance(root, str) or ntpath.basename(ntpath.normpath(root)).casefold() != "managed-runtime":
+        raise ServiceError("the authority's endpoint root is not managed-runtime")
+    fixed = {"manifest": ntpath.join(root, "endpoint", "endpoint-manifest.json"),
+             "config": ntpath.join(root, "endpoint", "sshd.conf"), "state": ntpath.join(root, "endpoint", "state")}
+    actual = {"manifest": m.path, "config": m.config, "state": m.state}
+    for key, want in fixed.items():
+        if not isinstance(e[key], str) or ntpath.normcase(ntpath.normpath(e[key])) != ntpath.normcase(want) \
+                or ntpath.normcase(actual[key]) != ntpath.normcase(want):
+            raise ServiceError(f"the endpoint {key} is not the authority's fixed {key} below managed-runtime")
+    if ntpath.normcase(m.root) != ntpath.normcase(ntpath.normpath(root)):
+        raise ServiceError("the manifest root is not the authority's managed-runtime root")
+    binding = receipt.get("binding") or {}
+    if not isinstance(binding, dict) or binding.get("manifestSHA256") != e["manifestSHA256"] \
+            or not isinstance(binding.get("manifest"), str) \
+            or ntpath.normcase(ntpath.normpath(binding["manifest"])) != ntpath.normcase(fixed["manifest"]):
+        raise ServiceError("the authority binding does not name its endpoint manifest")
+    check_keys_block(receipt, m)
+    if m.source_digests() not in ALLOWED_GUARDIAN_SOURCES:
+        raise ServiceError("the pinned guardian.py/native_api.py/policy.py are not the reviewed generic guardian "
+                           "source trio (ALLOWED_GUARDIAN_SOURCES)")
+    if not isinstance(closure, dict) or not isinstance(closure.get("pins"), dict) \
+            or not isinstance(closure.get("roles"), dict):
+        raise ServiceError("the recorded catalog closure is required")
+    pins, roles = closure["pins"], closure["roles"]
+    # every role at its exact catalog path (a system reference serves none)
+    backend_config = ntpath.normcase(ntpath.join(root, "endpoint", "aplexer.toml"))
+    expected = {"daemon": (m.daemon, roles.get("sshd")), "python": (m.python, roles.get("interpreter")),
+                "guardian": (m.guardian, roles.get("guardian")), "native_api": (m.native_api, roles.get("native-api")),
+                "policy": (m.policy, roles.get("policy")),
+                "sftp": (m.config_bindings["sftp"], roles.get("sftp")),
+                "backendExecutable": (m.config_bindings["backendExecutable"], roles.get("backend-shell")),
+                "backendDLL": (m.config_bindings["backendDLL"], roles.get("backend-dll")),
+                "backendConfig": (m.config_bindings["backendConfig"], backend_config)}
+    for role, (path, want) in expected.items():
+        if not want or ntpath.normcase(ntpath.normpath(path)) != want:
+            raise ServiceError(f"the {role} role is not at its catalog path below managed-runtime (a system "
+                               "reference serves only the guardian's servicing role)")
+    refs = system_references(e["systemReferences"], (receipt.get("environment") or {}).get("SystemRoot"))
+    generated = {ntpath.normcase(m.config), backend_config}
+    have = {ntpath.normcase(p): h for p, h in m.pins.items()}
+    for key, digest in have.items():
+        if key in pins:
+            if pins[key] != digest:
+                raise ServiceError(f"pinned release file {sanitize(key)} does not match its catalog row")
+        elif key in refs:
+            if refs[key] != digest:
+                raise ServiceError(f"the system reference pin {sanitize(key)} is not the recorded measurement")
+        elif key not in generated:
+            raise ServiceError(f"pinned file {sanitize(key)} is outside the recorded closure (not a catalog member "
+                               "at its path, a generated config, or a recorded system reference)")
+    missing = sorted(k for k in (*pins, *refs, *generated) if k not in have)
+    if missing:
+        raise ServiceError(f"the manifest lacks {len(missing)} required pins (e.g. {sanitize(missing[0])})")
     for path, digest in m.pins.items():
         if file_sha256(path) != digest:
             raise ServiceError(f"pinned endpoint file {sanitize(path)} does not match the manifest")
@@ -481,9 +624,16 @@ class Ready:
     station: str
     private_desktop: str
     desktop_acl: dict = field(default_factory=dict, hash=False, compare=False)
+    mode: str = "s4u-session0"
+    session: int = 0
 
 
-def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
+MODE_S4U = "s4u-session0"
+MODE_ACTIVE_CONSOLE = "active-console"
+
+
+def parse_ready(data: bytes, m: GuardianManifest, *, mode: str = MODE_S4U,
+                session: Optional[int] = None) -> Ready:
     """READY.json as the 6cf7ae85 guardian publishes it, with every fact the
     production (S4U) readiness depends on REQUIRED:
 
@@ -514,11 +664,28 @@ def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
     c = r.get("context")
     require(isinstance(c, dict), "context is missing")
     require(c.get("ownerSID") == m.owner_sid, "context.ownerSID is not the manifest owner")
-    require(type(c.get("session")) is int and c["session"] == 0, "context.session is not 0 (not the S4U task)")
-    require(c.get("stationVisible") is False, "context.stationVisible is not false")
     station = c.get("station")
-    require(isinstance(station, str) and bool(station) and not any(x in station for x in "\\/\x00\r\n")
-            and station.casefold() != "winsta0", "context.station is not an actual non-WinSta0 station")
+    if mode == MODE_S4U:
+        require(type(c.get("session")) is int and c["session"] == 0, "context.session is not 0 (not the S4U task)")
+        require(c.get("stationVisible") is False, "context.stationVisible is not false")
+        require(isinstance(station, str) and bool(station) and not any(x in station for x in "\\/\x00\r\n")
+                and station.casefold() != "winsta0", "context.station is not an actual non-WinSta0 station")
+    elif mode == MODE_ACTIVE_CONSOLE:
+        # The ordinary-user mode: the guardian's validated interactive branch,
+        # captured AT LAUNCH (own SID, the caller's session, the active console
+        # session, the visible WinSta0 station, thread desktop Default). The
+        # CURRENT input desktop is never consulted: locking switches it to
+        # Winlogon and the endpoint stays online.
+        require(type(session) is int and session > 0, "the caller's session is unknown")
+        require(type(c.get("session")) is int and c["session"] == session and c["session"] != 0,
+                "context.session is not the caller's (non-zero) session")
+        require(type(c.get("activeConsoleSession")) is int and c["activeConsoleSession"] == c["session"],
+                "context.session was not the active console session at launch")
+        require(station == "WinSta0", "context.station is not WinSta0")
+        require(c.get("stationVisible") is True, "context.stationVisible is not true (visible WinSta0)")
+        require(c.get("desktop") == "Default", "context.desktop at launch is not Default")
+    else:
+        raise ServiceError(f"unknown readiness mode {mode!r}")
     desktop = r.get("privateDesktop")
     require(isinstance(desktop, str) and desktop.startswith(station + "\\")
             and bool(re.fullmatch(r"PocketShellPrivate_[0-9a-f]{32}", desktop[len(station) + 1:])),
@@ -528,7 +695,7 @@ def parse_ready(data: bytes, m: GuardianManifest) -> Ready:
             "{ownerSID: manifest owner, protectedDACL: true, allowTrustees: sorted [own, SYSTEM, "
             "Administrators], ACECount: 3}")
     return Ready(r["pid"], r["creationFILETIME"], r["guardianPID"], r["port"], r["manifestSHA256"],
-                 r["sourceSHA256"], station, desktop, dict(r["desktopACL"]))
+                 r["sourceSHA256"], station, desktop, dict(r["desktopACL"]), mode, c["session"])
 
 
 def stop_request(ready: Ready) -> bytes:

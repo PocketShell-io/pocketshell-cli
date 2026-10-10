@@ -272,4 +272,6 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+# Vendored, byte-pinned release inputs owned elsewhere (never edited here).
+extend-exclude = ["release/inputs"]
 target-version = "py311"

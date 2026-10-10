@@ -63,6 +63,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -132,9 +133,16 @@ def _bundled_bin_dirs() -> list[Path]:
     return bundled_bin_dirs()
 
 
+def _exe(name: str) -> str:
+    """The console-script file name: ``a.exe`` / ``aplexer.exe`` on Windows (the
+    generic release closure ships the one aplexer binary under both names next
+    to python.exe), the bare name elsewhere."""
+    return name + ".exe" if sys.platform == "win32" else name
+
+
 def _sibling_worker(cli_path: str) -> Optional[str]:
     """The ``aplexer`` worker binary shipped next to ``cli_path``, if any."""
-    worker = Path(cli_path).parent / "aplexer"
+    worker = Path(cli_path).parent / _exe("aplexer")
     return str(worker) if worker.exists() else None
 
 
@@ -189,7 +197,7 @@ def _bundled_resolution(
     """First bundled ``a`` with a sibling worker; ``None`` keeps looking."""
     tried.append(f"{BIN_ENV} (unset)")
     for bin_dir in bin_dirs:
-        found = _bundled_candidate(bin_dir / "a", tried)
+        found = _bundled_candidate(bin_dir / _exe("a"), tried)
         if found is not None:
             return found
     return None
@@ -247,8 +255,31 @@ class AplexerFailure:
         return f"{self.kind}: {self.detail}" if self.detail else self.kind
 
 
+CREATE_NO_WINDOW = 0x08000000
+
+
+def _spawn_kwargs() -> dict:
+    """Platform launch options for the ``a`` probe. POSIX: its own session, so a
+    timeout can kill the whole group. Windows: no console window
+    (CREATE_NO_WINDOW, plus a hidden STARTUPINFO); a POSIX session does not
+    exist there and would not hide a console-subsystem helper."""
+    if sys.platform != "win32":
+        return {"start_new_session": True}
+    kw = {"creationflags": CREATE_NO_WINDOW}
+    if hasattr(subprocess, "STARTUPINFO"):
+        info = subprocess.STARTUPINFO()
+        info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        info.wShowWindow = 0  # SW_HIDE
+        kw["startupinfo"] = info
+    return kw
+
+
 def _kill_process_group(proc: subprocess.Popen) -> None:
-    """SIGKILL the whole ``a`` process group; fall back to the child only."""
+    """POSIX: SIGKILL the whole ``a`` process group; fall back to the child only.
+    Windows (no process groups): kill the held owned child; the caller reaps."""
+    if sys.platform == "win32":
+        proc.kill()
+        return
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except OSError:
@@ -275,7 +306,7 @@ def _probe_captured(
             stderr=subprocess.PIPE,
             text=True,
             env=env_map(env),
-            start_new_session=True,
+            **_spawn_kwargs(),
         )
     except OSError as exc:
         return None, AplexerFailure("spawn", str(exc))

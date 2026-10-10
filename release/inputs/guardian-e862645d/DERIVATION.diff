@@ -1,0 +1,4 @@
+241c241
+<     if manifest_path.stat().st_size>65536:raise RuntimeError('Manifest bound exceeded')
+---
+>     if manifest_path.stat().st_size>8388608:raise RuntimeError('Manifest bound exceeded')

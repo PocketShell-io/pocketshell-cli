@@ -1,0 +1,182 @@
+{
+  "parentReceipt": {
+    "path": "C:/Users/alexey/Documents/Codex/2026-10-08/i-wa/work/windows-per-user-background-integration/fleet-real-release-pins-13cb249/independent-quiet-host-provenance/quiet-host-source-build-role-handoff.json",
+    "bytes": 24868,
+    "sha256": "827a4ee271a63fa0729f42269ff26e200113e2b9a1dd0a76a57356d5a24a0900"
+  },
+  "note": "Initial dossier includes exact full phase argv and build receipt pin but result field was absent because original receipt uses top-level fields. This additive readback binds those actual fields without changing preserved dossier.",
+  "actualBuild": {
+    "accepted": true,
+    "scope": "Private unsigned OpenSSH build only; no generated executable is launched",
+    "cleanupErrors": [],
+    "censusLimit": "Polling records observed members, not a complete census of short-lived compiler processes",
+    "lastAccounting": {
+      "total": 75,
+      "active": 0
+    },
+    "naturalActiveBeforeClose": 1,
+    "expectedDaemonCloseDecision": [
+      {
+        "pid": 40244,
+        "creationFILETIME": 134359977803204820,
+        "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+        "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+        "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+        "exactOwnedJobMembership": true,
+        "authority": "pinned tool"
+      }
+    ],
+    "expectedCompilerDaemonCleanup": true,
+    "activeAtSafetyClose": 0,
+    "safetyCloseMembers": [],
+    "desktopHandleClosed": true,
+    "retainedDaemonDecisions": [
+      {
+        "phase": "build-v26a-openbsd_compat",
+        "members": [
+          {
+            "pid": 40244,
+            "creationFILETIME": 134359977803204820,
+            "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+            "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+            "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+            "exactOwnedJobMembership": true,
+            "authority": "pinned tool"
+          }
+        ]
+      },
+      {
+        "phase": "build-v26a-libssh",
+        "members": [
+          {
+            "pid": 40244,
+            "creationFILETIME": 134359977803204820,
+            "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+            "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+            "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+            "exactOwnedJobMembership": true,
+            "authority": "pinned tool"
+          }
+        ]
+      },
+      {
+        "phase": "build-v26a-sshd",
+        "members": [
+          {
+            "pid": 40244,
+            "creationFILETIME": 134359977803204820,
+            "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+            "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+            "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+            "exactOwnedJobMembership": true,
+            "authority": "pinned tool"
+          }
+        ]
+      },
+      {
+        "phase": "build-v26a-sshd-auth",
+        "members": [
+          {
+            "pid": 40244,
+            "creationFILETIME": 134359977803204820,
+            "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+            "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+            "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+            "exactOwnedJobMembership": true,
+            "authority": "pinned tool"
+          }
+        ]
+      },
+      {
+        "phase": "build-v26a-sshd-session",
+        "members": [
+          {
+            "pid": 40244,
+            "creationFILETIME": 134359977803204820,
+            "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+            "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+            "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+            "exactOwnedJobMembership": true,
+            "authority": "pinned tool"
+          }
+        ]
+      },
+      {
+        "phase": "build-v26a-ssh-shellhost",
+        "members": [
+          {
+            "pid": 40244,
+            "creationFILETIME": 134359977803204820,
+            "image": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\vctip.exe",
+            "canonicalImage": "c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\vc\\tools\\msvc\\14.44.35207\\bin\\hostx64\\x64\\vctip.exe",
+            "sha256": "6427f82c82db3fc2e8668cf6227f37d4c04c833a20c4aa4a67f08d0dac141506",
+            "exactOwnedJobMembership": true,
+            "authority": "pinned tool"
+          }
+        ]
+      }
+    ]
+  },
+  "phases": [
+    {
+      "pid": 39348,
+      "keys": [
+        "label",
+        "pid",
+        "image",
+        "argv",
+        "naturalExit"
+      ]
+    },
+    {
+      "pid": 4116,
+      "keys": [
+        "label",
+        "pid",
+        "image",
+        "argv",
+        "naturalExit"
+      ]
+    },
+    {
+      "pid": 28368,
+      "keys": [
+        "label",
+        "pid",
+        "image",
+        "argv",
+        "naturalExit"
+      ]
+    },
+    {
+      "pid": 24392,
+      "keys": [
+        "label",
+        "pid",
+        "image",
+        "argv",
+        "naturalExit"
+      ]
+    },
+    {
+      "pid": 44636,
+      "keys": [
+        "label",
+        "pid",
+        "image",
+        "argv",
+        "naturalExit"
+      ]
+    },
+    {
+      "pid": 12752,
+      "keys": [
+        "label",
+        "pid",
+        "image",
+        "argv",
+        "naturalExit"
+      ]
+    }
+  ]
+}

@@ -124,6 +124,8 @@ jobs:
           tests/gateway/test_gateway_service_task_acl.py
           tests/gateway/test_gateway_service_task_object.py
           tests/gateway/test_windows_service_private_read.py
+          tests/gateway/test_gateway_user_agent.py
+          tests/gateway/test_gateway_agent_install.py
 
       # `pocketshell gateway service` against the REAL Task Scheduler of
       # this disposable runner: a fake pocketshell-link.exe (Go, built
@@ -145,10 +147,52 @@ jobs:
           go -C tests/gateway/fakeguardian build -mod=readonly -o "$env:RUNNER_TEMP\fakeguardian\fakeguardian.exe" .
           "POCKETSHELL_TEST_FAKE_GUARDIAN=$env:RUNNER_TEMP\fakeguardian\fakeguardian.exe" >> $env:GITHUB_ENV
 
-      - name: Windows gateway service (real scheduled task)
+      # The bootstrap verifier (agreement v3.1 §11.3): static, reproducible.
+      # Built twice into different directories; the bytes must be identical.
+      - name: Build pocketshell-verify.exe (reproducible) and run its Go tests
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+          GOTOOLCHAIN: go1.26.8  # pinned: the verifier sha is a release anchor input
+        run: |
+          go -C native/verify test -mod=readonly ./...
+          foreach ($d in "a", "b") {
+            go -C native/verify build -mod=readonly -trimpath -buildvcs=false '-ldflags=-s -w -buildid=' -o "$env:RUNNER_TEMP\verify-$d\pocketshell-verify.exe" .
+            if ($LASTEXITCODE) { exit 1 }
+          }
+          $a = (Get-FileHash "$env:RUNNER_TEMP\verify-a\pocketshell-verify.exe").Hash
+          $b = (Get-FileHash "$env:RUNNER_TEMP\verify-b\pocketshell-verify.exe").Hash
+          "pocketshell-verify.exe sha256 a=$a b=$b (go $(go env GOVERSION))"
+          if ($a -ne $b) { throw "pocketshell-verify.exe is not reproducible" }
+          "POCKETSHELL_TEST_VERIFY_EXE=$env:RUNNER_TEMP\verify-a\pocketshell-verify.exe" >> $env:GITHUB_ENV
+
+      # The ordinary-v2 release closure (agreement §14), built twice into two
+      # roots (byte-identical required). CI substitutes the FAKE helper (a
+      # labelled stand-in); the real release uses the reviewed cd7 helper.
+      - name: Build the ordinary-v2 release closure (reproducible, CI helper stand-in)
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash $env:POCKETSHELL_TEST_FAKE_LINK).Hash.ToLower()
+          uv run --frozen python scripts/release/build_closure.py --out "$env:USERPROFILE\AppData\Local\Temp\pocketshell-release" --helper $env:POCKETSHELL_TEST_FAKE_LINK --helper-sha256 $h --helper-version ci-standin --twice
+          if ($LASTEXITCODE) { exit 1 }
+          "POCKETSHELL_TEST_RELEASE_OUT=$env:USERPROFILE\AppData\Local\Temp\pocketshell-release" >> $env:GITHUB_ENV
+
+      # OPTIONAL admin path only: the S4U scheduled-task service (`gateway
+      # service`, branch gateway-service). Not part of the ordinary-user product.
+      - name: S4U scheduled-task service (optional admin path, real Task Scheduler)
         env:
           POCKETSHELL_WINDOWS_SERVICE_E2E: "1"
         run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_service_native.py
+
+      # The ordinary-user product path: agent runtime, producer/installer and
+      # the bootstrap verifier. No scheduled task, no service.
+      - name: Ordinary-user agent, installer and pocketshell-verify.exe (native)
+        if: ${{ !cancelled() }}  # independent of the optional S4U step's outcome
+        env:
+          POCKETSHELL_WINDOWS_SERVICE_E2E: "1"
+        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_gateway_user_agent_native.py tests/gateway/test_windows_agent_install_native.py tests/gateway/test_windows_endpoint_keys_native.py tests/gateway/test_windows_aplexer_probe_native.py tests/gateway/test_windows_verify_native.py tests/gateway/test_windows_release_closure_native.py tests/gateway/test_windows_launcher_quiet_native.py tests/gateway/test_windows_spawn_entry_tree_native.py
 
       - name: Prepare OpenSSH Server and a spaced interpreter (CI only)
         shell: pwsh
@@ -156,3 +200,94 @@ jobs:
 
       - name: Windows gateway end to end
         run: uv run --frozen pytest -v -rs tests/gateway/test_windows_gateway_e2e.py
+
+  # Complete-runtime validation of the generic v3 closure: the whole closure is
+  # assembled here from the OWNED backend build (Backend run 38040596334, head
+  # 09a5824: quiet OpenSSH 10.3p1 + NULL-PATH fix + the stripped 717e49fe MSYS runtime), the
+  # pinned Git-for-Windows 2.56.0.2 archive and the accepted aplexer fc396 pair;
+  # the helper is the labelled CI stand-in (never run: no enrollment). Then the
+  # revision D new-machine flow runs as an ORDINARY user with the real guardian
+  # e862645d and the owned sshd under a space + Unicode userData.
+  windows-complete-runtime:
+    name: Windows complete runtime (v3 closure)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BACKEND_RUN_ID: "38040596334"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          version: "0.10.11"
+      - name: Install pocketshell + dev deps from the committed lock
+        run: uv sync --frozen --group dev --extra link
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: Download the owned backend build
+        uses: actions/download-artifact@v5
+        with:
+          run-id: ${{ env.BACKEND_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/backend
+      - name: Build the v3 closure (CI helper stand-in)
+        shell: pwsh
+        run: |
+          go build -o "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" ./tests/gateway/fakelink/main.go
+          $h = (Get-FileHash "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe").Hash.ToLower()
+          $out = "$env:USERPROFILE\AppData\Local\Temp\pocketshell-release-v3"
+          uv run --frozen python scripts/release/build_closure.py --out $out --helper "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" --helper-sha256 $h --helper-version ci-standin --backend-openssh "$env:RUNNER_TEMP\backend\backend-openssh" --backend-msys "$env:RUNNER_TEMP\backend\backend-msys" --aplexer-zip release/inputs/aplexer-fc396/windows-native-fc396.zip
+          if ($LASTEXITCODE) { exit 1 }
+          "POCKETSHELL_TEST_CLOSURE_V3_OUT=$out" >> $env:GITHUB_ENV
+      # CI-only crash evidence on this DISPOSABLE runner (never on a user machine):
+      # WER LocalDumps (a machine key: LocalDumps is read from HKLM) for the
+      # endpoint's own images, written into the runner's temp workspace.
+      - name: Enable crash dumps for the endpoint images (CI runner only)
+        shell: pwsh
+        run: |
+          $dumps = "$env:RUNNER_TEMP\dumps"
+          New-Item -ItemType Directory -Force $dumps | Out-Null
+          $wer = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting"
+          Get-ItemProperty $wer -ErrorAction SilentlyContinue | Format-List | Out-String
+          New-ItemProperty -Force -Path $wer -Name Disabled -PropertyType DWord -Value 0 | Out-Null
+          New-ItemProperty -Force -Path $wer -Name DontShowUI -PropertyType DWord -Value 1 | Out-Null
+          Set-Service WerSvc -StartupType Manual -ErrorAction SilentlyContinue
+          Start-Service WerSvc -ErrorAction SilentlyContinue
+          Get-Service WerSvc | Format-List Name, Status, StartType | Out-String
+          foreach ($img in "sshd.exe", "sshd-session.exe", "sshd-auth.exe", "ssh-shellhost.exe", "sftp-server.exe", "bash.exe", "a.exe", "aplexer.exe") {
+            $k = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$img"
+            New-Item -Force $k | Out-Null
+            New-ItemProperty -Force -Path $k -Name DumpFolder -PropertyType ExpandString -Value $dumps | Out-Null
+            New-ItemProperty -Force -Path $k -Name DumpType -PropertyType DWord -Value 1 | Out-Null
+            New-ItemProperty -Force -Path $k -Name DumpCount -PropertyType DWord -Value 5 | Out-Null
+          }
+      - name: Complete runtime (new machine, ordinary user)
+        env:
+          PYTHONIOENCODING: utf-8  # the runner console is cp1252; the test prints Unicode paths/output
+        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_complete_runtime_native.py
+      - name: Crash evidence (Application events 1000/1001, dumps)
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001,1026} -MaxEvents 30 -ErrorAction SilentlyContinue |
+            Format-List TimeCreated, Id, ProviderName, Message | Out-String -Width 400
+          Get-ChildItem "$env:RUNNER_TEMP\dumps" -ErrorAction SilentlyContinue | Format-Table Name, Length | Out-String
+      - name: Upload crash dumps
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: complete-runtime-crash-dumps
+          path: ${{ runner.temp }}/dumps
+          if-no-files-found: ignore

@@ -539,6 +539,47 @@ def resolve_helper(explicit: Optional[str], runner: Optional[Runner] = None) -> 
 # --- native Windows queries (ctypes; imported lazily) ------------------------
 
 
+class SpawnCleanupError(ServiceError):
+    """A refused, still-suspended child could not be proven terminated; its
+    exact identity is carried as recovery custody."""
+
+    def __init__(self, message: str, *, recovery: dict):
+        super().__init__(message)
+        self.recovery = recovery
+
+
+class TargetJobError(ServiceError):
+    """The launched TARGET (guardian/link) is not measured outside every job."""
+
+
+def job_verdict(*, caller_in_job: Optional[bool], broke_away: bool, child_in_job: Optional[bool],
+                nearest_kill: Optional[bool]) -> dict:
+    """Job-lifetime policy (agreement v3.3, root-accepted Fleet design 77d32a3a):
+    the CALLER (Desktop/Explorer, the CLI) may be in a job — that is measured
+    diagnostic context only. The persistent TARGET must have been created with
+    CREATE_BREAKAWAY_FROM_JOB and be measured (IsProcessInJob(child, NULL))
+    outside ANY job before it is resumed; independence is never inferred from
+    the parent, a requested flag, or the nearest job's limits. An intentional
+    workload job the guardian creates for its own daemon is separate."""
+    kill = "unknown" if nearest_kill is None else "set" if nearest_kill else "not set"
+    if caller_in_job is None:
+        raise TargetJobError("the caller's job membership cannot be measured; refusing")
+    if child_in_job is None:
+        raise TargetJobError("the target's job membership cannot be measured; refusing")
+    if child_in_job:
+        if not broke_away:
+            raise TargetJobError(
+                f"breakaway was refused by the caller's job (nearest job KILL_ON_JOB_CLOSE {kill}): the target "
+                "would share the caller's lifetime; independence cannot be proven; the suspended target was "
+                "terminated before resume")
+        raise TargetJobError(
+            f"breakaway was requested but the target is still inside a job (an ancestor job forbids breakaway; "
+            f"nearest job KILL_ON_JOB_CLOSE {kill}); independence cannot be proven; the suspended target was "
+            "terminated before resume")
+    return {"inJob": False, "brokeAway": bool(broke_away), "callerInJob": bool(caller_in_job),
+            "callerJobKillOnClose": bool(caller_in_job) and nearest_kill is not False}
+
+
 class WindowsApi:
     """SID / owner / process queries. Swapped for a fake in Linux tests."""
 
@@ -647,6 +688,324 @@ class WindowsApi:
             if not k.GetProcessTimes(handle, *[c.byref(t) for t in times]):
                 return None
             return str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime)
+        finally:
+            k.CloseHandle(handle)
+
+    def process_identity(self, pid: int) -> dict:
+        """Tri-state identity for custody decisions:
+        {"state": "absent"} only when PROVEN (OpenProcess -> ERROR_INVALID_PARAMETER,
+        i.e. no such pid, or the process has exited); {"state": "present", birth,
+        image (None if unreadable)}; {"state": "unknown"} on any other failure
+        (access denied, query failure). Unknown never means gone."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.restype = w.HANDLE
+        k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        k.GetProcessTimes.argtypes = [w.HANDLE] + [c.POINTER(w.FILETIME)] * 4
+        k.GetExitCodeProcess.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
+        k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        unknown = {"state": "unknown", "birth": None, "image": None}
+        handle = k.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            if c.get_last_error() == 87:  # ERROR_INVALID_PARAMETER: no such process
+                return {"state": "absent", "birth": None, "image": None}
+            return unknown
+        try:
+            times = [w.FILETIME() for _ in range(4)]
+            if not k.GetProcessTimes(handle, *[c.byref(t) for t in times]):
+                return unknown
+            birth = str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime)
+            code = w.DWORD()
+            if not k.GetExitCodeProcess(handle, c.byref(code)):
+                return {"state": "unknown", "birth": birth, "image": None}
+            if code.value != 259:  # exited (an unreaped object): the recorded process is gone
+                return {"state": "absent", "birth": birth, "image": None, "exited": True}
+            buf = c.create_unicode_buffer(32768)
+            size = w.DWORD(32768)
+            image = buf.value if k.QueryFullProcessImageNameW(handle, 0, buf, c.byref(size)) else None
+            return {"state": "present", "birth": birth, "image": image}
+        finally:
+            k.CloseHandle(handle)
+
+    def current_session(self) -> int:
+        """This process's Terminal Services session id (observed, never assumed)."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        session = w.DWORD()
+        if not k.ProcessIdToSessionId(k.GetCurrentProcessId(), c.byref(session)):
+            raise ServiceError("cannot read this process's session id")
+        return int(session.value)
+
+    def spawn_hidden(self, argv: list, cwd: str, env: Optional[dict], *,
+                     image_sha256: Optional[str] = None) -> dict:
+        """Hold the image THROUGH the spawn (v3.1): ``argv[0]`` is opened by
+        handle (no reparse point, FILE_SHARE_READ only: writers, renames and
+        deletes are refused while held), its bytes are hashed from THAT handle
+        and compared with ``image_sha256`` when given; the suspended child's
+        kernel image path must then resolve to the SAME file (volume serial +
+        file index) before it is resumed. The handle is released afterwards."""
+        held, identity = self._hold_image(str(argv[0]), image_sha256)
+        try:
+            return self._spawn_measured(argv, cwd, env, held_identity=identity)
+        finally:
+            import ctypes as c
+
+            c.WinDLL("kernel32").CloseHandle(c.c_void_p(held))
+
+    @staticmethod
+    def _file_identity(handle) -> tuple:
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        class Info(c.Structure):
+            _fields_ = [("attributes", w.DWORD), ("created", w.FILETIME), ("accessed", w.FILETIME),
+                        ("written", w.FILETIME), ("volume", w.DWORD), ("size_high", w.DWORD),
+                        ("size_low", w.DWORD), ("links", w.DWORD), ("index_high", w.DWORD),
+                        ("index_low", w.DWORD)]
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.GetFileInformationByHandle.argtypes = [w.HANDLE, c.c_void_p]
+        info = Info()
+        if not k.GetFileInformationByHandle(handle, c.byref(info)):
+            raise ServiceError("cannot identify the image file")
+        return info.attributes, (info.volume, info.index_high, info.index_low)
+
+    def _hold_image(self, path: str, image_sha256: Optional[str]) -> tuple:
+        import ctypes as c
+        import hashlib as h
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.CreateFileW.restype = w.HANDLE
+        k.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
+        k.ReadFile.argtypes = [w.HANDLE, c.c_void_p, w.DWORD, c.POINTER(w.DWORD), c.c_void_p]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        # GENERIC_READ; FILE_SHARE_READ only; OPEN_EXISTING; OPEN_REPARSE_POINT | SEQUENTIAL_SCAN
+        handle = k.CreateFileW(path, 0x80000000, 1, None, 3, 0x00200000 | 0x08000000, None)
+        if handle in (None, w.HANDLE(-1).value):
+            raise ServiceError(f"cannot hold {sanitize(path)} (error {c.get_last_error()})")
+        try:
+            attributes, identity = self._file_identity(handle)
+            if attributes & 0x400 or attributes & 0x10:
+                raise ServiceError(f"{sanitize(path)} is a reparse point or directory")
+            if image_sha256 is not None:
+                digest, buf, got = h.sha256(), c.create_string_buffer(1 << 20), w.DWORD()
+                while True:
+                    if not k.ReadFile(handle, buf, 1 << 20, c.byref(got), None):
+                        raise ServiceError(f"cannot read {sanitize(path)}")
+                    if not got.value:
+                        break
+                    digest.update(buf.raw[:got.value])
+                if digest.hexdigest() != image_sha256:
+                    raise ServiceError(f"{sanitize(path)} does not match its pinned sha256")
+            return handle, identity
+        except BaseException:
+            k.CloseHandle(handle)
+            raise
+
+    def _spawn_measured(self, argv: list, cwd: str, env: Optional[dict], *, held_identity) -> dict:
+        """Start ``argv`` directly (no shell, no window) in the caller's session,
+        SUSPENDED, and MEASURE the child before resuming it (the native owner's
+        5844 launcher order): token user = ours, not elevated, session = ours,
+        image = argv[0], creation FILETIME, and job membership.
+
+        CREATE_BREAKAWAY_FROM_JOB is requested; if the caller's job forbids
+        breakaway the child is created inside it. Independence is never
+        claimed for a child in ANY job (the nearest job cannot prove the KILL
+        semantics of its ancestors): the exact suspended child is terminated
+        through its held handle and TargetJobError is raised. A failed
+        ResumeThread ((DWORD)-1) likewise ends the held child."""
+        import ctypes as c
+        import subprocess
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        a = c.WinDLL("advapi32", use_last_error=True)
+
+        class SI(c.Structure):
+            _fields_ = [("cb", w.DWORD), ("lpReserved", w.LPWSTR), ("lpDesktop", w.LPWSTR),
+                        ("lpTitle", w.LPWSTR), ("dwX", w.DWORD), ("dwY", w.DWORD), ("dwXSize", w.DWORD),
+                        ("dwYSize", w.DWORD), ("dwXCountChars", w.DWORD), ("dwYCountChars", w.DWORD),
+                        ("dwFillAttribute", w.DWORD), ("dwFlags", w.DWORD), ("wShowWindow", w.WORD),
+                        ("cbReserved2", w.WORD), ("lpReserved2", c.c_void_p), ("hStdInput", w.HANDLE),
+                        ("hStdOutput", w.HANDLE), ("hStdError", w.HANDLE)]
+
+        class PI(c.Structure):
+            _fields_ = [("hProcess", w.HANDLE), ("hThread", w.HANDLE), ("dwProcessId", w.DWORD),
+                        ("dwThreadId", w.DWORD)]
+
+        k.CreateProcessW.argtypes = [w.LPCWSTR, w.LPWSTR, c.c_void_p, c.c_void_p, w.BOOL, w.DWORD,
+                                     c.c_void_p, w.LPCWSTR, c.POINTER(SI), c.POINTER(PI)]
+        k.IsProcessInJob.argtypes = [w.HANDLE, w.HANDLE, c.POINTER(w.BOOL)]
+        k.CreateFileW.restype = w.HANDLE
+        k.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
+        k.ResumeThread.argtypes = [w.HANDLE]
+        k.ResumeThread.restype = w.DWORD  # (DWORD)-1 = failure; a c_int -1 would never equal 0xFFFFFFFF
+        k.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+        k.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        k.QueryInformationJobObject.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.c_void_p]
+        k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
+        k.GetProcessTimes.argtypes = [w.HANDLE] + [c.POINTER(w.FILETIME)] * 4
+        k.ProcessIdToSessionId.argtypes = [w.DWORD, c.POINTER(w.DWORD)]
+        a.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, c.POINTER(w.HANDLE)]
+        a.GetTokenInformation.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.POINTER(w.DWORD)]
+
+        command = c.create_unicode_buffer(subprocess.list2cmdline([str(x) for x in argv]))
+        block = None
+        if env is not None:
+            block = c.create_unicode_buffer(
+                "\0".join(f"{key}={value}" for key, value in sorted(env.items(), key=lambda kv: kv[0].casefold()))
+                + "\0\0")
+        base = 0x00000004 | 0x08000000 | 0x00000200 | 0x00000400  # SUSPENDED|NO_WINDOW|NEW_GROUP|UNICODE_ENV
+        si = SI()
+        si.cb = c.sizeof(SI)
+        si.dwFlags = 0x1  # STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        si.lpDesktop = "WinSta0\\Default"  # as the native 5844 launcher: the user's Default desktop
+        pi = PI()
+        broke_away = True
+        ok = k.CreateProcessW(argv[0], command, None, None, False, base | 0x01000000,
+                              c.cast(block, c.c_void_p) if block is not None else None, cwd,
+                              c.byref(si), c.byref(pi))
+        if not ok:
+            broke_away = False  # e.g. ERROR_ACCESS_DENIED: the caller's job forbids breakaway
+            ok = k.CreateProcessW(argv[0], command, None, None, False, base,
+                                  c.cast(block, c.c_void_p) if block is not None else None, cwd,
+                                  c.byref(si), c.byref(pi))
+            if not ok:
+                raise ServiceError(f"cannot start {sanitize(str(argv[0]))} (error {c.get_last_error()})")
+        resumed = False
+        cause = None
+        try:
+            # child token: our user, not elevated, our session
+            token = w.HANDLE()
+            if not a.OpenProcessToken(pi.hProcess, 0x0008, c.byref(token)):
+                raise ServiceError("cannot open the child's token")
+            try:
+                size = w.DWORD()
+                a.GetTokenInformation(token, 1, None, 0, c.byref(size))
+                buf = c.create_string_buffer(size.value)
+                if not a.GetTokenInformation(token, 1, buf, size.value, c.byref(size)):
+                    raise ServiceError("cannot read the child's token user")
+                child_sid = self._sid_text(c.cast(buf, c.POINTER(c.c_void_p))[0])
+                elevation = w.DWORD()
+                if not a.GetTokenInformation(token, 20, c.byref(elevation), 4, c.byref(size)):
+                    raise ServiceError("cannot read the child's elevation")
+            finally:
+                k.CloseHandle(token)
+            session = w.DWORD()
+            if not k.ProcessIdToSessionId(pi.dwProcessId, c.byref(session)):
+                raise ServiceError("cannot read the child's session")
+            image = c.create_unicode_buffer(32768)
+            n = w.DWORD(32768)
+            if not k.QueryFullProcessImageNameW(pi.hProcess, 0, image, c.byref(n)) or \
+                    not _same_path(image.value, str(argv[0])):
+                raise ServiceError("the child's image is not the requested executable")
+            # the kernel's image file must be the very file held (and hashed) above
+            probe = k.CreateFileW(image.value, 0x80, 7, None, 3, 0x00200000 | 0x02000000, None)
+            if probe in (None, w.HANDLE(-1).value):
+                raise ServiceError("cannot identify the child's image file")
+            try:
+                if self._file_identity(probe)[1] != held_identity:
+                    raise ServiceError("the child's image file is not the held, verified file")
+            finally:
+                k.CloseHandle(probe)
+            mine = (self.current_sid(), self.current_session())
+            if child_sid != mine[0] or elevation.value or session.value != mine[1]:
+                raise ServiceError(
+                    "the child token is not this user's ordinary, same-session token "
+                    f"(user {'ok' if child_sid == mine[0] else 'differs'}, elevated {bool(elevation.value)}, "
+                    f"session {session.value} vs {mine[1]})")
+            in_job = w.BOOL()
+            child_in_job = bool(in_job.value) if k.IsProcessInJob(pi.hProcess, None, c.byref(in_job)) else None
+            caller = w.BOOL()
+            k.GetCurrentProcess.restype = w.HANDLE
+            caller_in_job = bool(caller.value) if k.IsProcessInJob(k.GetCurrentProcess(), None,
+                                                                   c.byref(caller)) else None
+            nearest_kill = None
+            if caller_in_job:
+                # diagnostic only: our NEAREST job's limits (hJob = NULL) say nothing about ancestors
+                info = (c.c_byte * 144)()  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION (x64)
+                if k.QueryInformationJobObject(None, 9, info, c.sizeof(info), None):
+                    nearest_kill = bool(c.c_uint32.from_buffer(info, 16).value & 0x2000)
+            verdict = job_verdict(caller_in_job=caller_in_job, broke_away=broke_away, child_in_job=child_in_job,
+                                  nearest_kill=nearest_kill)
+            times = [w.FILETIME() for _ in range(4)]
+            if not k.GetProcessTimes(pi.hProcess, *[c.byref(t) for t in times]):
+                raise ServiceError("cannot read the child's creation time")
+            birth = str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime)
+            if k.ResumeThread(pi.hThread) == 0xFFFFFFFF:
+                raise ServiceError("cannot resume the child")
+            resumed = True
+            return {"pid": int(pi.dwProcessId), "creationFILETIME": birth, **verdict,
+                    "elevated": False, "session": int(session.value)}
+        except BaseException as exc:
+            cause = exc
+            raise
+        finally:
+            if not resumed and not self._terminate_suspended(k, pi.hProcess):
+                # dd792b5 R3: the refused child could not be PROVEN gone. Its
+                # handles stay held by this process (never silently released)
+                # and its exact identity is returned as recovery custody.
+                self._retained_handles.extend([pi.hThread, pi.hProcess])
+                times = [w.FILETIME() for _ in range(4)]
+                birth = str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime) \
+                    if k.GetProcessTimes(pi.hProcess, *[c.byref(t) for t in times]) else None
+                raise SpawnCleanupError(
+                    f"the suspended child {pi.dwProcessId} was refused "
+                    f"({sanitize(str(cause or 'before resume'), 300)}) and its termination "
+                    "could not be confirmed; it may still exist (suspended)",
+                    recovery={"pid": int(pi.dwProcessId), "creationFILETIME": birth, "image": str(argv[0])})
+            k.CloseHandle(pi.hThread)
+            k.CloseHandle(pi.hProcess)
+
+    _retained_handles: list = []
+
+    @staticmethod
+    def _terminate_suspended(k, handle) -> bool:
+        """End the exact suspended child through its own handle and PROVE it:
+        TerminateProcess must succeed and the wait must observe the exit."""
+        if not k.TerminateProcess(handle, 1):
+            return False
+        return k.WaitForSingleObject(handle, 5000) == 0
+
+    def terminate_exact(self, pid: int, birth: str, image: str) -> bool:
+        """Terminate ONLY the process whose pid, creation FILETIME and image all
+        match the recorded identity (a reused pid is never touched)."""
+        import ctypes as c
+        from ctypes import wintypes as w
+
+        k = c.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.restype = w.HANDLE
+        k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        k.GetProcessTimes.argtypes = [w.HANDLE] + [c.POINTER(w.FILETIME)] * 4
+        k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
+        k.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+        k.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+        k.CloseHandle.argtypes = [w.HANDLE]
+        # PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+        handle = k.OpenProcess(0x0001 | 0x1000 | 0x00100000, False, pid)
+        if not handle:
+            return False
+        try:
+            times = [w.FILETIME() for _ in range(4)]
+            if not k.GetProcessTimes(handle, *[c.byref(t) for t in times]):
+                return False
+            if str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime) != birth:
+                return False
+            buf = c.create_unicode_buffer(32768)
+            size = w.DWORD(32768)
+            if not k.QueryFullProcessImageNameW(handle, 0, buf, c.byref(size)) or not _same_path(buf.value, image):
+                return False
+            if not k.TerminateProcess(handle, 1):
+                return False
+            return k.WaitForSingleObject(handle, 5000) == 0
         finally:
             k.CloseHandle(handle)
 

@@ -482,3 +482,224 @@ gateway_group.add_command(gateway_service.service_group)
 
 for _client_command in gateway_client_cli.CLIENT_COMMANDS:
     gateway_group.add_command(_client_command)
+
+
+# --- `gateway agent`: the ordinary-user Windows runtime (API v1) -----------------------
+
+from pocketshell.gateway import service_user_agent as _agent  # noqa: E402
+
+_OPERATION_ID = click.option(
+    "--operation-id", default=None, metavar="ID",
+    help="Caller's operation id (1-64 of A-Z a-z 0-9 . _ -), echoed in the JSON.",
+)
+_JSON = click.option("--json", "as_json", is_flag=True, help="Print the versioned JSON document (API v1).")
+
+
+def _check_operation_id(value):
+    if value is not None and not _agent.OPERATION_ID_RE.fullmatch(value):
+        raise click.UsageError("--operation-id must be 1-64 of A-Z a-z 0-9 . _ -")
+
+
+def _timeout(value, default):
+    if value is None:
+        return default
+    if not 0 < value <= _agent.MAX_TIMEOUT:
+        raise click.UsageError(f"--timeout must be in (0, {_agent.MAX_TIMEOUT:g}] seconds")
+    return value
+
+
+def _emit(doc, code, as_json):
+    import json as _json
+
+    if as_json:
+        click.echo(_json.dumps(doc, indent=1, sort_keys=False))
+    else:
+        line = f"{doc['state']}"
+        if doc.get("error"):
+            line += f": {doc['error']['code']}: {doc['error']['message']}"
+        click.echo(line)
+    raise SystemExit(code)
+
+
+def _api_runner():
+    from pocketshell.gateway import service_windows as win
+
+    return win.WindowsApi(), None
+
+
+@click.group(
+    name="agent",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    help=(
+        "Ordinary-user runtime (Windows): the enrolled endpoint (guardian + daemon) and the "
+        "outbound link in YOUR session, no elevation, no scheduled task. Called by the "
+        "Desktop app at sign-in; see the API v1 agreement. Exit: 0 ready/done, 1 error, "
+        "2 usage, 3 not ready, 4 stopped, 5 start deadline."
+    ),
+)
+def agent_group() -> None:
+    """Ordinary-user background runtime (API v1)."""
+
+
+@agent_group.command("bind")
+@click.option("--manifest", required=True, metavar="PATH", help="Protected guardian manifest (reviewed).")
+@click.option("--config-dir", default=None, metavar="DIR",
+              help="Enrolled helper config dir (omit only for the pre-enrollment bind of a new-machine install).")
+@click.option("--helper", default=None, metavar="PATH", help="Reviewed pocketshell-link.exe.")
+@click.option("--authority", default=None, metavar="PATH",
+              help="<userData>\\managed-runtime\\authority.json from `agent install` (setup ABI v3).")
+@click.option("--expect-binding-sha256", default=None, metavar="HEX|none",
+              help="Refuse unless the stored binding is exactly this (sha256 of binding.json, or none).")
+@_JSON
+@_OPERATION_ID
+def agent_bind(manifest, config_dir, helper, authority, expect_binding_sha256, as_json, operation_id):
+    """Validate and record the protected binding (once, from the owner's setup)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit(*_agent.bind_command(manifest, config_dir, helper, api=api, runner=runner,
+                               operation_id=operation_id, authority=authority,
+                               expect_binding_sha256=expect_binding_sha256), as_json)
+
+
+@agent_group.command("status")
+@_JSON
+@_OPERATION_ID
+def agent_status(as_json, operation_id):
+    """Readiness of the endpoint and the outbound link (exit 0 ready, 3 not, 4 stopped)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit(*_agent.status(api=api, runner=runner, operation_id=operation_id), as_json)
+
+
+@agent_group.command("start")
+@click.option("--timeout", type=float, default=None, help="Readiness deadline in seconds (default 60).")
+@_JSON
+@_OPERATION_ID
+def agent_start(timeout, as_json, operation_id):
+    """Start (idempotent) and wait until ready or the deadline (exit 0 / 5)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit(*_agent.start(api=api, runner=runner, timeout=_timeout(timeout, _agent.DEFAULT_START_TIMEOUT),
+                        operation_id=operation_id), as_json)
+
+
+@agent_group.command("stop")
+@click.option("--timeout", type=float, default=None, help="STOP acknowledgement deadline (default 45).")
+@_JSON
+@_OPERATION_ID
+def agent_stop(timeout, as_json, operation_id):
+    """Guardian STOP protocol + exact link identity (exit 0 stopped, 1 failed)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit(*_agent.stop(api=api, runner=runner, timeout=_timeout(timeout, _agent.DEFAULT_STOP_TIMEOUT),
+                       operation_id=operation_id), as_json)
+
+
+def _emit_raw(doc, code):
+    import json as _json
+
+    click.echo(_json.dumps(doc, indent=1, sort_keys=False))
+    raise SystemExit(code)
+
+
+@agent_group.command("install")
+@click.option("--user-data", required=True, metavar="DIR", help="The Desktop app's userData directory.")
+@click.option("--catalog", required=True, metavar="PATH", help="resources/host-runtime-catalog.json (v2).")
+@click.option("--staged", required=True, metavar="DIR", help="The staged release closure to install.")
+@click.option("--dry-run", is_flag=True, help="Verify and print the receipt; write nothing.")
+@click.option("--config-dir", default=None, metavar="DIR",
+              help="The EXISTING enrollment config dir (setup ABI v3: install first, then bind).")
+@click.option("--endpoint-inputs", default=None, metavar="PATH",
+              help="Public JSON {version:1, hostKey, authorizedKeys}: paths only, never read (migration).")
+@click.option("--endpoint-keys", type=click.Choice(["generate"]), default=None,
+              help="New machine: generate a fresh owner-private host key before enrollment (with --port).")
+@click.option("--port", type=int, default=None, help="The endpoint's loopback port (with --endpoint-keys).")
+@_JSON
+@_OPERATION_ID
+def agent_install(user_data, catalog, staged, dry_run, config_dir, endpoint_inputs, endpoint_keys, port, as_json,
+                  operation_id):
+    """Install the catalogued ordinary-v2 runtime and write authority.json (PROPOSED v3)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit_raw(*_agent.install_command(user_data=user_data, catalog=catalog, staged=staged, dry_run=dry_run,
+                                      api=api, runner=runner, operation_id=operation_id,
+                                      config_dir=config_dir, endpoint_inputs=endpoint_inputs,
+                                      endpoint_keys=endpoint_keys, port=port))
+
+
+@agent_group.command("authorize-key")
+@click.option("--public-key-stdin", is_flag=True, help="Read ONE OpenSSH public-key line from stdin.")
+@click.option("--public-key", "public_key", default=None, metavar="LINE",
+              help="ONE OpenSSH public-key line as an argument (at most 16 KiB; a public key, not a secret).")
+@click.option("--confirmed", is_flag=True, help="The user explicitly confirmed this is their own client key.")
+@_JSON
+@_OPERATION_ID
+def agent_authorize_key(public_key_stdin, public_key, confirmed, as_json, operation_id):
+    """Authorize one of your own client public keys for this endpoint (new-machine installs)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    if public_key_stdin == (public_key is not None):
+        _emit_raw({"version": 1, "operationId": operation_id, "action": "authorize-key", "ok": False,
+                   "authorized": None, "error": {"code": "usage", "message": "exactly one of --public-key / "
+                                                 "--public-key-stdin"}}, 2)
+    text = public_key if public_key is not None else click.get_text_stream("stdin").read(16 * 1024 + 1)
+    _emit_raw(*_agent.authorize_key_command(text, api=api, runner=runner, operation_id=operation_id,
+                                            confirmed=confirmed))
+
+
+@agent_group.command("login-start")
+@click.option("--label", default=None, metavar="TEXT", help="Session name on the approval page.")
+@_JSON
+@_OPERATION_ID
+def agent_login_start(label, as_json, operation_id):
+    """Start the account device flow: one JSON document with the PUBLIC code (§16.17)."""
+    from pocketshell.gateway import service_agent_firstuse as fu
+
+    _emit_raw(*fu.login_start(operation_id=operation_id, label=label))
+
+
+@agent_group.command("login-complete")
+@click.option("--login", "login_op", required=True, metavar="OP", help="The login-start operation id.")
+@click.option("--timeout", type=float, default=60.0, help="Polling deadline in seconds (1..120).")
+@_JSON
+@_OPERATION_ID
+def agent_login_complete(login_op, timeout, as_json, operation_id):
+    """Wait (bounded) for the browser approval of a started login (§16.17)."""
+    from pocketshell.gateway import service_agent_firstuse as fu
+
+    _emit_raw(*fu.login_complete(operation_id=operation_id, login=login_op, timeout=timeout))
+
+
+@agent_group.command("enroll")
+@click.option("--config-dir", required=True, metavar="DIR", help="The NEW enrollment config dir.")
+@click.option("--helper", required=True, metavar="PATH", help="The release's pocketshell-link.exe.")
+@_JSON
+@_OPERATION_ID
+def agent_enroll(config_dir, helper, as_json, operation_id):
+    """Enroll this new machine against its generated endpoint host key (§16.17)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    _emit_raw(*_agent.enroll_command(config_dir, helper, api=api, runner=runner, operation_id=operation_id))
+
+
+@agent_group.command("verify-paths")
+@click.option("--operation-id", "operation_id", required=True, metavar="ID", help="Echoed for correlation.")
+@click.option("--owner-sid", required=True, metavar="SID", help="The expected owner (the current user).")
+@click.option("--private-root", "private_roots", multiple=True, metavar="DIR",
+              help="Owner-only protected root (e.g. <userData>\\managed-runtime).")
+@click.option("--resources-root", "resources_roots", multiple=True, metavar="DIR",
+              help="Shipped resources root (digest-anchored, reparse-free).")
+@click.option("--request", "raw_requests", multiple=True, metavar="KIND=PATH",
+              help="Ordered request: document=… (.json, bytes <=64 KiB), binary=… (hash only), "
+                   "directory=…, inventory=…. Results come back 1:1 in this order.")
+@_JSON
+def agent_verify_paths(operation_id, owner_sid, private_roots, resources_roots, raw_requests, as_json):
+    """Reference path verifier, protocol v2 (exit 0 all ok, 1 refusal, 2 malformed request)."""
+    api, _runner = _api_runner()
+    requests = [tuple(r.split("=", 1)) if "=" in r else (r, "") for r in raw_requests]
+    _emit_raw(*_agent.verify_paths_command(owner_sid=owner_sid, operation_id=operation_id,
+                                           private_roots=private_roots, resources_roots=resources_roots,
+                                           requests=requests, api=api))
+
+
+gateway_group.add_command(agent_group)
