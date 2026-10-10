@@ -211,11 +211,13 @@ func checkAncestor(h windows.Handle, path, owner string) error {
 }
 
 // chain opens every directory from the drive root down to dir (inclusive),
-// without delete sharing (pinned against rename/delete), refuses reparse
-// points, applies the owner-only private shape to EVERY directory at or
-// below privateRoot (the declared root and all intermediates), and the
-// guardian ancestor authority to every other directory except `object`.
-func chain(dir, object, owner, privateRoot string, keep *held) error {
+// without delete sharing (pinned against rename/delete — the declared root
+// included, so it cannot be replaced while held), refuses reparse points and
+// unexpected types on EVERY component, and applies the ACL role policy only
+// from the declared request root down (aclRole, diagnostic 7a): owner-only
+// private shape at/below a private root, no-foreign-mutation at/below a
+// resources root; nothing above the root.
+func chain(dir, object, owner, root string, private bool, keep *held) error {
 	clean := strings.ReplaceAll(dir, "/", `\`)
 	parts := strings.Split(clean[3:], `\`)
 	current := clean[:3]
@@ -236,11 +238,12 @@ func chain(dir, object, owner, privateRoot string, keep *held) error {
 		if _, err := checkShape(h, p, true); err != nil {
 			return err
 		}
-		if privateRoot != "" && under(p, privateRoot) {
+		switch aclRole(p, object, root, private) {
+		case "private":
 			if err := checkPrivate(h, p, owner); err != nil {
 				return err
 			}
-		} else if !same(p, object) {
+		case "ancestor":
 			if err := checkAncestor(h, p, owner); err != nil {
 				return err
 			}
@@ -268,10 +271,9 @@ func parent(p string) string {
 	return p[:i]
 }
 
-func verifyFile(path, owner, privateRoot string, document bool, keep *held) (result, *fileID, error) {
+func verifyFile(path, owner, root string, private, document bool, keep *held) (result, *fileID, error) {
 	var r result
-	private := privateRoot != ""
-	if err := chain(parent(path), path, owner, privateRoot, keep); err != nil {
+	if err := chain(parent(path), path, owner, root, private, keep); err != nil {
 		return r, nil, err
 	}
 	h, err := open(path, accessFile, windows.FILE_SHARE_READ, false)
@@ -342,9 +344,9 @@ func entryIdentity(path string) (fileID, error) {
 	return identity(d), nil
 }
 
-func verifyDirectory(path, owner, privateRoot string, keep *held) (result, error) {
+func verifyDirectory(path, owner, root string, private bool, keep *held) (result, error) {
 	var r result
-	if err := chain(path, path, owner, privateRoot, keep); err != nil {
+	if err := chain(path, path, owner, root, private, keep); err != nil {
 		return r, err
 	}
 	h := keep.handles[len(keep.handles)-1]
@@ -359,10 +361,9 @@ func verifyDirectory(path, owner, privateRoot string, keep *held) (result, error
 	return r, nil
 }
 
-func verifyInventory(path, owner, privateRoot string, keep *held) (result, error) {
+func verifyInventory(path, owner, root string, private bool, keep *held) (result, error) {
 	var r result
-	private := privateRoot != ""
-	if err := chain(path, path, owner, privateRoot, keep); err != nil {
+	if err := chain(path, path, owner, root, private, keep); err != nil {
 		return r, err
 	}
 	files := []string{}
@@ -433,22 +434,18 @@ func verifyOne(q request, roots []root, owner string, keep *held) (result, *file
 	}
 	var r result
 	var id *fileID
-	privateRoot := ""
-	if rt.Private {
-		privateRoot = rt.Path
-	}
 	switch q.Kind {
 	case "document":
 		if !strings.HasSuffix(strings.ToLower(q.Path), ".json") {
 			return result{Root: &rt.Path}, nil, errors.New("only .json documents return bytes; use binary")
 		}
-		r, id, err = verifyFile(q.Path, owner, privateRoot, true, keep)
+		r, id, err = verifyFile(q.Path, owner, rt.Path, rt.Private, true, keep)
 	case "binary":
-		r, id, err = verifyFile(q.Path, owner, privateRoot, false, keep)
+		r, id, err = verifyFile(q.Path, owner, rt.Path, rt.Private, false, keep)
 	case "directory":
-		r, err = verifyDirectory(q.Path, owner, privateRoot, keep)
+		r, err = verifyDirectory(q.Path, owner, rt.Path, rt.Private, keep)
 	case "inventory":
-		r, err = verifyInventory(q.Path, owner, privateRoot, keep)
+		r, err = verifyInventory(q.Path, owner, rt.Path, rt.Private, keep)
 	}
 	r.Root = &rt.Path
 	return r, id, err

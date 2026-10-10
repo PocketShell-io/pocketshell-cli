@@ -526,3 +526,24 @@ func readRequests(br interface{ ReadByte() (byte, error) }, cfg *config) error {
 	}
 	return nil
 }
+
+// aclRole: which ACL policy applies to directory p on the chain to `object`
+// inside the declared request `root` (diagnostic 7a). Directories ABOVE the
+// root get NO ACL authority check — they are still opened, held without delete
+// sharing, refused if reparse, and canonical-path checked — because their
+// ACLs belong to the user's profile (e.g. AppData's capability-SID ACEs), and
+// holding them pins the root against rename/replace. At or below the root:
+// "private" (owner-only, protected) for a private root, "ancestor" (no foreign
+// mutation authority) for a resources root; the object itself is checked by
+// its leaf policy.
+func aclRole(p, object, root string, private bool) string {
+	switch {
+	case !under(p, root):
+		return "none"
+	case private:
+		return "private"
+	case same(p, object):
+		return "object"
+	}
+	return "ancestor"
+}

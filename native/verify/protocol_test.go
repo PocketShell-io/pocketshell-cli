@@ -220,3 +220,30 @@ func TestShortReleaseThenRealEOFIsReleased(t *testing.T) {
 		t.Fatalf("release+EOF: %d %v", code, ev)
 	}
 }
+
+func TestACLRoleStartsAtTheDeclaredRoot(t *testing.T) {
+	res, priv := `C:\Users\u\AppData\Local\App\resources`, `C:\Users\u\AppData\Local\probe`
+	file := res + `\runtime\sub\m.bin`
+	cases := []struct {
+		p, object, root string
+		private         bool
+		want            string
+	}{
+		{`C:\`, file, res, false, "none"},
+		{`C:\Users\u\AppData`, file, res, false, "none"}, // the measured laptop refusal site
+		{`C:\Users\u\AppData\Local\App`, file, res, false, "none"},
+		{res, file, res, false, "ancestor"},
+		{res + `\runtime`, file, res, false, "ancestor"},
+		{res + `\runtime\sub`, file, res, false, "ancestor"},
+		{res, res, res, false, "object"},
+		{`C:\Users\u\AppData`, priv + `\tmp`, priv, true, "none"},
+		{priv, priv + `\tmp`, priv, true, "private"},
+		{priv + `\tmp`, priv + `\tmp`, priv, true, "private"},
+		{`C:\Users\u\AppData\Local\probe2`, priv, priv, true, "none"}, // a sibling prefix is not "under"
+	}
+	for _, c := range cases {
+		if got := aclRole(c.p, c.object, c.root, c.private); got != c.want {
+			t.Errorf("%s: %s, want %s", c.p, got, c.want)
+		}
+	}
+}
