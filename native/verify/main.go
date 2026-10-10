@@ -16,7 +16,12 @@ import (
 // output over 64 KiB, 4 stdin closed (controller gone; the entry was ended),
 // 5 timeout (the entry was ended), 6 the entry's termination could not be
 // proven (custody unknown).
-func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout)) }
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "context" {
+		os.Exit(runContext(os.Args[1:], os.Stdout, measureContext))
+	}
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout))
+}
 
 func emit(out *os.File, v any) {
 	b, _ := json.Marshal(v)

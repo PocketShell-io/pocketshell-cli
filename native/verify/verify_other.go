@@ -22,3 +22,5 @@ func verifyOne(q request, roots []root, owner string, keep *held) (result, *file
 func processImageIdentity(pid int) (fileID, error) { return fileID{}, errors.New("Windows-only") }
 
 func spawnHeldEntry(cfg config, keep *held) (child, error) { return nil, errors.New("Windows-only") }
+
+func measureContext() (nativeContext, error) { return nativeContext{}, errors.New("Windows-only") }

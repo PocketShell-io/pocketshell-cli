@@ -345,3 +345,55 @@ def test_spawn_entry_refuses_a_closure_whose_digest_is_not_expected(tree):
                        capture_output=True, timeout=60, creationflags=0x08000000)
     reply = json.loads(p.stdout.decode().splitlines()[0])
     assert p.returncode == 1 and not reply["ok"] and "expected digest" in reply["results"][0]["problem"]
+
+
+# --- §16.7 the read-only context operation (empty environment, closed stdin) ----------
+
+
+def _expected_context():
+    import ctypes as c
+
+    from pocketshell.gateway import service_agent_install as inst
+    from pocketshell.gateway import service_windows as win
+
+    api = win.WindowsApi()
+    f = inst.known_folders()
+    return {"ownerSid": api.current_sid(), "session": api.current_session(),
+            "windows": {k: f[k] for k in ("SystemDrive", "SystemRoot", "ProgramData", "USERPROFILE", "LOCALAPPDATA")},
+            "elevated": bool(c.windll.shell32.IsUserAnAdmin())}
+
+
+def test_context_with_an_empty_environment():
+    if not VERIFY or not os.path.isfile(VERIFY):
+        pytest.skip("verifier not built")
+    from unelevated import run_unelevated
+
+    want = _expected_context()
+    if want["elevated"]:
+        # the elevated runner itself is refused (the ordinary-user runtime never runs elevated) …
+        p = subprocess.run([VERIFY, "context", "--operation-id", "ctx-e"], env={}, stdin=subprocess.DEVNULL,
+                           capture_output=True, timeout=30, creationflags=0x08000000)
+        refusal = json.loads(p.stdout)
+        assert p.returncode == 1 and refusal["ok"] is False and "elevated" in refusal["problem"], refusal
+        # … and an unelevated token of the same user, EMPTY environment, closed stdin, is measured
+        code, out = run_unelevated([VERIFY, "context", "--operation-id", "ctx-1"], env={})
+    else:
+        p = subprocess.run([VERIFY, "context", "--operation-id", "ctx-1"], env={}, stdin=subprocess.DEVNULL,
+                           capture_output=True, timeout=30, creationflags=0x08000000)
+        code, out = p.returncode, p.stdout
+    print(code, out[:2000])
+    assert code == 0 and len(out) <= 8192
+    reply = json.loads(out)
+    assert sorted(reply) == ["elevated", "operationId", "ownerSid", "session", "version", "windows"]
+    assert reply["version"] == 2 and reply["operationId"] == "ctx-1" and reply["elevated"] is False
+    assert reply["ownerSid"] == want["ownerSid"] and reply["session"] == want["session"]
+    for k, v in want["windows"].items():
+        assert reply["windows"][k].lower() == v.lower(), (k, reply["windows"][k], v)
+
+
+def test_context_usage_errors():
+    if not VERIFY or not os.path.isfile(VERIFY):
+        pytest.skip("verifier not built")
+    p = subprocess.run([VERIFY, "context"], env={}, stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+                       creationflags=0x08000000)
+    assert p.returncode == 2 and json.loads(p.stdout)["ok"] is False
