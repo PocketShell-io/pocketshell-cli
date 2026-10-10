@@ -545,14 +545,16 @@ def agent_group() -> None:
 @click.option("--manifest", required=True, metavar="PATH", help="Protected guardian manifest (reviewed).")
 @click.option("--config-dir", required=True, metavar="DIR", help="Enrolled helper config dir.")
 @click.option("--helper", default=None, metavar="PATH", help="Reviewed pocketshell-link.exe.")
+@click.option("--authority", default=None, metavar="PATH",
+              help="<userData>\\managed-runtime\\authority.json from `agent install` (setup ABI v3).")
 @_JSON
 @_OPERATION_ID
-def agent_bind(manifest, config_dir, helper, as_json, operation_id):
+def agent_bind(manifest, config_dir, helper, authority, as_json, operation_id):
     """Validate and record the protected binding (once, from the owner's setup)."""
     _check_operation_id(operation_id)
     api, runner = _api_runner()
     _emit(*_agent.bind_command(manifest, config_dir, helper, api=api, runner=runner,
-                               operation_id=operation_id), as_json)
+                               operation_id=operation_id, authority=authority), as_json)
 
 
 @agent_group.command("status")
@@ -601,14 +603,19 @@ def _emit_raw(doc, code):
 @click.option("--catalog", required=True, metavar="PATH", help="resources/host-runtime-catalog.json (v2).")
 @click.option("--staged", required=True, metavar="DIR", help="The staged release closure to install.")
 @click.option("--dry-run", is_flag=True, help="Verify and print the receipt; write nothing.")
+@click.option("--config-dir", default=None, metavar="DIR",
+              help="The EXISTING enrollment config dir (setup ABI v3: install first, then bind).")
+@click.option("--endpoint-inputs", default=None, metavar="PATH",
+              help="Public JSON {version:1, hostKey, authorizedKeys}: paths only, never read.")
 @_JSON
 @_OPERATION_ID
-def agent_install(user_data, catalog, staged, dry_run, as_json, operation_id):
+def agent_install(user_data, catalog, staged, dry_run, config_dir, endpoint_inputs, as_json, operation_id):
     """Install the catalogued ordinary-v2 runtime and write authority.json (PROPOSED v3)."""
     _check_operation_id(operation_id)
     api, runner = _api_runner()
     _emit_raw(*_agent.install_command(user_data=user_data, catalog=catalog, staged=staged, dry_run=dry_run,
-                                      api=api, runner=runner, operation_id=operation_id))
+                                      api=api, runner=runner, operation_id=operation_id,
+                                      config_dir=config_dir, endpoint_inputs=endpoint_inputs))
 
 
 @agent_group.command("verify-paths")

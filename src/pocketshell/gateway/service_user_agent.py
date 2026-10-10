@@ -154,10 +154,41 @@ class _OperationLock:
 # --- binding ----------------------------------------------------------------------------
 
 
-def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, runner) -> dict:
+def _native_paths(api):
+    from pocketshell.gateway import service_agent_install as inst
+
+    return inst.NativePaths(api)
+
+
+def _authority_trust(m, authority: str, user_sid: str, api) -> str:
+    """Setup ABI v3: the installed authority records THIS manifest (its
+    endpoint.manifest and manifestSHA256), the generic trio, every pin on disk
+    and every release pin equal to its catalog row. Returns the authority's
+    sha256 (recorded in the binding; re-checked at status/start/stop)."""
+    from pocketshell.gateway import service_agent_endpoint as eps
+    from pocketshell.gateway import service_agent_install as inst
+    from pocketshell.gateway import service_windows as win
+
+    try:
+        receipt, authority_sha, rows = eps.load_authority(authority, user_sid, _native_paths(api))
+        recorded = (receipt.get("endpoint") or {}).get("manifest")
+        if not isinstance(recorded, str) or not win._same_path(recorded, m.path):
+            raise inst.InstallError("authority-invalid", "--manifest is not the installed authority's "
+                                    "endpoint.manifest")
+        ep.check_trust_authority(m, receipt, file_sha256=win.file_sha256, release_pins=rows)
+    except inst.InstallError as exc:
+        raise AgentError(exc.code, sanitize(str(exc), 600)) from None
+    except ServiceError as exc:
+        raise AgentError("authority-invalid", sanitize(str(exc), 600)) from None
+    return authority_sha
+
+
+def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, runner,
+         authority: Optional[str] = None) -> dict:
     from pocketshell.gateway import service_windows as win
     from pocketshell.gateway import service_windows_endpoint as wep
 
+    authority_sha = None
     try:
         config_dir = win.validate_path(config_dir, "config dir")
         manifest_path = win.validate_path(manifest_path, "endpoint manifest")
@@ -166,13 +197,19 @@ def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, run
         user_sid = api.current_sid()
         win.check_owner(api, config_dir, user_sid)
         m = wep.load_manifest(manifest_path)
-        ep.check_trust(m, file_sha256=win.file_sha256)
+        if authority is None:
+            ep.check_trust(m, file_sha256=win.file_sha256)  # legacy: a compiled reviewed digest (none today)
+        else:
+            authority = win.validate_path(authority, "authority")
+            authority_sha = _authority_trust(m, authority, user_sid, api)
         config = wep.read_bounded(m.config, ep.MAX_MANIFEST_BYTES)
         if config is None:
             raise ServiceError("the endpoint config does not exist")
         ep.config_guard(config.decode("utf-8", "strict"), m)
         host_key = ep.check_binding(m, show, user_sid, qualification=False)
         wep.check_authority(m, api)
+    except AgentError:
+        raise
     except (ServiceError, UnicodeDecodeError) as exc:
         raise AgentError("binding-refused", sanitize(str(exc), 600)) from None
     binding = {
@@ -187,6 +224,8 @@ def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, run
         "ownerSID": user_sid,
         "hostKey": host_key.line,
     }
+    if authority is not None:
+        binding.update(authority=authority, authoritySHA256=authority_sha)
     _write_private(_path("binding.json"), json.dumps(binding, indent=1).encode("utf-8"))
     return binding
 
@@ -212,8 +251,13 @@ def load_binding(*, api, runner, revalidate: bool):
     if b["ownerSID"] != api.current_sid():
         raise AgentError("binding-invalid", "the binding belongs to another user")
     if revalidate:
+        if "authority" in b:
+            if _authority_trust(m, b["authority"], b["ownerSID"], api) != b.get("authoritySHA256"):
+                raise AgentError("binding-invalid", "the installed authority changed since `agent bind`; bind "
+                                 "again after review")
         try:
-            ep.check_trust(m, file_sha256=win.file_sha256)
+            if "authority" not in b:
+                ep.check_trust(m, file_sha256=win.file_sha256)
             if win.file_sha256(b["helper"]) != b["helperSHA256"]:
                 raise ServiceError("the helper changed since `agent bind`")
             win.check_digest(b["helperSHA256"])
@@ -581,9 +625,9 @@ def status(*, api, runner, operation_id=None) -> tuple:
     return _guarded(operation_id, run)
 
 
-def bind_command(manifest_path, config_dir, helper, *, api, runner, operation_id=None) -> tuple:
+def bind_command(manifest_path, config_dir, helper, *, api, runner, operation_id=None, authority=None) -> tuple:
     def run():
-        b = bind(manifest_path, config_dir, helper, api=api, runner=runner)
+        b = bind(manifest_path, config_dir, helper, api=api, runner=runner, authority=authority)
         return _document(operation_id, state="stopped", binding=b, owner=_owner(api)), EXIT_READY
     return _guarded(operation_id, run, needs_binding=False)
 
@@ -726,7 +770,7 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
 
 
 def install_command(*, user_data, catalog, staged, dry_run, api, runner, operation_id=None, paths=None,
-                    folders=None) -> tuple:
+                    folders=None, config_dir=None, endpoint_inputs=None) -> tuple:
     """`gateway agent install`: copy the catalogued closure and write the
     public-only authority receipt. Never starts, enrolls, or reads secrets."""
     from pocketshell import __version__
@@ -737,9 +781,16 @@ def install_command(*, user_data, catalog, staged, dry_run, api, runner, operati
                 "dryRun": bool(dry_run), "receipt": receipt,
                 "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600)}}
 
+    if (config_dir is None) != (endpoint_inputs is None):
+        return doc(False, error=AgentError("usage", "--config-dir and --endpoint-inputs go together (setup ABI "
+                                           "v3: install first)")), EXIT_USAGE
     if sys.platform != "win32":
         return doc(False, error=AgentError("unsupported-platform", "the ordinary-v2 runtime is Windows-only")), \
             EXIT_ERROR
+    if config_dir is not None:
+        return _install_endpoint(doc, user_data=user_data, catalog=catalog, staged=staged, dry_run=dry_run,
+                                 api=api, runner=runner, paths=paths, folders=folders, config_dir=config_dir,
+                                 endpoint_inputs=endpoint_inputs)
     try:
         with _OperationLock():
             b, _m, host_key = load_binding(api=api, runner=runner, revalidate=True)
@@ -748,6 +799,40 @@ def install_command(*, user_data, catalog, staged, dry_run, api, runner, operati
             receipt = inst.install_runtime(
                 user_data=user_data, catalog_path=catalog, staged=staged, binding=public,
                 server=show.get("server", ""), owner_sid=api.current_sid(),
+                paths=paths or inst.NativePaths(api), folders=folders or inst.known_folders(),
+                cli_version=__version__, dry_run=dry_run)
+    except (AgentError, inst.InstallError) as exc:
+        return doc(False, error=exc), EXIT_USAGE if getattr(exc, "code", "") == "usage" else EXIT_ERROR
+    except Exception as exc:  # noqa: BLE001 - a refusal, never a traceback
+        return doc(False, error=AgentError("error", str(exc) or type(exc).__name__)), EXIT_ERROR
+    return doc(True, receipt), EXIT_READY
+
+
+def _install_endpoint(doc, *, user_data, catalog, staged, dry_run, api, runner, paths, folders, config_dir,
+                      endpoint_inputs) -> tuple:
+    """Setup ABI v3: install FIRST (no binding). The public inputs file names
+    the existing key files; it is never a source of executable paths."""
+    from pocketshell import __version__
+    from pocketshell.gateway import service_agent_endpoint as eps
+    from pocketshell.gateway import service_agent_install as inst
+    from pocketshell.gateway import service_windows as win
+
+    def show(helper):
+        binary = win.resolve_helper(helper, runner)  # reviewed digest + version protocol
+        return common.check_enrollment(binary, config_dir, runner), win.file_sha256(binary)
+
+    try:
+        with _OperationLock():
+            try:
+                with open(win.validate_path(endpoint_inputs, "endpoint inputs"), "rb") as handle:
+                    data = handle.read(eps.MAX_INPUTS + 1)
+            except (OSError, ServiceError) as exc:
+                raise inst.InstallError("endpoint-inputs", f"cannot read --endpoint-inputs "
+                                        f"({sanitize(str(exc), 200)})") from None
+            sid = api.current_sid()
+            receipt = eps.install_endpoint_runtime(
+                user_data=user_data, catalog_path=catalog, staged=staged, config_dir=config_dir,
+                endpoint_inputs=data, owner_sid=sid, account=eps.local_account(sid), show=show,
                 paths=paths or inst.NativePaths(api), folders=folders or inst.known_folders(),
                 cli_version=__version__, dry_run=dry_run)
     except (AgentError, inst.InstallError) as exc:
