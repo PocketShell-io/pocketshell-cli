@@ -108,7 +108,7 @@ def _load(path, login):
         record = json.loads(data.decode("utf-8"))
         assert isinstance(record, dict) and record.get("operationId") == login
         for key, kind in (("deviceCode", str), ("brokerUrl", str), ("label", str), ("interval", int),
-                          ("expiresAt", int)):
+                          ("expiresAt", int), ("nextPollAt", (int, float))):
             assert isinstance(record.get(key), kind)
     except (ValueError, UnicodeDecodeError, AssertionError):
         raise _Refusal("state-unreadable", "the private login state is corrupt; start a new login") from None
@@ -147,7 +147,7 @@ def login_start(*, operation_id: str, label=None) -> tuple:
         _write(pending_path(operation_id), {
             "version": 1, "operationId": operation_id, "brokerUrl": base, "label": label,
             "deviceCode": start.device_code, "userCode": start.user_code, "interval": interval,
-            "expiresAt": expires_at})
+            "expiresAt": expires_at, "nextPollAt": int(_now()) + interval})
     except _Refusal as exc:
         return _doc(action, operation_id, ok=False, error=(exc.code, str(exc)), login=None), EXIT_ERROR
     except AccountError as exc:
@@ -185,33 +185,40 @@ def login_complete(*, operation_id: str, login: str, timeout: float = 60) -> tup
     try:
         record = _load(path, login)
         deadline = min(_now() + timeout, record["expiresAt"])
-        interval = record["interval"]
+        record.setdefault("nextPollAt", 0)
         failures = 0
+
+        def pending():
+            _write(path, record)  # the persisted schedule: interval + next due poll
+            return _doc(action, operation_id, ok=True, state="pending", **extra), EXIT_PENDING
+
         while True:
             if _now() >= record["expiresAt"]:
                 return finish("expired", "login-expired", "the login code expired before it was approved")
-            if _now() + interval >= deadline:
-                if record["interval"] != interval:
-                    record["interval"] = interval
-                    _write(path, record)
-                return _doc(action, operation_id, ok=True, state="pending", **extra), EXIT_PENDING
-            _sleep(interval)
+            # admission: poll when the PERSISTED next poll is due within this budget
+            # (never faster than the broker interval across invocations)
+            wait = max(0.0, record["nextPollAt"] - _now())
+            if _now() + wait > deadline:
+                return pending()
+            _sleep(wait)
             remaining = deadline - _now()
             if remaining <= 0:
-                return _doc(action, operation_id, ok=True, state="pending", **extra), EXIT_PENDING
+                return pending()
+            record["nextPollAt"] = _now() + record["interval"]
             try:
                 resp = broker.poll_device(record["brokerUrl"], record["deviceCode"],
                                           timeout=min(REQUEST_TIMEOUT, remaining))
             except BrokerUnavailable:
                 failures += 1
                 if failures >= 5:
-                    return _doc(action, operation_id, ok=True, state="pending", **extra), EXIT_PENDING
+                    return pending()
                 continue
             if resp.status == 200:
                 break
             error = resp.error
             if resp.status == 429 or error == "slow_down":
-                interval = min(interval + SLOW_DOWN_STEP, MAX_INTERVAL)
+                record["interval"] = min(record["interval"] + SLOW_DOWN_STEP, MAX_INTERVAL)
+                record["nextPollAt"] = _now() + record["interval"]
             elif error == "access_denied":
                 return finish("denied", "login-denied", "the login request was denied in the browser")
             elif error == "expired_token":

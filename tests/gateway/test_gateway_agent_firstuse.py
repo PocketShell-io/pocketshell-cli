@@ -255,3 +255,71 @@ def test_failed_save_cleanup_is_inside_the_documented_maximum(env, monkeypatch):
     assert code == 1 and doc["state"] == "failed"
     assert used == {"session": fu.SESSION_CHECK_TIMEOUT, "logout": fu.LOGOUT_TIMEOUT}
     assert fu._now() - t0 <= 20 + fu.SESSION_CHECK_TIMEOUT + fu.LOGOUT_TIMEOUT == fu.max_wall_seconds(20)
+
+
+# --- review 2c18a57: liveness with the default timeout and a 60 s interval -----------------
+
+
+def _start_with_interval(env, monkeypatch, interval):
+    start = broker.DeviceStart(device_code=DEVICE_CODE, user_code="BCDF-GH23",
+                               verification_uri="https://app.pocketshell.io/device",
+                               verification_uri_complete=None, expires_in=900, interval=interval)
+    monkeypatch.setattr(broker, "start_device", lambda base, label: start)
+    fu.login_start(operation_id="op-start", label="me@host")
+
+
+def test_default_reinvocations_with_a_60s_interval_eventually_approve(env, monkeypatch):
+    _start_with_interval(env, monkeypatch, 60)
+    times = []
+    real_poll = broker.poll_device
+
+    def poll(base, code, timeout=None):
+        times.append(fu._now())
+        return real_poll(base, code, timeout)
+
+    monkeypatch.setattr(broker, "poll_device", poll)
+    env["answers"] = [(400, {"error": "authorization_pending"})] * 3 + [
+        (200, {"access_token": TOKEN, "token_id": "tid-1", "expires_at": 1_900_000_000, "email": "me@example.com"})]
+    states = []
+    for i in range(12):
+        doc, code = fu.login_complete(operation_id=f"op-{i}", login="op-start", timeout=60)  # the default
+        states.append(doc["state"])
+        if doc["state"] != "pending":
+            break
+        fu._sleep(1)  # the controller re-invokes promptly
+    assert states[-1] == "approved", states
+    assert all(b - a >= 60 for a, b in zip(times, times[1:]))  # never faster than the interval
+
+
+def test_slow_down_raises_the_persisted_interval_across_invocations(env, monkeypatch):
+    _start_with_interval(env, monkeypatch, 5)
+    times = []
+    real_poll = broker.poll_device
+
+    def poll(base, code, timeout=None):
+        times.append(fu._now())
+        return real_poll(base, code, timeout)
+
+    monkeypatch.setattr(broker, "poll_device", poll)
+    env["answers"] = [(400, {"error": "slow_down"})]
+    fu.login_complete(operation_id="op-1", login="op-start", timeout=8)
+    fu.login_complete(operation_id="op-2", login="op-start", timeout=30)
+    assert len(times) >= 2 and times[1] - times[0] >= 10  # 5 + slow_down 5, honoured across invocations
+
+
+def test_one_poll_per_interval_across_rapid_invocations(env, monkeypatch):
+    _start_with_interval(env, monkeypatch, 30)
+    for i in range(5):
+        fu.login_complete(operation_id=f"op-{i}", login="op-start", timeout=5)  # rapid, short calls
+    assert len(env["polled"]) == 0  # the first poll is due only 30 s after the start
+    fu._sleep(30)
+    fu.login_complete(operation_id="op-due", login="op-start", timeout=5)
+    fu.login_complete(operation_id="op-again", login="op-start", timeout=5)
+    assert len(env["polled"]) == 1
+
+
+def test_an_expired_code_reports_expired(env, monkeypatch):
+    _start_with_interval(env, monkeypatch, 60)
+    fu._sleep(901)
+    doc, code = fu.login_complete(operation_id="op-x", login="op-start", timeout=60)
+    assert doc["state"] == "expired" and code == 1
