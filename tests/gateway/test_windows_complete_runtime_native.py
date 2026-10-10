@@ -201,16 +201,24 @@ def test_new_machine_complete_runtime(closure, tmp_path):
         bash = manifest["configBindings"]["backendExecutable"].replace("/", "\\")
         a_exe = str(Path(manifest["python"]).parent / "a.exe")
 
-        # 4a. non-PTY session: the default shell runs the backend bash and the aplexer CLI
-        script = (f'"{bash}" --noprofile --norc -c "echo bash-$((6*7)); uname -s"\r\n'
-                  f'"{a_exe}" --json engines\r\nexit 5\r\n')
-        p = subprocess.run([str(SSH_DIR / "ssh.exe"), *base, "-p", str(port), f"{user}@127.0.0.1"],
-                           input=script.encode("utf-8"), capture_output=True, timeout=120)
-        out = p.stdout.decode("utf-8", "replace")
-        print("non-PTY:", p.returncode, out[-3000:], p.stderr.decode(errors="replace")[-2000:])
-        assert "bash-42" in out and "bash-42" not in script and "MSYS_NT" in out
-        assert p.returncode == 5  # the real exit status of the remote command
-        assert '"shell"' in out  # the aplexer CLI answered with its engines (incl. the shell engine)
+        # 4a. non-PTY EXEC requests: the command line travels as UTF-8 and sshd hands it to the
+        # default shell as Unicode (typing it on cmd's stdin would go through the OEM code page and
+        # mangle the non-ASCII profile path). cmd /c strips one pair of outer quotes, so the whole
+        # command is wrapped once.
+        def exec_(command):
+            p = subprocess.run([str(SSH_DIR / "ssh.exe"), *base, "-p", str(port), f"{user}@127.0.0.1",
+                                f'"{command}"'], capture_output=True, timeout=120, stdin=subprocess.DEVNULL)
+            out_ = p.stdout.decode("utf-8", "replace")
+            print("exec:", ascii(command), "->", p.returncode, ascii(out_[-3000:]),
+                  ascii(p.stderr.decode("utf-8", "replace")[-1500:]))
+            return p.returncode, out_
+
+        bash_cmd = f'"{bash}" --noprofile --norc -c "echo bash-$((6*7)); uname -s; exit 5"'
+        rc, out = exec_(bash_cmd)
+        assert "bash-42" in out and "bash-42" not in bash_cmd and "MSYS_NT" in out
+        assert rc == 5  # the real exit status of the remote backend shell
+        rc, out = exec_(f'"{a_exe}" --json engines')
+        assert rc == 0 and '"shell"' in out  # the aplexer CLI answered with its engines (incl. the shell engine)
 
         # 4b. PTY session (ssh-shellhost + conhost): a COMPUTED reply absent from the input
         pty_in = b"set /a 6*7+1000\r\nexit 7\r\n"
