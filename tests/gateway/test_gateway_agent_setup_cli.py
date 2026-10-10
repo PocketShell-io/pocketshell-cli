@@ -6,6 +6,7 @@ test_gateway_endpoint_setup.py; here the agent commands must route to it."""
 from __future__ import annotations
 
 import json
+import os
 
 
 import pytest
@@ -364,3 +365,20 @@ def test_the_same_generation_upgrade_keeps_the_running_endpoint(agent, authority
     result, data = bind_authority()  # enrollment upgrade of the SAME authority/manifest
     assert result.exit_code == 0, result.output
     assert not agent["api"].terminated
+
+
+def test_an_enrolled_binding_is_never_downgraded_to_pre_enrollment(agent, authority, tmp_path):  # noqa: F811
+    """Review de96221b: same generation, enrolled + live link -> a pre-enrollment
+    bind refuses; bytes and link custody are preserved and stop still cleans it."""
+    _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    assert bind_authority()[0].exit_code == 0  # the upgrade still works
+    assert run("start", "--json")[0].exit_code == 0
+    assert os.path.exists(agent_mod._path("link.json"))
+    before = _bytes()
+    result, data = bind_pre()
+    assert result.exit_code == 1 and data["error"]["code"] == "binding-transfer", result.output
+    assert _bytes() == before and os.path.exists(agent_mod._path("link.json"))
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and data["state"] == "stopped", result.output
+    assert [t[2] for t in agent["api"].terminated] == [WIN_HELPER]  # the old link was found and cleaned

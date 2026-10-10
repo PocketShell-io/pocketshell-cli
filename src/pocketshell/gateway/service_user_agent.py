@@ -216,6 +216,13 @@ def _replacement_guard(new: dict, api) -> None:
         and (prior.get("authority") is None) == (new.get("authority") is None) \
         and (prior.get("authority") is None or win_same(prior.get("authority"), new.get("authority")))
     if same:
+        # the only same-generation transition is pre-enrollment -> enrolled. An
+        # enrolled binding is NEVER downgraded (review de96221b): it would drop
+        # the helper and with it the custody of a running link; it has no use,
+        # since the enrolled binding already runs the endpoint.
+        if prior.get("helper") and not new.get("helper"):
+            raise AgentError("binding-transfer", "this installation is already enrolled; a pre-enrollment bind "
+                             "would drop the enrolled link and its custody — the binding is left untouched")
         return
     try:
         mark = json.loads((_read_private(_path(STOPPED_MARK)) or b"null").decode("utf-8"))
