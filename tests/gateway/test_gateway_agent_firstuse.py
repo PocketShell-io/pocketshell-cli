@@ -45,13 +45,13 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(broker, "start_device", lambda base, label: start)
     state = {"answers": [], "saved": [], "polled": []}
 
-    def poll(base, code):
+    def poll(base, code, timeout=None):
         state["polled"].append(code)
         status, body = state["answers"].pop(0) if state["answers"] else (400, {"error": "authorization_pending"})
         return broker.Response(status=status, data=body)
 
     monkeypatch.setattr(broker, "poll_device", poll)
-    monkeypatch.setattr(broker, "get_session", lambda base, tok: broker.SessionInfo(
+    monkeypatch.setattr(broker, "get_session", lambda base, tok, timeout=None: broker.SessionInfo(
         email="me@example.com", token_id="tid-1", label="l", created_at=None, expires_at=1_900_000_000))
     monkeypatch.setattr(fu.credentials, "save", lambda c: state["saved"].append(c))
     monkeypatch.setattr(fu.credentials, "load", lambda **kw: (_ for _ in ()).throw(fu.NotLoggedIn("no")))
@@ -151,3 +151,80 @@ def test_login_start_refuses_an_untrusted_verification_origin(env, monkeypatch):
     doc, code = fu.login_start(operation_id="op-start", label="me@host")
     assert doc["login"]["verificationUri"] == "https://app.pocketshell.io/device"
     _no_secret(doc)
+
+
+# --- review 28a64d4f: every failure class is ONE correlated public terminal document -------
+
+
+def _clean(doc, capsys):
+    out = capsys.readouterr()
+    for text in (json.dumps(doc), out.out, out.err):
+        assert DEVICE_CODE not in text and TOKEN not in text and "deviceCode" not in text
+
+
+def test_complete_with_an_unreadable_private_record(env, monkeypatch, capsys):
+    fu.login_start(operation_id="op-start", label="me@host")
+
+    def boom(path, *a, **k):
+        raise PermissionError(13, "Access is denied", path)
+
+    monkeypatch.setattr(fu, "_read_private", boom)
+    doc, code = fu.login_complete(operation_id="op-x", login="op-start", timeout=10)
+    assert code == 1 and doc["error"]["code"] == "state-unreadable" and doc["login"] == "op-start"
+    _clean(doc, capsys)
+
+
+def test_complete_with_a_corrupt_private_record(env, capsys):
+    fu.login_start(operation_id="op-start", label="me@host")
+    fu._agent()._write_private(fu.pending_path("op-start"), b"{not json" + DEVICE_CODE.encode())
+    doc, code = fu.login_complete(operation_id="op-x", login="op-start", timeout=10)
+    assert code == 1 and doc["error"]["code"] == "state-unreadable"
+    _clean(doc, capsys)
+
+
+def test_complete_when_the_pending_record_cannot_be_deleted(env, monkeypatch, capsys):
+    fu.login_start(operation_id="op-start", label="me@host")
+    env["answers"] = [(400, {"error": "access_denied"})]
+
+    def no_delete(path):
+        raise PermissionError(13, "Access is denied", path)
+
+    monkeypatch.setattr(fu._agent(), "_delete", no_delete)
+    doc, code = fu.login_complete(operation_id="op-x", login="op-start", timeout=30)
+    assert code == 1 and doc["state"] == "denied" and doc["error"]["code"] == "state-cleanup-failed"
+    _clean(doc, capsys)
+
+
+def test_complete_with_a_malformed_broker_token(env, capsys):
+    fu.login_start(operation_id="op-start", label="me@host")
+    env["answers"] = [(200, {"access_token": "not-a-token", "token_id": "t"})]
+    doc, code = fu.login_complete(operation_id="op-x", login="op-start", timeout=30)
+    assert code == 1 and doc["state"] == "failed" and doc["error"]["code"] == "broker-malformed"
+    _clean(doc, capsys)
+
+
+def test_start_when_the_private_record_cannot_be_written(env, monkeypatch, capsys):
+    def no_write(path, data):
+        raise PermissionError(13, "Access is denied", path)
+
+    monkeypatch.setattr(fu._agent(), "_write_private", no_write)
+    doc, code = fu.login_start(operation_id="op-start", label="me@host")
+    assert code == 1 and doc["error"]["code"] == "state-write-failed" and doc["login"] is None
+    _clean(doc, capsys)
+
+
+def test_complete_wall_time_is_bounded_by_the_documented_budget(env, monkeypatch):
+    """--timeout bounds the WHOLE operation: polls + per-request HTTP time; the
+    final session check adds at most fu.SESSION_CHECK_TIMEOUT."""
+    fu.login_start(operation_id="op-start", label="me@host")
+    seen = []
+
+    def slow_poll(base, code, timeout=None):
+        seen.append(timeout)
+        fu._sleep(timeout)  # every request uses its whole allowance
+        return broker.Response(status=400, data={"error": "authorization_pending"})
+
+    monkeypatch.setattr(broker, "poll_device", slow_poll)
+    t0 = fu._now()
+    doc, code = fu.login_complete(operation_id="op-x", login="op-start", timeout=20)
+    assert code == 3 and fu._now() - t0 <= 20 and all(t and t <= 15 for t in seen)

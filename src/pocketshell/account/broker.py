@@ -242,8 +242,8 @@ def start_device(base_url: str, label: str) -> DeviceStart:
     )
 
 
-def poll_device(base_url: str, device_code: str) -> Response:
-    return request(base_url, "POST", "/auth/device/token", body={"device_code": device_code})
+def poll_device(base_url: str, device_code: str, timeout: float = DEFAULT_TIMEOUT) -> Response:
+    return request(base_url, "POST", "/auth/device/token", body={"device_code": device_code}, timeout=timeout)
 
 
 @dataclass(frozen=True)
