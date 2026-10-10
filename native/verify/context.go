@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"sort"
@@ -97,9 +98,12 @@ func checkContext(c nativeContext) error {
 	case !driveOnlyRE.MatchString(c.Windows.SystemDrive):
 		return errors.New("SystemDrive is not a drive")
 	}
-	for _, p := range []string{c.Windows.SystemRoot, c.Windows.ProgramData, c.Windows.USERPROFILE, c.Windows.LOCALAPPDATA} {
-		if !absolute(p) {
-			return errors.New("a measured folder is not a plain drive-absolute path")
+	for _, f := range []struct{ name, value string }{{"SystemRoot", c.Windows.SystemRoot},
+		{"ProgramData", c.Windows.ProgramData}, {"USERPROFILE", c.Windows.USERPROFILE},
+		{"LOCALAPPDATA", c.Windows.LOCALAPPDATA}} {
+		if !absolute(f.value) {
+			// source-bound diagnostics: WHICH folder and its measured value
+			return fmt.Errorf("the measured %s %q is not a plain drive-absolute path", f.name, f.value)
 		}
 	}
 	return nil
