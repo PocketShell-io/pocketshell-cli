@@ -115,6 +115,13 @@ def test_new_machine_complete_runtime(closure, tmp_path):
     authority = str(user_data / "managed-runtime" / "authority.json")
     code, data = agent("bind", "--manifest", endpoint["manifest"], "--authority", authority)
     assert code == 0, data
+    # diagnostics only (never an assertion): the owned daemon's own view of its
+    # binary and the generated config, run unelevated like the guardian would
+    manifest0 = json.loads(Path(endpoint["manifest"]).read_text(encoding="utf-8"))
+    for diag in ([manifest0["daemon"], "-V"], [manifest0["daemon"], "-t", "-f", manifest0["config"]]):
+        dcode, dout = run_unelevated(["cmd.exe", "/d", "/c", subprocess.list2cmdline(diag) + " 2>&1"], env=env,
+                                     cwd=str(Path(manifest0["daemon"]).parent), timeout=60)
+        print("DIAG", diag[1:], "->", dcode, hex(dcode & 0xFFFFFFFF), dout.decode("utf-8", "replace")[-2000:])
     print("SCOPE: acceptJob is a report-only CI seam (job membership accepted and reported), NOT NoJob "
           "qualification; the Aplexer session lifecycle is NOT YET QUALIFIED by this test")
     try:  # the finally also stops a start whose READY assertion fails
