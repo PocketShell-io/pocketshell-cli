@@ -161,9 +161,13 @@ def test_verifier_spawns_the_held_release_entry(release, tmp_path):
     sid = win.WindowsApi().current_sid()
     root = release["root"]
     entry = str(root / "pocketshell.exe")
-    reqs = ["--request", f"inventory={root}"]
-    for f in release["catalog"]["files"]:
-        reqs += ["--request", "binary=" + str(root / f["path"].replace("/", "\\"))]
+    import hashlib
+
+    files = release["catalog"]["files"]
+    inv = hashlib.sha256("\n".join(sorted(f["path"].lower() for f in files)).encode()).hexdigest()
+    reqs = ["--request", f"inventory:{inv}={root}"]
+    for f in files:  # every catalogued file natively pinned (BI1)
+        reqs += ["--request", f"binary:{f['sha256']}=" + str(root / f["path"].replace("/", "\\"))]
     args = ["gateway", "agent", "status", "--json", "--operation-id", "bridge-1"]
     # stdin stays OPEN for the whole command (its EOF means "controller gone")
     proc = subprocess.Popen([VERIFY, "verify", "--operation-id", "bridge-1", "--owner-sid", sid,
@@ -171,7 +175,11 @@ def test_verifier_spawns_the_held_release_entry(release, tmp_path):
                              *[x for a in args for x in ("--entry-arg", a)], "--entry-timeout", "120"],
                             env=closed_env(tmp_path), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             creationflags=0x00000008)  # DETACHED, as a GUI parent
-    lines = [json.loads(x) for x in proc.stdout]
+    first = json.loads(proc.stdout.readline())
+    assert first["ok"], [r for r in first["results"] if not r["ok"]][:3]
+    proc.stdin.write(b'{"version":2,"operationId":"bridge-1","op":"authorize"}\n')
+    proc.stdin.flush()
+    lines = [first, *(json.loads(x) for x in proc.stdout)]
     code = proc.wait(timeout=60)
     proc.stdin.close()
     events = lines[1:]

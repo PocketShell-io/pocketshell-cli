@@ -44,8 +44,10 @@ def tree(tmp_path):
 def argv(t, requests, *, extra=(), sid=None, op="op-1"):
     out = [VERIFY, "verify", "--operation-id", op, "--owner-sid", sid or t["sid"],
            "--private-root", t["root"], "--resources-root", t["resources"]]
-    for kind, path in requests:
-        out += ["--request", f"{kind}={path}"]
+    for req in requests:
+        kind, path = req[0], req[1]
+        expect = f":{req[2]}" if len(req) > 2 and req[2] else ""
+        out += ["--request", f"{kind}{expect}={path}"]
     return out + list(extra)
 
 
@@ -244,12 +246,17 @@ def test_r1_oversized_line_after_release_is_refused(tree):
 def _spawn_entry(tree, entry_args, *, extra=(), stdin_close_early=False, timeout=120):
     import base64
 
-    reqs = [("binary", tree["entry"]), ("inventory", tree["release"]), ("document", tree["authority"])]
+    reqs = [("binary", tree["entry"], file_sha(tree["entry"])),
+            ("inventory", tree["release"], inventory_digest(tree["release"])),
+            ("document", tree["authority"], file_sha(tree["authority"]))]
     argv_ = argv(tree, reqs, extra=["--hold", "--entry", tree["entry"], "--spawn-entry",
                                     *[x for a in entry_args for x in ("--entry-arg", a)], *extra])
     proc = subprocess.Popen(argv_, stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=0x08000000)
     first = json.loads(proc.stdout.readline())
     assert first["ok"], first
+    # C-Fleet-native-entry-v1: ONE correlated authorize line after the consumer's own check
+    proc.stdin.write(b'{"version":2,"operationId":"op-1","op":"authorize"}\n')
+    proc.stdin.flush()
     events = []
     launched = json.loads(proc.stdout.readline())
     events.append(launched)
@@ -297,6 +304,42 @@ def test_spawn_entry_controller_gone_ends_the_child(tree):
 
 
 def test_spawn_entry_requires_hold(tree):
-    p = subprocess.run(argv(tree, [("binary", tree["entry"])], extra=["--spawn-entry"]), capture_output=True,
+    p = subprocess.run(argv(tree, [("binary", tree["entry"], file_sha(tree["entry"]))], extra=["--spawn-entry"]),
+                       capture_output=True,
                        timeout=60, creationflags=0x08000000)
     assert p.returncode == 2
+
+
+def file_sha(path):
+    import hashlib
+
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def inventory_digest(root):
+    import hashlib
+
+    names = sorted(p.relative_to(root).as_posix().lower() for p in Path(root).rglob("*") if p.is_file())
+    return hashlib.sha256("\n".join(names).encode()).hexdigest()
+
+
+def test_spawn_entry_without_authorize_creates_nothing(tree):
+    """BI1: closing stdin instead of authorizing -> nothing was started."""
+    reqs = [("binary", tree["entry"], file_sha(tree["entry"]))]
+    proc = subprocess.Popen(argv(tree, reqs, extra=["--hold", "--entry", tree["entry"], "--spawn-entry",
+                                                     "--entry-arg", "-n", "--entry-arg", "30"]),
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=0x08000000)
+    assert json.loads(proc.stdout.readline())["ok"]
+    proc.stdin.write(b'{"version":2,"operationId":"someone-else","op":"authorize"}\n')
+    proc.stdin.close()
+    ev = json.loads(proc.stdout.readline())
+    assert ev["event"] == "refused" and "nothing was started" in ev["problem"] and proc.wait(timeout=10) == 2
+
+
+def test_spawn_entry_refuses_a_closure_whose_digest_is_not_expected(tree):
+    """BI1: an ACL-valid but hash-altered entry is refused natively; nothing runs."""
+    reqs = [("binary", tree["entry"], "0" * 64)]
+    p = subprocess.run(argv(tree, reqs, extra=["--hold", "--entry", tree["entry"], "--spawn-entry"]),
+                       capture_output=True, timeout=60, creationflags=0x08000000)
+    reply = json.loads(p.stdout.decode().splitlines()[0])
+    assert p.returncode == 1 and not reply["ok"] and "expected digest" in reply["results"][0]["problem"]

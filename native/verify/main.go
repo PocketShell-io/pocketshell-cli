@@ -47,6 +47,9 @@ func run(args []string, in io.Reader, out *os.File) int {
 	ok := true
 	for i, q := range cfg.Requests {
 		r, id, err := verifyOne(q, roots, sid, keep)
+		if err == nil {
+			err = checkExpect(q, &r) // BI1: natively pinned content
+		}
 		r.Index, r.Kind, r.Path = i, q.Kind, q.Path
 		if err != nil {
 			r = result{Index: i, Kind: q.Kind, Path: q.Path, Root: r.Root, Problem: strp(sanitize(err.Error()))}

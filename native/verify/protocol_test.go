@@ -41,7 +41,7 @@ func TestRelative(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	base := config{OperationID: "op", PrivateRoots: []string{`C:\x\managed-runtime`},
-		Requests: []request{{"document", `C:\x\managed-runtime\authority.json`}}}
+		Requests: []request{{Kind: "document", Path: `C:\x\managed-runtime\authority.json`}}}
 	if _, err := validate(base); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestValidate(t *testing.T) {
 		"no roots":  func(c *config) { c.PrivateRoots = nil },
 		"overlap":   func(c *config) { c.ResourceRoots = []string{`C:\x`} },
 		"dup":       func(c *config) { c.Requests = append(c.Requests, c.Requests[0]) },
-		"kind":      func(c *config) { c.Requests = []request{{"frob", `C:\x\managed-runtime\a`}} },
+		"kind":      func(c *config) { c.Requests = []request{{Kind: "frob", Path: `C:\x\managed-runtime\a`}} },
 		"none":      func(c *config) { c.Requests = nil },
 		"hold":      func(c *config) { c.Hold = true },
 		"entryOnly": func(c *config) { c.Entry = `C:\x\managed-runtime\a.exe` },

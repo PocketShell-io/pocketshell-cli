@@ -28,8 +28,9 @@ const (
 
 // held keeps every verified handle open until release (or process exit).
 type held struct {
-	handles []windows.Handle
-	entry   *fileID
+	handles  []windows.Handle
+	retained []windows.Handle
+	entry    *fileID
 }
 
 type fileID struct {
@@ -39,6 +40,10 @@ type fileID struct {
 }
 
 func (h *held) keep(x windows.Handle) { h.handles = append(h.handles, x) }
+
+// retain: handles that must NOT be closed by closeAll (live/unknown child
+// custody, the owned job); they close only when this process ends.
+func (h *held) retain(x ...windows.Handle) { h.retained = append(h.retained, x...) }
 
 func (h *held) closeAll() {
 	for i := len(h.handles) - 1; i >= 0; i-- {

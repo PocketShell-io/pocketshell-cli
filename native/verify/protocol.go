@@ -14,10 +14,13 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -38,6 +41,7 @@ var (
 	driveRE     = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
 	deviceRE    = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)`)
 	relPartRE   = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+	digestRE    = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
 var kinds = map[string]bool{"document": true, "binary": true, "directory": true, "inventory": true}
@@ -93,8 +97,9 @@ func under(p, root string) bool {
 }
 
 type request struct {
-	Kind string
-	Path string
+	Kind   string
+	Path   string
+	Expect string // expected sha256 (binary/document) or inventoryDigest (inventory); "" = none
 }
 
 type config struct {
@@ -146,11 +151,12 @@ func parseArgs(args []string) (config, error) {
 			cfg.ResourceRoots = append(cfg.ResourceRoots, v)
 		case "--request":
 			v, err = value(&i, args[i])
-			kind, path, ok := strings.Cut(v, "=")
+			head, path, ok := strings.Cut(v, "=")
 			if !ok {
-				return cfg, usageError{"--request is KIND=PATH"}
+				return cfg, usageError{"--request is KIND[:SHA256]=PATH"}
 			}
-			cfg.Requests = append(cfg.Requests, request{kind, path})
+			kind, expect, _ := strings.Cut(head, ":")
+			cfg.Requests = append(cfg.Requests, request{Kind: kind, Path: path, Expect: expect})
 		case "--entry":
 			v, err = value(&i, args[i])
 			cfg.Entry = v
@@ -225,6 +231,13 @@ func validate(cfg config) ([]root, error) {
 			return nil, usageError{"unknown or duplicate request"}
 		}
 		seen[key] = true
+		if q.Expect != "" && (q.Kind == "directory" || !digestRE.MatchString(q.Expect)) {
+			return nil, usageError{"an expected digest is 64 lowercase hex, for document/binary/inventory only"}
+		}
+		// BI1: nothing may execute unless EVERY content request is natively pinned
+		if cfg.SpawnEntry && q.Kind != "directory" && q.Expect == "" {
+			return nil, usageError{"--spawn-entry needs an expected digest on every document/binary/inventory request"}
+		}
 	}
 	if cfg.Hold {
 		found := false
@@ -407,4 +420,55 @@ func decodeACE(b []byte) (aceEntry, error) {
 		text += fmt.Sprintf("-%d", uint32(sid[o])|uint32(sid[o+1])<<8|uint32(sid[o+2])<<16|uint32(sid[o+3])<<24)
 	}
 	return aceEntry{typ: typ, flags: flags, mask: mask, sid: text}, nil
+}
+
+// inventoryDigest is the expected-digest form of an inventory: sha256 of the
+// lower-cased relative paths, sorted, joined by "\n".
+func inventoryDigest(files []string) string {
+	lower := make([]string, len(files))
+	for i, f := range files {
+		lower[i] = strings.ToLower(f)
+	}
+	sort.Strings(lower)
+	sum := sha256.Sum256([]byte(strings.Join(lower, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// checkExpect refuses a verified result whose content is not the expected one.
+func checkExpect(q request, r *result) error {
+	if q.Expect == "" {
+		return nil
+	}
+	switch q.Kind {
+	case "binary", "document":
+		if r.SHA256 == nil || *r.SHA256 != q.Expect {
+			return errors.New("sha256 is not the expected digest")
+		}
+	case "inventory":
+		if inventoryDigest(r.Files) != q.Expect {
+			return errors.New("the inventory is not the expected closure")
+		}
+	}
+	return nil
+}
+
+// parseAuthorize: exactly {"version":2,"operationId":OP,"op":"authorize"}.
+func parseAuthorize(line []byte, operationID string) error {
+	var m struct {
+		Version     int    `json:"version"`
+		OperationID string `json:"operationId"`
+		Op          string `json:"op"`
+	}
+	dec := json.NewDecoder(strings.NewReader(string(line)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&m); err != nil {
+		return errors.New("malformed authorize message")
+	}
+	if rest := strings.TrimSpace(string(line[dec.InputOffset():])); rest != "" {
+		return errors.New("trailing data after the authorize message")
+	}
+	if m.Version != protocolVersion || m.Op != "authorize" || m.OperationID != operationID {
+		return errors.New("not the correlated authorize for this operation")
+	}
+	return nil
 }
