@@ -259,6 +259,13 @@ jobs:
         run: |
           $dumps = "$env:RUNNER_TEMP\dumps"
           New-Item -ItemType Directory -Force $dumps | Out-Null
+          $wer = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting"
+          Get-ItemProperty $wer -ErrorAction SilentlyContinue | Format-List | Out-String
+          New-ItemProperty -Force -Path $wer -Name Disabled -PropertyType DWord -Value 0 | Out-Null
+          New-ItemProperty -Force -Path $wer -Name DontShowUI -PropertyType DWord -Value 1 | Out-Null
+          Set-Service WerSvc -StartupType Manual -ErrorAction SilentlyContinue
+          Start-Service WerSvc -ErrorAction SilentlyContinue
+          Get-Service WerSvc | Format-List Name, Status, StartType | Out-String
           foreach ($img in "sshd.exe", "sshd-session.exe", "sshd-auth.exe", "ssh-shellhost.exe", "sftp-server.exe", "bash.exe", "a.exe", "aplexer.exe") {
             $k = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$img"
             New-Item -Force $k | Out-Null
