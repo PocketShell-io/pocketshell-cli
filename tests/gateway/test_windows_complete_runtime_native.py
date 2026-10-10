@@ -201,11 +201,11 @@ def test_new_machine_complete_runtime(closure, tmp_path):
 
         # 4a. non-PTY EXEC requests: the command line travels as UTF-8 and sshd hands it to the
         # default shell as Unicode (typing it on cmd's stdin would go through the OEM code page and
-        # mangle the non-ASCII profile path). cmd /c strips one pair of outer quotes, so the whole
-        # command is wrapped once.
+        # mangle the non-ASCII profile path). Win32-OpenSSH already wraps the command for cmd /c
+        # (run 38045489674: an extra outer pair made cmd treat the whole line as one name).
         def exec_(command):
             p = subprocess.run([str(SSH_DIR / "ssh.exe"), *base, "-p", str(port), f"{user}@127.0.0.1",
-                                f'"{command}"'], capture_output=True, timeout=120, stdin=subprocess.DEVNULL)
+                                command], capture_output=True, timeout=120, stdin=subprocess.DEVNULL)
             out_ = p.stdout.decode("utf-8", "replace")
             print("exec:", ascii(command), "->", p.returncode, ascii(out_[-3000:]),
                   ascii(p.stderr.decode("utf-8", "replace")[-1500:]))
