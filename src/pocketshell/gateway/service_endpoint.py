@@ -58,7 +58,14 @@ SERVICING_IMAGES = ("c:\\windows\\system32\\cmd.exe", "c:\\windows\\system32\\co
 # variable. EMPTY until the productized guardian and the manifests have been
 # reviewed (final candidate: 6cf7ae85…, cab601e2…, e92bbe02…).
 ALLOWED_ENDPOINT_MANIFEST_SHA256: frozenset = frozenset()
-ALLOWED_GUARDIAN_SOURCES: frozenset = frozenset()
+# Setup ABI v3 (Option B): the ONE generic reviewed trio, compiled once. Per-host
+# manifests are trusted only through the installed authority record
+# (check_trust_authority), never by a compiled per-manifest digest.
+ALLOWED_GUARDIAN_SOURCES: frozenset = frozenset({(
+    "6cf7ae85ad21b23496e7187da7e3bb4f171adef5f63edd2fd01f6ce6435bd047",
+    "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
+    "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
+)})
 
 MANIFEST_KEYS = frozenset(
     {"version", "ownerSID", "root", "state", "config", "port", "daemon", "python", "pins",
@@ -313,6 +320,50 @@ def check_trust(m: GuardianManifest, *, file_sha256: Callable[[str], str]) -> No
             "the pinned guardian.py/native_api.py/policy.py are not a reviewed guardian/native_api/policy "
             "source triple (ALLOWED_GUARDIAN_SOURCES)"
         )
+    for path, digest in m.pins.items():
+        if file_sha256(path) != digest:
+            raise ServiceError(f"pinned endpoint file {sanitize(path)} does not match the manifest")
+
+
+def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable[[str], str],
+                          release_pins: Optional[dict] = None) -> None:
+    """Setup ABI v3 trust: the installed authority (receipt v3) records THIS
+    manifest. The fixed managed-runtime layout, the generic reviewed trio,
+    every pin re-hashed on disk, and (``release_pins``: casefolded release
+    path -> catalog sha256) every release pin equal to its catalog row.
+    No structural-only acceptance and no compiled per-host digest."""
+    e = receipt.get("endpoint") if isinstance(receipt, dict) and receipt.get("version") == 3 else None
+    if not isinstance(e, dict) or set(e) != {"root", "manifest", "manifestSHA256", "config", "state"}:
+        raise ServiceError("no installed authority (receipt v3) records an endpoint manifest; run `agent install`")
+    if m.sha256 != e["manifestSHA256"]:
+        raise ServiceError(f"endpoint manifest sha256 {m.sha256[:12]}… is not the one recorded by the installed "
+                           "authority")
+    root = e["root"]
+    if not isinstance(root, str) or ntpath.basename(ntpath.normpath(root)).casefold() != "managed-runtime":
+        raise ServiceError("the authority's endpoint root is not managed-runtime")
+    fixed = {"manifest": ntpath.join(root, "endpoint", "endpoint-manifest.json"),
+             "config": ntpath.join(root, "endpoint", "sshd.conf"), "state": ntpath.join(root, "endpoint", "state")}
+    actual = {"manifest": m.path, "config": m.config, "state": m.state}
+    for key, want in fixed.items():
+        if not isinstance(e[key], str) or ntpath.normcase(ntpath.normpath(e[key])) != ntpath.normcase(want) \
+                or ntpath.normcase(actual[key]) != ntpath.normcase(want):
+            raise ServiceError(f"the endpoint {key} is not the authority's fixed {key} below managed-runtime")
+    if ntpath.normcase(m.root) != ntpath.normcase(ntpath.normpath(root)):
+        raise ServiceError("the manifest root is not the authority's managed-runtime root")
+    binding = receipt.get("binding") or {}
+    if not isinstance(binding, dict) or binding.get("manifestSHA256") != e["manifestSHA256"] \
+            or not isinstance(binding.get("manifest"), str) \
+            or ntpath.normcase(ntpath.normpath(binding["manifest"])) != ntpath.normcase(fixed["manifest"]):
+        raise ServiceError("the authority binding does not name its endpoint manifest")
+    if m.source_digests() not in ALLOWED_GUARDIAN_SOURCES:
+        raise ServiceError("the pinned guardian.py/native_api.py/policy.py are not the reviewed generic guardian "
+                           "source trio (ALLOWED_GUARDIAN_SOURCES)")
+    if release_pins is not None:
+        release = ntpath.normcase(ntpath.join(ntpath.normpath(root), "releases")) + "\\"
+        for path, digest in m.pins.items():
+            key = ntpath.normcase(path)
+            if key.startswith(release) and release_pins.get(key) != digest:
+                raise ServiceError(f"pinned release file {sanitize(path)} does not match its catalog row")
     for path, digest in m.pins.items():
         if file_sha256(path) != digest:
             raise ServiceError(f"pinned endpoint file {sanitize(path)} does not match the manifest")
