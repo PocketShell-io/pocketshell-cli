@@ -102,7 +102,23 @@ def run_spawn(probe_release, args, timeout_s, *, expect=None, entry=None):
     code = proc.wait(timeout=120)
     proc.stdin.close()
     print(code, [line.get("event") for line in lines[1:]], json.dumps(lines[1:])[:800])
+    for event in lines[1:]:
+        check_event(event)  # every production event matches the frozen §16 schema
     return code, lines
+
+
+SCHEMA = json.loads((Path(__file__).parent / "fixtures" / "ordinary-v2-authority.schema.json").read_text())
+
+
+def check_event(event):
+    variants = {v["properties"]["event"]["const"]: v for v in SCHEMA["$defs"]["nativeEntryEvent"]["oneOf"]}
+    v = variants[event["event"]]
+    assert set(v["required"]) <= set(event) <= set(v["properties"]), (event, v["required"])
+    for key, rule in v["properties"].items():
+        if key in event and "const" in rule:
+            assert event[key] == rule["const"], (key, event)
+        if key in event and "enum" in rule:
+            assert event[key] in rule["enum"], (key, event)
 
 
 def test_nb2_timeout_ends_the_whole_tree_including_python(probe_release):

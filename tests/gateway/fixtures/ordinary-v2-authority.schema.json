@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "pocketshell:ordinary-v2-authority:v4.1",
-  "title": "PocketShell ordinary-v2 installed-runtime authority (user-background-api-agreement v4.1)",
+  "$id": "pocketshell:ordinary-v2-authority:v5",
+  "title": "PocketShell ordinary-v2 installed-runtime authority + native entry ABI (user-background-api-agreement v5, \u00a716)",
   "$defs": {
     "sha256": {
       "type": "string",
@@ -809,6 +809,432 @@
         }
       },
       "$comment": "OPEN (additive) by design: JSON v1 adds fields over time. The state and exit mapping is frozen in agreement \u00a711.6. These are fragments; the consumer's own closed parser decides acceptance."
+    },
+    "nativeRequestsLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "operationId",
+        "requests"
+      ],
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        "requests": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "path"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "document",
+                  "binary",
+                  "directory",
+                  "inventory"
+                ]
+              },
+              "path": {
+                "$ref": "#/$defs/absPath"
+              },
+              "expect": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      },
+      "$comment": "--requests-stdin: the FIRST stdin line, at most 1 MiB, exactly one JSON value. In --spawn-entry mode every document/binary/inventory request MUST carry expect. For binary/document, expect is the content sha256. For inventory, it is the sha256 of the lower-cased relative paths, sorted, joined by LF. Directories are unpinned."
+    },
+    "nativeAuthorize": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "operationId",
+        "op"
+      ],
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "op": {
+          "const": "authorize"
+        }
+      },
+      "$comment": "ONE line, written only after the consumer validated the complete verified reply. Nothing is created before it."
+    },
+    "nativeEntryEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "operationId",
+            "event",
+            "problem",
+            "pid",
+            "creationFILETIME",
+            "imageMatches"
+          ],
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "problem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 600
+            },
+            "event": {
+              "const": "launched"
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "creationFILETIME": {
+              "$ref": "#/$defs/birth"
+            },
+            "imageMatches": {
+              "const": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "operationId",
+            "event",
+            "problem",
+            "pid",
+            "creationFILETIME",
+            "exitCode",
+            "stdoutBase64",
+            "stdoutBytes",
+            "stderrTail"
+          ],
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "problem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 600
+            },
+            "event": {
+              "const": "exited"
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "creationFILETIME": {
+              "$ref": "#/$defs/birth"
+            },
+            "exitCode": {
+              "type": "integer"
+            },
+            "stdoutBase64": {
+              "type": "string",
+              "maxLength": 87384
+            },
+            "stdoutBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65536
+            },
+            "stderrTail": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "operationId",
+            "event",
+            "problem"
+          ],
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "problem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 600
+            },
+            "event": {
+              "const": "released"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "operationId",
+            "event",
+            "problem",
+            "childCreated"
+          ],
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "problem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 600
+            },
+            "event": {
+              "const": "not-started"
+            },
+            "childCreated": {
+              "const": false
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "operationId",
+            "event",
+            "problem",
+            "pid",
+            "phase"
+          ],
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "problem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 600
+            },
+            "event": {
+              "const": "cleaned"
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "creationFILETIME": {
+              "$ref": "#/$defs/birth"
+            },
+            "phase": {
+              "const": "suspended"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "operationId",
+            "event",
+            "problem",
+            "phase",
+            "authority"
+          ],
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "problem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 600
+            },
+            "event": {
+              "const": "unknown"
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "creationFILETIME": {
+              "$ref": "#/$defs/birth"
+            },
+            "phase": {
+              "enum": [
+                "spawn",
+                "suspended",
+                "resume",
+                "running"
+              ]
+            },
+            "authority": {
+              "const": "verifier-held-handles"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "operationId",
+            "event",
+            "problem"
+          ],
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "problem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 600
+            },
+            "event": {
+              "const": "refused"
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "creationFILETIME": {
+              "$ref": "#/$defs/birth"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "operationId",
+            "event",
+            "problem"
+          ],
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "problem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 600
+            },
+            "event": {
+              "const": "closed"
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "creationFILETIME": {
+              "$ref": "#/$defs/birth"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "operationId",
+            "event",
+            "problem"
+          ],
+          "properties": {
+            "version": {
+              "const": 2
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "problem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 600
+            },
+            "event": {
+              "const": "timeout"
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "creationFILETIME": {
+              "$ref": "#/$defs/birth"
+            }
+          }
+        }
+      ],
+      "$comment": "Lines after the verify reply in --spawn-entry mode. See agreement \u00a716.3 for order and exit codes. A missing creationFILETIME is never fabricated."
     }
   },
   "$comment": "Closed (additionalProperties false): catalog, receipt and its sub-objects, launch, verifyReply. Open, additive fragments: attestation, stoppedAttestation, agentDocumentV1."
