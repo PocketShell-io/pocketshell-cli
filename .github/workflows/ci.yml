@@ -267,6 +267,8 @@ jobs:
             New-ItemProperty -Force -Path $k -Name DumpCount -PropertyType DWord -Value 5 | Out-Null
           }
       - name: Complete runtime (new machine, ordinary user)
+        env:
+          PYTHONIOENCODING: utf-8  # the runner console is cp1252; the test prints Unicode paths/output
         run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_complete_runtime_native.py
       - name: Crash evidence (Application events 1000/1001, dumps)
         if: ${{ always() }}

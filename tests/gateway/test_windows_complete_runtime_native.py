@@ -36,6 +36,9 @@ import sys
 import uuid
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):  # never let a diagnostic print fail the test on a cp1252 console
+    sys.stdout.reconfigure(errors="backslashreplace")
+
 import pytest
 
 pytestmark = pytest.mark.skipif(
