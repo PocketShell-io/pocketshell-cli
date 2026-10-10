@@ -104,3 +104,42 @@ func TestContextMeasurementErrorIsNeverSuccess(t *testing.T) {
 		t.Fatalf("%d %v", code, reply)
 	}
 }
+
+// --- run 38014193268: ProgramData came back UNEXPANDED ("%SystemDrive%\ProgramData") --
+
+func TestExpandMeasured(t *testing.T) {
+	vars := map[string]string{"SYSTEMDRIVE": "C:", "SYSTEMROOT": `C:\Windows`, "USERPROFILE": `C:\Users\u`}
+	for in, want := range map[string]string{
+		`%SystemDrive%\ProgramData`:   `C:\ProgramData`,
+		`%USERPROFILE%\AppData\Local`: `C:\Users\u\AppData\Local`,
+		`C:\Users\u\AppData\Local`:    `C:\Users\u\AppData\Local`,
+		`%systemroot%\..\x`:           `C:\Windows\..\x`, // expansion only; the validator refuses '..'
+	} {
+		got, err := expandMeasured(in, vars)
+		if err != nil || got != want {
+			t.Errorf("%q -> %q %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{`%ALLUSERSPROFILE%\x`, `%SystemDrive\x`, `%%\x`} {
+		if _, err := expandMeasured(bad, vars); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+func TestPathClassNamesTheProblemWithoutTheValue(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                  "empty",
+		`%SystemDrive%\x`:   "unexpanded",
+		`relative\x`:        "relative",
+		`C:`:                "drive-only",
+		`C:\x\`:             "trailing-separator",
+		`C:\Users\RUNNER~1`: "short-name",
+		`\\?\C:\x`:          "extended-prefix",
+		`\\server\share`:    "unc",
+	} {
+		if got := pathClass(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 // §16.7 the read-only CONTEXT operation: `pocketshell-verify.exe context
@@ -102,8 +103,8 @@ func checkContext(c nativeContext) error {
 		{"ProgramData", c.Windows.ProgramData}, {"USERPROFILE", c.Windows.USERPROFILE},
 		{"LOCALAPPDATA", c.Windows.LOCALAPPDATA}} {
 		if !absolute(f.value) {
-			// source-bound diagnostics: WHICH folder and its measured value
-			return fmt.Errorf("the measured %s %q is not a plain drive-absolute path", f.name, f.value)
+			// source-bound diagnostics: WHICH folder and its value CLASS (no value)
+			return fmt.Errorf("the measured %s is not a plain drive-absolute path (%s)", f.name, pathClass(f.value))
 		}
 	}
 	return nil
@@ -124,4 +125,53 @@ func elevationFrom(query func(buf []byte) (uint32, error)) (bool, error) {
 		return false, errors.New("TokenElevation returned an unexpected length")
 	}
 	return buf[0]|buf[1]|buf[2]|buf[3] != 0, nil
+}
+
+// expandMeasured expands ONLY %SystemDrive%, %SystemRoot% and %USERPROFILE%
+// with NATIVELY measured values (case-insensitive); any other or malformed
+// %...% is an error — the inherited environment is never consulted.
+func expandMeasured(value string, vars map[string]string) (string, error) {
+	var b strings.Builder
+	for {
+		i := strings.IndexByte(value, '%')
+		if i < 0 {
+			b.WriteString(value)
+			return b.String(), nil
+		}
+		j := strings.IndexByte(value[i+1:], '%')
+		if j <= 0 {
+			return "", errors.New("malformed %variable%")
+		}
+		name := strings.ToUpper(value[i+1 : i+1+j])
+		v, ok := vars[name]
+		if !ok {
+			return "", fmt.Errorf("%%%s%% is not a natively measured variable", name)
+		}
+		b.WriteString(value[:i])
+		b.WriteString(v)
+		value = value[i+2+j:]
+	}
+}
+
+// pathClass names why a path is not plain (for diagnostics; never the value).
+func pathClass(p string) string {
+	switch {
+	case p == "":
+		return "empty"
+	case strings.Contains(p, "%"):
+		return "unexpanded"
+	case strings.HasPrefix(p, `\\?\`) || strings.HasPrefix(p, `\\.\`):
+		return "extended-prefix"
+	case strings.HasPrefix(p, `\\`):
+		return "unc"
+	case driveOnlyRE.MatchString(p):
+		return "drive-only"
+	case !driveRE.MatchString(p):
+		return "relative"
+	case strings.HasSuffix(p, `\`) || strings.HasSuffix(p, "/"):
+		return "trailing-separator"
+	case strings.Contains(p, "~"):
+		return "short-name"
+	}
+	return "invalid-component"
 }

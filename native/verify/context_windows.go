@@ -77,6 +77,21 @@ func measureContext() (nativeContext, error) {
 	if c.Windows.ProgramData == "" || c.Windows.LOCALAPPDATA == "" {
 		return c, errors.New("the user's default environment block lacks ProgramData/LOCALAPPDATA")
 	}
+	// The block can carry REG_EXPAND_SZ values UNEXPANDED (measured on
+	// windows-latest, run 38014193268: ProgramData "%SystemDrive%\ProgramData").
+	// Expand ONLY the natively measured variables; anything else refuses.
+	vars := map[string]string{"SYSTEMDRIVE": c.Windows.SystemDrive, "SYSTEMROOT": c.Windows.SystemRoot,
+		"USERPROFILE": c.Windows.USERPROFILE}
+	for _, f := range []struct {
+		name string
+		dst  *string
+	}{{"ProgramData", &c.Windows.ProgramData}, {"LOCALAPPDATA", &c.Windows.LOCALAPPDATA}} {
+		v, err := expandMeasured(*f.dst, vars)
+		if err != nil {
+			return c, fmt.Errorf("the measured %s cannot be expanded natively: %v", f.name, err)
+		}
+		*f.dst = v
+	}
 	return c, nil
 }
 
