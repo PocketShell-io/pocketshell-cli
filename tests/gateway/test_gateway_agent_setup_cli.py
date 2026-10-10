@@ -37,8 +37,8 @@ def authority(agent, monkeypatch):  # noqa: F811
         assert path == AUTHORITY
         return state["receipt"], state["sha"], ROWS
 
-    def trust(m, receipt, *, file_sha256, release_pins=None):
-        state["calls"].append((m.path, receipt, release_pins))
+    def trust(m, receipt, *, file_sha256, closure):
+        state["calls"].append((m.path, receipt, closure))
         if state.get("refuse"):
             raise ep.ServiceError(state["refuse"])
 

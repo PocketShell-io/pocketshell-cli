@@ -170,12 +170,12 @@ def _authority_trust(m, authority: str, user_sid: str, api) -> str:
     from pocketshell.gateway import service_windows as win
 
     try:
-        receipt, authority_sha, rows = eps.load_authority(authority, user_sid, _native_paths(api))
+        receipt, authority_sha, closure = eps.load_authority(authority, user_sid, _native_paths(api))
         recorded = (receipt.get("endpoint") or {}).get("manifest")
         if not isinstance(recorded, str) or not win._same_path(recorded, m.path):
             raise inst.InstallError("authority-invalid", "--manifest is not the installed authority's "
                                     "endpoint.manifest")
-        ep.check_trust_authority(m, receipt, file_sha256=win.file_sha256, release_pins=rows)
+        ep.check_trust_authority(m, receipt, file_sha256=win.file_sha256, closure=closure)
     except inst.InstallError as exc:
         raise AgentError(exc.code, sanitize(str(exc), 600)) from None
     except ServiceError as exc:

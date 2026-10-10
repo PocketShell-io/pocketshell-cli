@@ -30,7 +30,7 @@ import time
 
 from pocketshell.gateway import pins as gateway_pins
 from pocketshell.gateway.service_agent_install import (
-    DEVICE_RE, ENDPOINT_ROLES, SERVER_RE, SID_RE, VERIFIER, InstallError, _abs, _copy_release, _same,
+    CATALOG3_MAX_BYTES, DEVICE_RE, ENDPOINT_ROLES, SERVER_RE, SID_RE, VERIFIER, InstallError, _abs, _copy_release, _same,
     _verify_staged, parse_catalog, role_file,
 )
 from pocketshell.gateway.service_common import ServiceError, parse_show, sanitize
@@ -59,6 +59,19 @@ def layout(user_data: str, release: str) -> dict:
             "backendConfig": ntpath.join(ep, BACKEND_CONFIG_NAME), "state": state,
             "stateTmp": ntpath.join(state, "tmp"), "pidFile": ntpath.join(state, "sshd.pid"),
             "backend": ntpath.join(ep, "backend"), "catalogs": ntpath.join(root, "catalogs")}
+
+
+def catalog_closure(root: str, catalog: dict) -> dict:
+    """The recorded catalog's exact installed closure for trust validation:
+    {"pins": casefolded installed path -> sha256, "roles": role -> casefolded
+    installed path} (every non-module role, exactly one each)."""
+    release = ntpath.join(root, "releases", catalog["release"])
+
+    def at(f):
+        return ntpath.normcase(ntpath.join(release, *f["path"].split("/")))
+
+    return {"pins": {at(f): f["sha256"] for f in catalog["files"]},
+            "roles": {f["role"]: at(f) for f in catalog["files"] if f["role"] != "module"}}
 
 
 def catalog_copy(root: str, catalog_sha256: str) -> str:
@@ -274,12 +287,12 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
         raise InstallError("environment", "the account name cannot be an sshd AllowUsers entry")
     inputs = parse_endpoint_inputs(endpoint_inputs)
     try:
-        cat = paths.file(catalog_path, owner_sid, private=False, max_bytes=64 * 1024,
+        cat = paths.file(catalog_path, owner_sid, private=False, max_bytes=CATALOG3_MAX_BYTES,
                          root=ntpath.dirname(catalog_path))
     except Exception as exc:  # noqa: BLE001
         raise InstallError("catalog-invalid", f"cannot read the catalog: {sanitize(str(exc), 300)}") from None
     if cat["bytes"] is None:
-        raise InstallError("catalog-invalid", "the catalog is larger than 64 KiB")
+        raise InstallError("catalog-invalid", "the catalog is larger than 8 MiB")
     catalog = parse_catalog(cat["bytes"])
     if catalog["version"] != 3:
         raise InstallError("catalog-invalid", "setup ABI v3 needs a catalog v3 (endpoint roles)")
@@ -327,7 +340,7 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
                          inputs=inputs, folders=folders, system_roles=system_roles)
     if len(generated["manifest"]) > ep.MAX_MANIFEST_BYTES:
         raise InstallError("endpoint-layout", f"the generated manifest is {len(generated['manifest'])} bytes for "
-                           f"{len(catalog['files'])} catalog rows: over the 6cf guardian's 64 KiB manifest bound")
+                           f"{len(catalog['files'])} catalog rows: over the guardian's {ep.MAX_MANIFEST_BYTES} byte manifest bound")
     m = ep.parse_manifest(generated["manifest"], lay["manifest"])  # the guardian's own schema rules
     ep.config_guard(generated["config"].decode("ascii"), m)
     manifest_sha = hashlib.sha256(generated["manifest"]).hexdigest()
@@ -343,7 +356,10 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
         "location": {"root": lay["root"], "ownerSid": owner_sid, "protectedDACL": True,
                      "allowTrustees": [owner_sid], "reparseFree": True, "verifier": VERIFIER},
         "installer": {"cliVersion": cli_version, "cliCommit": catalog["source"],
-                      "installedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))},
+                      "installedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                      # §16.14: the whole actual closure, measured (UTF-8 bytes)
+                      "closure": {"rows": len(catalog["files"]), "catalogBytes": len(cat["bytes"]),
+                                  "manifestBytes": len(generated["manifest"]), "pins": len(m.pins)}},
         "endpoint": {"root": lay["root"], "manifest": lay["manifest"], "manifestSHA256": manifest_sha,
                      "config": lay["config"], "state": lay["state"],
                      "systemReferences": system_references(system_roles)},
@@ -377,7 +393,7 @@ MAX_AUTHORITY = 64 * 1024
 
 
 def load_authority(authority: str, owner_sid: str, paths) -> tuple:
-    """(receipt v3, authority sha256, release_pins): the installed authority,
+    """(receipt v3, authority sha256, closure): the installed authority,
     read handle-validated from the owner-only managed-runtime root, plus the
     catalog rows of its release (casefolded installed path -> sha256) from
     the installed catalog copy the receipt's catalogSHA256 names."""
@@ -409,8 +425,8 @@ def load_authority(authority: str, owner_sid: str, paths) -> tuple:
     if not isinstance(r["catalogSHA256"], str) or not re.fullmatch(r"[a-f0-9]{64}", r["catalogSHA256"]):
         raise bad("catalogSHA256")
     try:
-        copy = paths.file(catalog_copy(root, r["catalogSHA256"]), owner_sid, private=True, max_bytes=MAX_AUTHORITY,
-                          private_root=root)
+        copy = paths.file(catalog_copy(root, r["catalogSHA256"]), owner_sid, private=True,
+                          max_bytes=CATALOG3_MAX_BYTES, private_root=root)
     except Exception as exc:  # noqa: BLE001
         raise bad(f"the installed catalog copy is missing or not owner-only ({sanitize(str(exc), 200)})") from None
     if copy["sha256"] != r["catalogSHA256"] or copy["bytes"] is None:
@@ -418,6 +434,4 @@ def load_authority(authority: str, owner_sid: str, paths) -> tuple:
     catalog = parse_catalog(copy["bytes"])
     if catalog["version"] != 3 or catalog["release"] != r["release"]:
         raise bad("the recorded catalog is not this release's catalog v3")
-    release = ntpath.join(root, "releases", catalog["release"])
-    pins = {ntpath.normcase(ntpath.join(release, *f["path"].split("/"))): f["sha256"] for f in catalog["files"]}
-    return r, got["sha256"], pins
+    return r, got["sha256"], catalog_closure(root, catalog)

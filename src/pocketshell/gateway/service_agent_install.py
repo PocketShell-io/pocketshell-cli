@@ -29,12 +29,17 @@ VERIFY_VERSION = 2
 API_NAME = "ordinary-v2"
 PLATFORM = "win32-x64"
 VERIFIER = "pocketshell gateway agent verify-paths"
-GUARDIAN_ABI = "6cf7ae85"
+GUARDIAN_ABI = "6cf7ae85"           # catalog v2
+GUARDIAN3_ABI = "e862645d"          # catalog v3: the successor with the agreed 8 MiB manifest bound (§16.14)
 SINGLE_ROLES = ("cli", "interpreter", "guardian", "native-api", "policy", "helper")
 ROLES = (*SINGLE_ROLES, "module")
-MAX_DOC = 1024 * 1024
+MAX_DOC = 1024 * 1024              # catalog v2 (unchanged)
 MAX_FILE = 256 * 1024 * 1024
-MAX_FILES = 4096
+MAX_FILES = 4096                   # catalog v2 (unchanged)
+# §16.14 agreed full-closure bounds (catalog v3; Fleet d3d3b455; native verifier;
+# successor guardian): measured whole closure ~9 777 rows / 1.61 MB catalog.
+CATALOG3_MAX_FILES = 16384
+CATALOG3_MAX_BYTES = 8 << 20
 ENV_KEYS = ("SystemDrive", "SystemRoot", "ProgramData", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP")
 
 SHA_RE = re.compile(r"^[a-f0-9]{64}$")
@@ -75,8 +80,8 @@ def _same(a: str, b: str) -> bool:
 
 def parse_catalog(data: bytes) -> dict:
     """Validate catalog v2 (schema + cross-field rules); return it."""
-    if len(data) > MAX_DOC:
-        raise InstallError("catalog-invalid", "the catalog is larger than 1 MiB")
+    if len(data) > CATALOG3_MAX_BYTES:
+        raise InstallError("catalog-invalid", "the catalog is larger than 8 MiB")
     try:
         c = json.loads(data.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
@@ -87,6 +92,9 @@ def parse_catalog(data: bytes) -> dict:
     if c["version"] not in CATALOG_VERSIONS or c["platform"] != PLATFORM or c["api"] != API_NAME:
         raise bad(f"version/platform/api must be {CATALOG_VERSIONS}/{PLATFORM}/{API_NAME}")
     v3 = c["version"] == 3
+    if not v3 and len(data) > MAX_DOC:
+        raise InstallError("catalog-invalid", "the catalog v2 is larger than 1 MiB")
+    max_files = CATALOG3_MAX_FILES if v3 else MAX_FILES
     roles_allowed = (*SINGLE_ROLES, *ENDPOINT_ROLES, "module") if v3 else ROLES
     if not isinstance(c["release"], str) or not RELEASE_RE.match(c["release"]):
         raise bad("release")
@@ -99,7 +107,8 @@ def parse_catalog(data: bytes) -> dict:
     if not isinstance(lin["cliVersion"], str) or not VERSION_RE.match(lin["cliVersion"]) \
             or lin["cliCommit"] != c["source"] or lin["agentApi"] != 1:
         raise bad("lineage cliVersion/cliCommit/agentApi")
-    if not _exact(lin["guardian"], ["abi", "sourceSHA256"]) or lin["guardian"]["abi"] != GUARDIAN_ABI \
+    if not _exact(lin["guardian"], ["abi", "sourceSHA256"]) \
+            or lin["guardian"]["abi"] != (GUARDIAN3_ABI if v3 else GUARDIAN_ABI) \
             or not _exact(lin["nativeApi"], ["sourceSHA256"]) \
             or not _exact(lin["policy"], ["version", "sourceSHA256"]) \
             or type(lin["policy"]["version"]) is not int or lin["policy"]["version"] < 1 \
@@ -111,8 +120,8 @@ def parse_catalog(data: bytes) -> dict:
             or not isinstance(lin["lockSHA256"], str) or not SHA_RE.match(lin["lockSHA256"]):
         raise bad("lineage pins")
     files = c["files"]
-    if not isinstance(files, list) or not 7 <= len(files) <= MAX_FILES:
-        raise bad("files must list 7..4096 entries")
+    if not isinstance(files, list) or not 7 <= len(files) <= max_files:
+        raise bad(f"files must list 7..{max_files} entries")
     seen, roles = set(), {}
     for f in files:
         if not _exact(f, ["path", "sha256", "role"]) or not isinstance(f["path"], str) \
@@ -431,9 +440,9 @@ def known_folders() -> dict:
 OPERATION_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 VERIFY_KINDS = ("document", "binary", "directory", "inventory", "system-reference")
 SYSTEM_REFERENCES = ("cmd.exe", "conhost.exe")  # agreement §16.13 (guardian 6cf servicing roles)
-MAX_REQUESTS = 512
-MAX_DOCUMENT = 64 * 1024          # bytes returned per document (the adapter's bound)
-MAX_REPLY = 1024 * 1024           # the verifier's own channel, independent of the agent adapter
+MAX_REQUESTS = 32768              # §16.14 (native verifier maxRequests)
+MAX_DOCUMENT = 8 << 20            # bytes returned per document (native maxDocument)
+MAX_REPLY = 32 << 20              # the verifier's own channel (native maxReply)
 
 
 def _under(path: str, root: str) -> bool:
@@ -450,7 +459,7 @@ def verify_paths(*, owner_sid: str, operation_id: str, private_roots=(), resourc
     root: under a PRIVATE root it must have the owner-only protected shape;
     under a RESOURCES root (the Desktop install) it is read reparse-free by
     handle and anchored by digest only. ``document`` returns bounded bytes
-    (.json, <= 64 KiB); ``binary`` returns size + sha256 only (never bytes).
+    (.json, <= 8 MiB); ``binary`` returns size + sha256 only (never bytes).
     Results correspond 1:1, in order, to the requests (``index``)."""
     def reply(ok, results, problem=None):
         doc = {"version": VERIFY_VERSION, "operationId": operation_id, "ownerSid": owner_sid, "ok": ok,
@@ -506,7 +515,7 @@ def verify_paths(*, owner_sid: str, operation_id: str, private_roots=(), resourc
                 if not got["canonicalPath"] or not _same(got["canonicalPath"], path):
                     raise ServiceError("the opened object is not the requested path")
                 if kind == "document" and got["bytes"] is None:
-                    raise ServiceError("document larger than 64 KiB")
+                    raise ServiceError("document larger than 8 MiB")
                 item.update(canonicalPath=got["canonicalPath"], size=got["size"], sha256=got["sha256"],
                             bytesBase64=base64.b64encode(got["bytes"]).decode() if kind == "document" else None)
             elif kind == "directory":
@@ -525,7 +534,7 @@ def verify_paths(*, owner_sid: str, operation_id: str, private_roots=(), resourc
     ok = all(r["ok"] for r in results)
     doc = reply(ok, results)
     if len(json.dumps(doc)) > MAX_REPLY:
-        return reply(False, [], "the reply would exceed 1 MiB; split the request"), 1
+        return reply(False, [], "the reply would exceed 32 MiB"), 1
     return doc, 0 if ok else 1
 
 

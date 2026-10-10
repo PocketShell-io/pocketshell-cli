@@ -328,9 +328,11 @@ def test_verify_v2_refusals(requests, code):
 
 def test_verify_v2_refuses_large_documents_owner_and_root_problems():
     paths = verify_fixture()
-    paths.put(PRIV + "\\big.json", b"x" * (64 * 1024 + 1))
+    paths.put(PRIV + "\\at.json", b"x" * (8 << 20))  # §16.14: exactly the agreed document bound
+    assert vp(paths, [("document", PRIV + "\\at.json")])[1] == 0
+    paths.put(PRIV + "\\big.json", b"x" * ((8 << 20) + 1))
     reply, code = vp(paths, [("document", PRIV + "\\big.json")])
-    assert code == 1 and "64 KiB" in reply["results"][0]["problem"]
+    assert code == 1 and "8 MiB" in reply["results"][0]["problem"]
     assert vp(paths, [("directory", PRIV)], current_sid="S-1-5-21-1-2-3-4")[1] == 1
     assert vp(paths, [("directory", PRIV)], operation_id="")[1] == 2
     assert vp(paths, [("directory", PRIV)], resources_roots=[PRIV + "\\releases"])[1] == 2  # overlap

@@ -43,7 +43,7 @@ ENDPOINT_LEAF = "GatewayEndpoint"
 ENDPOINT_BOOT_DELAY = "PT10S"  # the link keeps PT30S (soft ordering only)
 CHECK_ONLY_TIME_LIMIT = "PT5M"
 BOOTSTRAP_FLAGS = ("-I", "-S", "-B")  # isolated, no site, no bytecode writes
-MAX_MANIFEST_BYTES = 64 * 1024
+MAX_MANIFEST_BYTES = 8 << 20  # §16.14: the successor guardian's agreed manifest bound (whole closure pinned)
 MAX_PROTOCOL_BYTES = 64 * 1024
 MAX_STOP_BYTES = 4096
 SOURCE_NAMES = ("guardian.py", "native_api.py", "policy.py")
@@ -61,8 +61,10 @@ ALLOWED_ENDPOINT_MANIFEST_SHA256: frozenset = frozenset()
 # Setup ABI v3 (Option B): the ONE generic reviewed trio, compiled once. Per-host
 # manifests are trusted only through the installed authority record
 # (check_trust_authority), never by a compiled per-manifest digest.
+# The trio is the e862645d successor of 6cf7ae85 (release/inputs/guardian-e862645d:
+# one line, the agreed 8 MiB manifest bound of §16.14; native_api/policy unchanged).
 ALLOWED_GUARDIAN_SOURCES: frozenset = frozenset({(
-    "6cf7ae85ad21b23496e7187da7e3bb4f171adef5f63edd2fd01f6ce6435bd047",
+    "e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
     "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
     "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
 )})
@@ -161,7 +163,7 @@ def parse_manifest(data: bytes, manifest_path: str) -> GuardianManifest:
     manifest and its three sources below root (path layout: the three
     sources sit together, HERE = the guardian's directory)."""
     if len(data) > MAX_MANIFEST_BYTES:
-        raise _fail("larger than 64 KiB")
+        raise _fail("larger than 8 MiB")
     try:
         m = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -351,12 +353,16 @@ def system_references(refs, system_root) -> dict:
 
 
 def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable[[str], str],
-                          release_pins: Optional[dict] = None) -> None:
+                          closure: dict) -> None:
     """Setup ABI v3 trust: the installed authority (receipt v3) records THIS
-    manifest. The fixed managed-runtime layout, the generic reviewed trio,
-    every pin re-hashed on disk, and (``release_pins``: casefolded release
-    path -> catalog sha256) every release pin equal to its catalog row.
-    No structural-only acceptance and no compiled per-host digest."""
+    manifest, in the fixed managed-runtime layout, with the generic reviewed
+    trio. ``closure`` is the recorded catalog's exact closure
+    (service_agent_endpoint.catalog_closure: casefolded installed path ->
+    sha256, and role -> path). The manifest pins EXACTLY: every catalog
+    member at its catalog path and digest, the fixed generated sshd.conf and
+    aplexer.toml, and the two recorded system references; every role is at
+    its catalog path. Anything else refuses (no extra private pin, no role
+    redirect). Then every pin re-hashes on disk."""
     e = receipt.get("endpoint") if isinstance(receipt, dict) and receipt.get("version") == 3 else None
     if not isinstance(e, dict) or set(e) != {"root", "manifest", "manifestSHA256", "config", "state",
                                              "systemReferences"}:
@@ -384,40 +390,39 @@ def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable
     if m.source_digests() not in ALLOWED_GUARDIAN_SOURCES:
         raise ServiceError("the pinned guardian.py/native_api.py/policy.py are not the reviewed generic guardian "
                            "source trio (ALLOWED_GUARDIAN_SOURCES)")
-    # ALL guardian-required pins: every pin lives below managed-runtime or is
-    # a System32 servicing role; both servicing roles, the config and the
-    # backend config are pinned; with the catalog rows, the WHOLE release
-    # closure is pinned at its catalog digest (no missing startup member).
-    base = ntpath.normcase(ntpath.normpath(root)) + "\\"
-    keys = {ntpath.normcase(p) for p in m.pins}
+    if not isinstance(closure, dict) or not isinstance(closure.get("pins"), dict) \
+            or not isinstance(closure.get("roles"), dict):
+        raise ServiceError("the recorded catalog closure is required")
+    pins, roles = closure["pins"], closure["roles"]
+    # every role at its exact catalog path (a system reference serves none)
+    backend_config = ntpath.normcase(ntpath.join(root, "endpoint", "aplexer.toml"))
+    expected = {"daemon": (m.daemon, roles.get("sshd")), "python": (m.python, roles.get("interpreter")),
+                "guardian": (m.guardian, roles.get("guardian")), "native_api": (m.native_api, roles.get("native-api")),
+                "policy": (m.policy, roles.get("policy")),
+                "sftp": (m.config_bindings["sftp"], roles.get("sftp")),
+                "backendExecutable": (m.config_bindings["backendExecutable"], roles.get("backend-shell")),
+                "backendDLL": (m.config_bindings["backendDLL"], roles.get("backend-dll")),
+                "backendConfig": (m.config_bindings["backendConfig"], backend_config)}
+    for role, (path, want) in expected.items():
+        if not want or ntpath.normcase(ntpath.normpath(path)) != want:
+            raise ServiceError(f"the {role} role is not at its catalog path below managed-runtime (a system "
+                               "reference serves only the guardian's servicing role)")
     refs = system_references(e["systemReferences"], (receipt.get("environment") or {}).get("SystemRoot"))
-    outside = {ntpath.normcase(p): h for p, h in m.pins.items() if not ntpath.normcase(p).startswith(base)}
-    for path in outside:
-        if path not in refs:
-            raise ServiceError(f"pinned file {sanitize(path)} is outside managed-runtime and not a recorded "
-                               "system reference")
-    roles = {"daemon": m.daemon, "python": m.python, "config": m.config,
-             **{k: m.config_bindings[k] for k in ("sftp", "backendExecutable", "backendDLL", "backendConfig")}}
-    for role, path in roles.items():
-        if not ntpath.normcase(path).startswith(base):
-            raise ServiceError(f"the {role} role must live below managed-runtime (a system reference serves only "
-                               "the guardian's servicing role)")
-    for path, digest in refs.items():
-        if outside.get(path) != digest:
-            raise ServiceError(f"the manifest lacks the recorded system reference pin {sanitize(path)}")
-    for need in (m.config, m.config_bindings["backendConfig"]):
-        if ntpath.normcase(need) not in keys:
-            raise ServiceError(f"the manifest lacks a pin for {sanitize(need)}")
-    if release_pins is not None:
-        release = ntpath.normcase(ntpath.join(ntpath.normpath(root), "releases")) + "\\"
-        missing = sorted(k for k in release_pins if k not in keys)
-        if missing:
-            raise ServiceError(f"the manifest lacks catalog closure pins ({len(missing)} missing, e.g. "
-                               f"{sanitize(missing[0])})")
-        for path, digest in m.pins.items():
-            key = ntpath.normcase(path)
-            if key.startswith(release) and release_pins.get(key) != digest:
-                raise ServiceError(f"pinned release file {sanitize(path)} does not match its catalog row")
+    generated = {ntpath.normcase(m.config), backend_config}
+    have = {ntpath.normcase(p): h for p, h in m.pins.items()}
+    for key, digest in have.items():
+        if key in pins:
+            if pins[key] != digest:
+                raise ServiceError(f"pinned release file {sanitize(key)} does not match its catalog row")
+        elif key in refs:
+            if refs[key] != digest:
+                raise ServiceError(f"the system reference pin {sanitize(key)} is not the recorded measurement")
+        elif key not in generated:
+            raise ServiceError(f"pinned file {sanitize(key)} is outside the recorded closure (not a catalog member "
+                               "at its path, a generated config, or a recorded system reference)")
+    missing = sorted(k for k in (*pins, *refs, *generated) if k not in have)
+    if missing:
+        raise ServiceError(f"the manifest lacks {len(missing)} required pins (e.g. {sanitize(missing[0])})")
     for path, digest in m.pins.items():
         if file_sha256(path) != digest:
             raise ServiceError(f"pinned endpoint file {sanitize(path)} does not match the manifest")

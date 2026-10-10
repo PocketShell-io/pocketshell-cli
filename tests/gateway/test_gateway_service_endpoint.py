@@ -441,10 +441,11 @@ def test_trust_reviewed_manifest_and_full_source_triple_and_disk(env, monkeypatc
 
 def test_reviewed_lists_no_per_host_manifest_and_only_the_generic_trio():
     """Setup ABI v3: no compiled per-host manifest digest (the legacy S4U path
-    stays closed); exactly ONE reviewed generic guardian trio (6cf7ae85)."""
+    stays closed); exactly ONE reviewed generic guardian trio: the e862645d
+    successor of 6cf7ae85 (the agreed 8 MiB manifest bound, §16.14)."""
     assert ep.ALLOWED_ENDPOINT_MANIFEST_SHA256 == frozenset()
     assert ep.ALLOWED_GUARDIAN_SOURCES == frozenset({(
-        "6cf7ae85ad21b23496e7187da7e3bb4f171adef5f63edd2fd01f6ce6435bd047",
+        "e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
         "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
         "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce")})
 
