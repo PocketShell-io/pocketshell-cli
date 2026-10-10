@@ -68,8 +68,9 @@ def test_install_and_verify_paths_on_real_acls(layout):
     api = win.WindowsApi()
     sid = api.current_sid()
     paths = inst.NativePaths(api)
-    binding = {"deviceId": "win-service-e2e", "manifest": "C:\\x\\endpoint-manifest.json", "manifestSHA256": "d" * 64,
-               "configDir": "C:\\x\\keys", "port": 22024, "helperSHA256": sha(b"helper"), "ownerSID": sid,
+    config_dir, manifest, manifest_sha = private_binding_roots(os.path.dirname(os.path.dirname(layout["userData"])))
+    binding = {"deviceId": "win-service-e2e", "manifest": manifest, "manifestSHA256": manifest_sha,
+               "configDir": config_dir, "port": 22024, "helperSHA256": sha(b"helper"), "ownerSID": sid,
                "hostKeyFingerprint": "SHA256:" + "A" * 43}
     folders = inst.known_folders()
     print("known folders:", folders)
@@ -134,11 +135,28 @@ def test_install_refuses_a_tampered_staged_file(layout):
     sid = api.current_sid()
     with open(os.path.join(layout["staged"], "native", "guardian.py"), "ab") as handle:
         handle.write(b"#")
-    binding = {"deviceId": "win-service-e2e", "manifest": "C:\\x\\m.json", "manifestSHA256": "d" * 64,
-               "configDir": "C:\\x\\keys", "port": 22024, "helperSHA256": sha(b"helper"), "ownerSID": sid,
+    config_dir, manifest, manifest_sha = private_binding_roots(os.path.dirname(os.path.dirname(layout["userData"])))
+    binding = {"deviceId": "win-service-e2e", "manifest": manifest, "manifestSHA256": manifest_sha,
+               "configDir": config_dir, "port": 22024, "helperSHA256": sha(b"helper"), "ownerSID": sid,
                "hostKeyFingerprint": "SHA256:" + "A" * 43}
     with pytest.raises(inst.InstallError, match="does not match"):
         inst.install_runtime(user_data=layout["userData"], catalog_path=layout["catalog"], staged=layout["staged"],
                              binding=binding, server="wss://gateway.invalid", owner_sid=sid,
                              paths=inst.NativePaths(api), folders=inst.known_folders(), cli_version=__version__)
     assert not os.path.exists(os.path.join(layout["userData"], "managed-runtime"))
+
+
+def private_binding_roots(base):
+    """A private (owner-only, protected) enrollment config dir and guardian
+    manifest directory, as the installer requires them (agreement §16)."""
+    import hashlib as _h
+    from pathlib import Path as _P
+
+    from pocketshell import windows_security as ws
+
+    config = _P(base) / "enrollment" / "keys"
+    manifest = _P(base) / "guardian-root" / "endpoint-manifest.json"
+    ws.write_private(config / "placeholder", b"public placeholder")
+    data = b'{"version": 1}'
+    ws.write_private(manifest, data)
+    return str(config), str(manifest), _h.sha256(data).hexdigest()

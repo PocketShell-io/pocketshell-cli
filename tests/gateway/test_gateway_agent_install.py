@@ -128,6 +128,10 @@ def staged_paths(catalog=None, files=None):
     for p, (data, _role) in files.items():
         paths.put(STAGED + "\\" + p.replace("/", "\\"), data)
     paths.put(CATALOG, json.dumps(catalog or make_catalog(files)).encode())
+    # the EXISTING enrollment (owner-only config dir) and the protected guardian manifest
+    paths.mkdir(WIN_CONFIG)
+    paths.mkdir(ntpath.dirname(MANIFEST))
+    paths.put(MANIFEST, MANIFEST_BYTES)
     return paths
 
 
@@ -159,8 +163,11 @@ def test_catalog_v2_refuses(mutate, why):
 # --- install (pure) ----------------------------------------------------------------------
 
 
+MANIFEST_BYTES = b'{"version": 1}'
+
+
 def public_binding():
-    return {"deviceId": "host-laptop-pha6tcnc-75fu", "manifest": MANIFEST, "manifestSHA256": "d" * 64,
+    return {"deviceId": "host-laptop-pha6tcnc-75fu", "manifest": MANIFEST, "manifestSHA256": sha(MANIFEST_BYTES),
             "configDir": WIN_CONFIG, "port": 22024, "helperSHA256": sha(b"helper"), "ownerSID": USER_SID,
             "hostKeyFingerprint": "SHA256:" + "A" * 43}
 
@@ -205,8 +212,9 @@ def test_install_copies_the_closure_and_writes_the_receipt():
 
 def test_install_dry_run_writes_nothing():
     paths = staged_paths()
+    before = set(paths.dirs)
     install(paths, dry_run=True)
-    assert paths.writes == [] and paths.dirs == set()
+    assert paths.writes == [] and paths.dirs == before
 
 
 def test_install_refuses_an_extra_staged_file():
@@ -391,6 +399,7 @@ def test_cli_install_uses_the_existing_binding_and_the_enrolled_server(agent, mo
     catalog["files"] = [dict(f, sha256=QUALIFIED) if f["role"] == "helper" else f for f in catalog["files"]]
     catalog["lineage"]["helper"]["sha256"] = QUALIFIED
     paths = staged_paths(catalog)
+    paths.put(MANIFEST, agent["vfs"][MANIFEST])  # the bound manifest's real bytes
     paths.put(STAGED + "\\bin\\pocketshell-link.exe", b"helper")
     real_file = paths.file
 
@@ -485,3 +494,24 @@ def test_s1_launch_tuples_production_and_schema_agree(broke_away, child_in_job, 
     in_job = {"inJob": True, "brokeAway": broke_away, "callerInJob": True, "callerJobKillOnClose": False,
               "elevated": False, "session": 1}
     assert not _schema_accepts(SCHEMA["$defs"]["launch"], in_job)
+
+
+
+# --- v4.2: the installer measures the private config dir and the manifest parent -------
+
+
+@pytest.mark.parametrize("which", ["configDir", "manifestParent"])
+def test_install_refuses_an_unprotected_config_or_manifest_root(which):
+    paths = staged_paths()
+    target = WIN_CONFIG if which == "configDir" else ntpath.dirname(MANIFEST)
+    paths.unprotected.add(paths.key(target))
+    with pytest.raises(inst.InstallError, match="owner-only"):
+        install(paths)
+    assert paths.writes == []
+
+
+def test_install_refuses_a_manifest_that_is_not_the_bound_one():
+    paths = staged_paths()
+    paths.put(MANIFEST, b'{"version": 1, "changed": true}')
+    with pytest.raises(inst.InstallError, match="manifest"):
+        install(paths)

@@ -115,8 +115,9 @@ def test_normal_installer_maps_the_real_closure(release, tmp_path):
     helper = next(f for f in catalog["files"] if f["role"] == "helper")
     user_data = tmp_path / "Roaming" / "PocketShell"
     user_data.mkdir(parents=True)
-    binding = {"deviceId": "win-service-e2e", "manifest": "C:\\x\\endpoint-manifest.json", "manifestSHA256": "d" * 64,
-               "configDir": "C:\\x\\keys", "port": 22024, "helperSHA256": helper["sha256"], "ownerSID": sid,
+    config_dir, manifest, manifest_sha = private_binding_roots(tmp_path)
+    binding = {"deviceId": "win-service-e2e", "manifest": manifest, "manifestSHA256": manifest_sha,
+               "configDir": config_dir, "port": 22024, "helperSHA256": helper["sha256"], "ownerSID": sid,
                "hostKeyFingerprint": "SHA256:" + "A" * 43}
     if catalog["lineage"]["cliVersion"] != __version__:
         pytest.skip("catalog built for another CLI version")
@@ -129,3 +130,19 @@ def test_normal_installer_maps_the_real_closure(release, tmp_path):
     p = subprocess.run([str(installed / "pocketshell.exe"), "--version"], env=closed_env(tmp_path),
                        capture_output=True, timeout=120, creationflags=0x08000000)
     assert p.returncode == 0  # the installed (relocated) copy runs too
+
+
+def private_binding_roots(base):
+    """A private (owner-only, protected) enrollment config dir and guardian
+    manifest directory, as the installer requires them (agreement §16)."""
+    import hashlib as _h
+    from pathlib import Path as _P
+
+    from pocketshell import windows_security as ws
+
+    config = _P(base) / "enrollment" / "keys"
+    manifest = _P(base) / "guardian-root" / "endpoint-manifest.json"
+    ws.write_private(config / "placeholder", b"public placeholder")
+    data = b'{"version": 1}'
+    ws.write_private(manifest, data)
+    return str(config), str(manifest), _h.sha256(data).hexdigest()

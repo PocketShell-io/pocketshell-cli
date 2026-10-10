@@ -490,6 +490,25 @@ def install_runtime(*, user_data: str, catalog_path: str, staged: str, binding: 
         if key != "SystemDrive" and not _abs(value):
             raise InstallError("environment", f"{key} is not a plain drive-absolute path")
 
+    # 0) the EXISTING enrollment and guardian roots are private roots too (agreement
+    #    §16): measured, never re-ACLed or moved by the installer
+    for label, folder in (("the enrolled config dir", binding["configDir"]),
+                          ("the guardian manifest's directory", ntpath.dirname(binding["manifest"]))):
+        try:
+            if not _same(paths.directory(folder, owner_sid, private_root=folder), folder):
+                raise ServiceError("not the requested directory")
+        except Exception as exc:  # noqa: BLE001
+            raise InstallError("binding-mismatch", f"{label} {folder} is not an owner-only protected private root "
+                               f"({sanitize(str(exc), 200)}); the installer never changes its ACL") from None
+    try:
+        manifest = paths.file(binding["manifest"], owner_sid, private=True, max_bytes=0,
+                              private_root=ntpath.dirname(binding["manifest"]))
+    except Exception as exc:  # noqa: BLE001
+        raise InstallError("binding-mismatch", f"the guardian manifest cannot be measured privately "
+                           f"({sanitize(str(exc), 200)})") from None
+    if manifest["sha256"] != binding["manifestSHA256"]:
+        raise InstallError("binding-mismatch", "the guardian manifest is not the bound one; bind again after review")
+
     # 1) the staged closure, exactly
     try:
         staged_files = paths.inventory(staged, owner_sid, private=False)
