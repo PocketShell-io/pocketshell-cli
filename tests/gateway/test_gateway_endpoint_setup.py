@@ -33,6 +33,10 @@ class Paths(_Paths):
         self.reads.append(path)
         return super().file(path, owner_sid, **kw)
 
+    def exists(self, path):
+        k = self.key(path)
+        return k in self.files or k in self.dirs
+
     def metadata(self, path, owner_sid):
         self.measured.add(self.key(path))
         m = self.meta.get(self.key(path))
@@ -870,3 +874,59 @@ def test_trust_refuses_an_inconsistent_keys_block(mutate):
         r["keys"]["privateKey"] = "x"
     with pytest.raises(ep.ServiceError):
         ep.check_trust_authority(m, r, file_sha256=lambda p: _disk(paths, p), closure=_closure(host))
+
+
+# --- review 12be5a63: a generated install NEVER replaces an existing host identity --------
+
+
+def _snapshot(paths):
+    return {k: sha(v[1]) for k, v in paths.files.items()}
+
+
+def test_a_repeat_generated_install_refuses_and_preserves_every_byte():
+    host = Host()
+    paths = staged(host)
+    receipt = install_new(host, paths)
+    k = receipt["keys"]
+    paths.put(k["authorizedKeys"], KEY_LINE.encode() + b"\n")  # an authorized client
+    before, writes = _snapshot(paths), len(paths.writes)
+    with pytest.raises(inst.InstallError) as err:
+        install_new(host, paths, keygen=lambda: (b"OTHER", KEY_LINE))
+    assert err.value.code == "install-exists"
+    assert _snapshot(paths) == before and len(paths.writes) == writes
+
+
+@pytest.mark.parametrize("which", ["hostKey", "authorizedKeys", "authority"])
+def test_partial_prior_state_refuses_before_any_write(which):
+    host = Host()
+    paths = staged(host)
+    root = host.user_data + "\\managed-runtime"
+    target = {"hostKey": root + "\\endpoint\\keys\\ssh_host_ed25519_key",
+              "authorizedKeys": root + "\\endpoint\\keys\\authorized_keys",
+              "authority": root + "\\authority.json"}[which]
+    paths.put(target, b"PRIOR")
+    before = _snapshot(paths)
+    with pytest.raises(inst.InstallError) as err:
+        install_new(host, paths)
+    assert err.value.code == "install-exists" and _snapshot(paths) == before and not paths.writes
+
+
+def test_an_interrupted_generated_install_leaves_no_authority_and_a_rerun_refuses(monkeypatch):
+    host = Host()
+    paths = staged(host)
+    real = paths.write
+
+    def write(path, data):
+        if path.endswith("sshd.conf"):
+            raise OSError("disk full")
+        real(path, data)
+
+    paths.write = write
+    with pytest.raises(OSError):
+        install_new(host, paths)
+    assert not any(w.endswith("authority.json") for w in paths.writes)  # unbound, never READY
+    paths.write = real
+    before = _snapshot(paths)
+    with pytest.raises(inst.InstallError) as err:
+        install_new(host, paths)  # the fresh key is never silently regenerated
+    assert err.value.code == "install-exists" and _snapshot(paths) == before

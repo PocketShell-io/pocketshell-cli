@@ -382,6 +382,15 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
     lay = layout(user_data, catalog["release"])
     if generated_mode:
         inputs = {"hostKey": lay["hostKey"], "authorizedKeys": lay["authorizedKeys"]}
+        # first use only: NEVER regenerate a host identity or erase client
+        # authorization (review 12be5a63). Any prior key, authorized_keys or
+        # authority refuses BEFORE anything is copied or written.
+        prior = [p for p in (lay["hostKey"], lay["authorizedKeys"], ntpath.join(lay["root"], "authority.json"))
+                 if paths.exists(p)]
+        if prior:
+            raise InstallError("install-exists", f"a generated (first-use) install found existing state "
+                               f"{sanitize(', '.join(prior), 400)}; it never replaces a host identity, client "
+                               "authorization or an installed authority")
     helper_rel = role_file(catalog, "helper")["path"].split("/")
     # the generated grammar is checked BEFORE anything is copied or written
     for value in (*(v for v in lay.values()), inputs["hostKey"], inputs["authorizedKeys"],

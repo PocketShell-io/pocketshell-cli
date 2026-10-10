@@ -290,6 +290,13 @@ class NativePaths:
 
         return {"canonicalPath": path, "size": None, "sha256": win.file_sha256(path)}
 
+    @staticmethod
+    def exists(path: str) -> bool:
+        """Any object at ``path`` (a reparse point or a dangling link counts)."""
+        import os
+
+        return os.path.lexists(path)
+
     def metadata(self, path: str, owner_sid: str) -> dict:
         """Setup ABI v3 key files: owner-only, protected, single-link, reparse-free
         regular file whose parent is a private root. Opened with
