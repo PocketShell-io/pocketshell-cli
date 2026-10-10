@@ -39,6 +39,8 @@ def authority(agent, monkeypatch):  # noqa: F811
 
     def trust(m, receipt, *, file_sha256, release_pins=None):
         state["calls"].append((m.path, receipt, release_pins))
+        if state.get("refuse"):
+            raise ep.ServiceError(state["refuse"])
 
     monkeypatch.setattr(eps, "load_authority", load)
     monkeypatch.setattr(ep, "check_trust_authority", trust)
@@ -117,3 +119,52 @@ def test_install_first_routes_to_the_endpoint_installer_without_a_binding(agent,
     assert seen["account"] == "owner" and seen["owner_sid"] == agent["api"].current_sid()
     text, digest = seen["show"](WIN_HELPER)  # the reviewed helper's show of the enrollment
     assert "pinned ssh host key" in text and digest == QUALIFIED
+
+
+# --- status re-validates the anchored trust (review finding 1 on 91ed08b) -----------------
+
+OTHER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK8B0Ctl2bl8wdg50ZKPY7t9WuU170cplZpzuMckYrSU"
+
+
+def _tamper(kind, agent, authority, monkeypatch):  # noqa: F811
+    from pocketshell.gateway import service_windows as win
+    from test_gateway_service_endpoint import GUARDIAN, SHOW_22024
+
+    real = win.file_sha256
+    if kind == "authority":
+        authority["sha"] = "b" * 64
+    elif kind == "runtime":
+        authority["refuse"] = "pinned endpoint file does not match the manifest"
+    elif kind == "helper":
+        monkeypatch.setattr(win, "file_sha256", lambda p: "f" * 64 if p == WIN_HELPER else real(p))
+    elif kind == "enrollment":
+        line = [x for x in SHOW_22024.splitlines() if x.startswith("pinned ssh host key")][0]
+        agent["fake"].show_out = SHOW_22024.replace(line, "pinned ssh host key: " + OTHER_KEY)
+    elif kind == "legacy-runtime":
+        monkeypatch.setattr(win, "file_sha256", lambda p: "f" * 64 if p == GUARDIAN else real(p))
+
+
+@pytest.mark.parametrize("kind", ["authority", "runtime", "helper", "enrollment"])
+def test_status_after_tamper_refuses_never_ready_and_stop_still_cleans_up(kind, agent, authority,  # noqa: F811
+                                                                          monkeypatch):
+    assert bind_authority()[0].exit_code == 0
+    result, data = run("start", "--json")
+    assert result.exit_code == 0 and data["state"] == "ready", result.output
+    _tamper(kind, agent, authority, monkeypatch)
+    result, data = run("status", "--json")
+    assert result.exit_code == 1 and data["state"] == "unavailable", result.output
+    assert data["error"]["code"] == "binding-invalid" and data["endpoint"] is None
+    # stop is identity-bound (verified READY pid/birth + exact link identity), never trust-gated
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and data["state"] == "stopped", result.output
+    assert agent["api"].terminated and agent["g"].stop_requests
+
+
+def test_status_after_legacy_runtime_tamper_refuses(agent, monkeypatch):  # noqa: F811
+    from test_gateway_user_agent import bind as legacy_bind
+
+    legacy_bind()
+    assert run("start", "--json")[0].exit_code == 0
+    _tamper("legacy-runtime", agent, None, monkeypatch)
+    result, data = run("status", "--json")
+    assert result.exit_code == 1 and data["state"] == "unavailable" and data["error"]["code"] == "binding-invalid"

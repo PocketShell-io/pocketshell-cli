@@ -252,7 +252,12 @@ def load_binding(*, api, runner, revalidate: bool):
         raise AgentError("binding-invalid", "the binding belongs to another user")
     if revalidate:
         if "authority" in b:
-            if _authority_trust(m, b["authority"], b["ownerSID"], api) != b.get("authoritySHA256"):
+            try:
+                anchored = _authority_trust(m, b["authority"], b["ownerSID"], api)
+            except AgentError as exc:
+                raise AgentError("binding-invalid", f"the installed authority no longer anchors this binding "
+                                 f"({exc.code}: {sanitize(str(exc), 400)})") from None
+            if anchored != b.get("authoritySHA256"):
                 raise AgentError("binding-invalid", "the installed authority changed since `agent bind`; bind "
                                  "again after review")
         try:
@@ -618,7 +623,10 @@ def _guarded(operation_id, fn, *, needs_binding=True):
 
 def status(*, api, runner, operation_id=None) -> tuple:
     def run():
-        b, m, host_key = load_binding(api=api, runner=runner, revalidate=False)
+        # the FULL anchored trust (authority/runtime pins/helper/enrollment): a
+        # tampered install answers binding-invalid, never a prior READY. Only
+        # stop skips it (identity-bound cleanup must work after a tamper).
+        b, m, host_key = load_binding(api=api, runner=runner, revalidate=True)
         owner, endpoint, outbound, state, code = _collect(b, m, host_key, api, runner)
         return _document(operation_id, state=state, binding=b, owner=owner, endpoint=endpoint,
                          outbound=outbound), code
