@@ -138,17 +138,34 @@ def test_new_machine_complete_runtime(closure, tmp_path):
         dcode, dout = run_unelevated(diag, env=env, cwd=str(Path(manifest0["daemon"]).parent), timeout=60)
         print("DIAG", diag[1:], "->", dcode, hex(dcode & 0xFFFFFFFF), "ascii:", ascii(dout[-2000:]),
               "base64:", __import__("base64").b64encode(dout[-4000:]).decode())
-    # the daemon in the guardian's CLOSED environment block and cwd (no private
-    # desktop, no owned job, runner token): sshd -d -D prints its startup trace
-    closed_env = dict(manifest0["environment"])
-    try:
-        proc = subprocess.run([manifest0["daemon"], "-d", "-D", "-f", manifest0["config"]], env=closed_env,
-                              cwd=manifest0["root"], capture_output=True, timeout=15)
-        dcode, dout = proc.returncode, proc.stdout + proc.stderr
-    except subprocess.TimeoutExpired as exc:
-        dcode, dout = "running-after-15s", (exc.stdout or b"") + (exc.stderr or b"")
-    print("DIAG closed-env -d -D ->", dcode, hex(dcode & 0xFFFFFFFF) if isinstance(dcode, int) else "",
-          "ascii:", ascii(dout[-3000:]), "base64:", __import__("base64").b64encode(dout[-4000:]).decode())
+    # EVIDENCE (run 38038010531): -V and -t succeed in the inherited env, while
+    # `sshd -d -D` in the guardian's CLOSED env/cwd exits 0xC0000005 silently.
+    # Controlled bisection of exactly the environment/cwd difference (runner
+    # token, no desktop/job); each variant runs <= 6 s ("running" = no crash).
+    def bisect(label, env_, cwd_):
+        try:
+            proc = subprocess.run([manifest0["daemon"], "-d", "-D", "-f", manifest0["config"]], env=env_, cwd=cwd_,
+                                  capture_output=True, timeout=6)
+            result, out_ = hex(proc.returncode & 0xFFFFFFFF), proc.stdout + proc.stderr
+        except subprocess.TimeoutExpired as exc:
+            result, out_ = "running", (exc.stdout or b"") + (exc.stderr or b"")
+        print("BISECT", label, "->", result, ascii(out_[-600:]))
+
+    closed = dict(manifest0["environment"])
+    back = {k: v.replace("/", "\\") for k, v in closed.items()}
+    extra = {k: os.environ[k] for k in ("PATH", "COMPUTERNAME", "USERNAME", "USERDOMAIN", "LOCALAPPDATA", "APPDATA",
+                                        "ALLUSERSPROFILE", "ProgramFiles", "PROGRAMDATA") if k in os.environ}
+    root_cwd, bin_cwd = manifest0["root"], str(Path(manifest0["daemon"]).parent)
+    bisect("inherited-env root-cwd", dict(os.environ), root_cwd)
+    bisect("closed-env root-cwd", closed, root_cwd)
+    bisect("closed-env bin-cwd", closed, bin_cwd)
+    bisect("closed-env backslashed", back, root_cwd)
+    bisect("closed-env SystemRoot+WINDIR backslashed", {**closed, "SystemRoot": "C:\\Windows",
+                                                        "WINDIR": "C:\\Windows"}, root_cwd)
+    bisect("closed-env ProgramData backslashed", {**closed, "ProgramData": "C:\\ProgramData"}, root_cwd)
+    for key, value in extra.items():
+        bisect(f"closed-env + {key}", {**closed, key: value}, root_cwd)
+    bisect("closed-env + all extras", {**closed, **extra}, root_cwd)
     print("SCOPE: acceptJob is a report-only CI seam (job membership accepted and reported), NOT NoJob "
           "qualification; the Aplexer session lifecycle is NOT YET QUALIFIED by this test")
     try:  # the finally also stops a start whose READY assertion fails
