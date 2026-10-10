@@ -44,7 +44,7 @@ var (
 	sidRE       = regexp.MustCompile(`^S-1-5-21-[0-9]+(-[0-9]+){3}$`)
 	driveRE     = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
 	deviceRE    = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)`)
-	relPartRE   = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+	relPartRE   = regexp.MustCompile(`^[A-Za-z0-9_.+()\[\]-]+$`) // §16.16: + ( ) [ ] for the PortableGit closure
 	digestRE    = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 

@@ -346,8 +346,12 @@ def test_verify_v2_refuses_large_documents_owner_and_root_problems():
 BAD_ABS = ["C:\\", "C:/", "C:\\a\\..\\b", "C:\\a\\.\\b", "C:\\a:stream", "C:\\a\\b.", "C:\\a\\b ", "\\\\server\\share\\x",
            "\\\\?\\C:\\x", "C:\\a\\CON", "C:\\a\\nul.txt", "C:\\a\\\\b", "a\\b", "C:a\\b", "C:\\a\\b*"]
 GOOD_ABS = ["C:\\Users\\owner\\AppData\\Roaming\\PocketShell", "D:/a/b.json", "C:\\a\\con2\\x.json"]
-BAD_REL = ["../x", "a/../b", "./a", "a/./b", "a/CON", "a/nul.txt", "a.", "a/b.", "a:b", "a//b", "/a", "a\\b"]
-GOOD_REL = ["pocketshell.exe", "python/Lib/site-packages/a.py", "a/con2/b"]
+BAD_REL = ["../x", "a/../b", "./a", "a/./b", "a/CON", "a/nul.txt", "a.", "a/b.", "a:b", "a//b", "/a", "a\\b",
+           "a b", "a@b", "a,b", "a=b", "a$b", "a'b", "a~1", "a{b}", "a!b", "a#b", "a%b", "a;b", "a&b"]
+# §16.16: the PortableGit closure needs + ( ) [ ] (GMT+0, libstdc++, usr/bin/[.exe, menu_chinese(gb)…)
+GOOD_REL = ["pocketshell.exe", "python/Lib/site-packages/a.py", "a/con2/b", "usr/bin/[.exe",
+            "ucrt64/share/zoneinfo/Etc/GMT+0", "ucrt64/share/licenses/libstdc++/COPYING3",
+            "usr/share/vim/vim92/lang/menu_chinese(gb)_gb.936.vim", "a/]b"]
 
 
 def test_path_guards_code_and_schema_agree():

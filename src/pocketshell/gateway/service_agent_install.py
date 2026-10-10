@@ -50,7 +50,7 @@ RELEASE_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 # drive, no '.'/'..' or empty components, no device names, no trailing dot/space
 # aliases, no wildcards or control characters.
 ABS_RE = re.compile('^(?!.*[\\\\/]\\.{1,2}(?:[\\\\/]|$))(?!.*[\\\\/](?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^\\\\/]*)?(?:[\\\\/]|$))(?!.*[. ](?:[\\\\/]|$))(?!.*[\\\\/]{2})[A-Za-z]:[\\\\/][^:*?\\"<>|\\u0000-\\u001f]+$')
-REL_RE = re.compile('^(?!(?:.*/)?\\.{1,2}(?:/|$))(?!(?:.*/)?(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^/]*)?(?:/|$))(?!.*\\.(?:/|$))[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)*$')
+REL_RE = re.compile('^(?!(?:.*/)?\\.{1,2}(?:/|$))(?!(?:.*/)?(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^/]*)?(?:/|$))(?!.*\\.(?:/|$))[A-Za-z0-9_.+()\\[\\]\\-]+(?:/[A-Za-z0-9_.+()\\[\\]\\-]+)*$')
 SID_RE = re.compile(r"^S-1-5-21-[0-9]+(-[0-9]+){3}$")
 DEVICE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 SERVER_RE = re.compile(r"^wss://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$")

@@ -28,7 +28,7 @@
     "relPath": {
       "type": "string",
       "maxLength": 1024,
-      "pattern": "^(?!(?:.*/)?\\.{1,2}(?:/|$))(?!(?:.*/)?(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^/]*)?(?:/|$))(?!.*\\.(?:/|$))[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)*$",
+      "pattern": "^(?!(?:.*/)?\\.{1,2}(?:/|$))(?!(?:.*/)?(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^/]*)?(?:/|$))(?!.*\\.(?:/|$))[A-Za-z0-9_.+()\\[\\]\\-]+(?:/[A-Za-z0-9_.+()\\[\\]\\-]+)*$",
       "$comment": "Forward-slash relative path under releases/<release>. Refuses '.', '..' and empty components, device names, trailing dots, ':' and backslashes."
     },
     "birth": {

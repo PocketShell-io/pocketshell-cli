@@ -29,12 +29,15 @@ func TestAbsoluteMirrorsTheSchema(t *testing.T) {
 }
 
 func TestRelative(t *testing.T) {
-	for _, p := range []string{"pocketshell.exe", "python/Lib/site-packages/a.py", "a/con2/b"} {
+	for _, p := range []string{"pocketshell.exe", "python/Lib/site-packages/a.py", "a/con2/b", "usr/bin/[.exe",
+		"ucrt64/share/zoneinfo/Etc/GMT+0", "ucrt64/share/licenses/libstdc++/COPYING3",
+		"usr/share/vim/vim92/lang/menu_chinese(gb)_gb.936.vim", "a/]b"} {
 		if !relative(p) {
 			t.Errorf("refused %q", p)
 		}
 	}
-	for _, p := range []string{"../x", "a/../b", "./a", "a/CON", "a/nul.txt", "a.", "a:b", "a//b", "/a", `a\b`} {
+	for _, p := range []string{"../x", "a/../b", "./a", "a/CON", "a/nul.txt", "a.", "a:b", "a//b", "/a", `a\b`,
+		"a b", "a@b", "a,b", "a=b", "a$b", "a'b", "a~1", "a{b}", "a!b", "a#b", "a%b", "a;b", "a&b"} {
 		if relative(p) {
 			t.Errorf("accepted %q", p)
 		}
