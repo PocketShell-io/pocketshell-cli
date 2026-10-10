@@ -279,6 +279,46 @@ def test_new_machine_complete_runtime(closure, tmp_path):
                             f"{user}@127.0.0.1"], capture_output=True, timeout=120)
         print("SFTP:", p.returncode, p.stdout.decode(errors="replace")[-2000:], p.stderr.decode(errors="replace"))
         assert p.returncode == 0 and back.read_bytes() == local.read_bytes()
+
+        # 6. §16.20 sleep/resume recovery: children killed WITHOUT a stop (as Modern Standby did on
+        # a real laptop) leave a measured 'stopped' state; an idempotent start re-establishes them
+        # with fresh custody (a NEW generation) and the host key re-proven. CI cannot sleep a hosted
+        # runner: the power-resume trigger itself is the Desktop controller's and is qualified
+        # manually on a disposable machine.
+        import signal
+        import time as _time
+
+        def stopped_within(deadline):
+            end_ = _time.monotonic() + deadline
+            while _time.monotonic() < end_:
+                code_, doc_ = agent("status")
+                if doc_ and doc_["endpoint"]["state"] == "stopped":
+                    return doc_
+                _time.sleep(2)
+            return None
+
+        def recover(label, kill_pid):
+            code_, before = agent("status")
+            assert before["endpoint"]["state"] == "ready", before
+            generation, target = before["endpoint"]["generation"], before["endpoint"][kill_pid]["pid"]
+            os.kill(target, signal.SIGTERM)  # TerminateProcess: no STOP, no receipt
+            doc_ = stopped_within(60)
+            assert doc_ is not None, f"{label}: status never reported the endpoint stopped"
+            assert doc_["endpoint"]["absenceVerified"] is True
+            code_, after = agent("start", "--timeout", "300")
+            assert code_ == 0 and after["state"] == "pre-enrollment", after
+            assert after["endpoint"]["state"] == "ready" and after["endpoint"]["hostKey"]["proven"] is True
+            assert after["endpoint"]["generation"] != generation  # fresh custody, never the dead one
+            assert after["endpoint"][kill_pid]["pid"] != target
+            print(f"RECOVERED ({label}):", generation, "->", after["endpoint"]["generation"])
+
+        recover("guardian killed (its owned job takes the daemon)", "guardian")
+        recover("sshd.exe killed (the guardian records CLOSED failure and exits)", "daemon")
+        back.unlink()
+        p = subprocess.run([str(SSH_DIR / "sftp.exe"), *base, "-P", str(port), "-b", str(batch),
+                            f"{user}@127.0.0.1"], capture_output=True, timeout=120)
+        print("SFTP after recovery:", p.returncode, p.stderr.decode(errors="replace")[-1000:])
+        assert p.returncode == 0 and back.read_bytes() == local.read_bytes()
     finally:
         # 5. stop (identity-bound)
         code, data = agent("stop", "--timeout", "60")
