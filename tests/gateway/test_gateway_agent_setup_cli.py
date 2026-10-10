@@ -308,3 +308,59 @@ def test_install_generate_routes_without_any_enrollment(agent, monkeypatch):  # 
         doc, code = agent_mod.install_command(user_data="C:\\u", catalog="C:\\c.json", staged="C:\\s",
                                               dry_run=False, api=agent["api"], runner=None, **bad)
         assert code == 2 and doc["error"]["code"] == "usage"
+
+
+# --- review 12be5a63: a binding is never replaced across generations with live custody ----
+
+
+def _bytes():
+    return agent_mod._read_private(agent_mod._path("binding.json"))
+
+
+def _other_generation(authority, tmp_path):
+    _generated(authority, tmp_path)
+    authority["sha"] = "c" * 64  # another install's authority
+
+
+def test_a_prior_live_binding_is_never_replaced(agent, authority, tmp_path):  # noqa: F811
+    assert bind_authority()[0].exit_code == 0
+    assert run("start", "--json")[0].exit_code == 0
+    before, spawns = _bytes(), list(agent["api"].spawns)
+    _other_generation(authority, tmp_path)
+    result, data = bind_pre()
+    assert result.exit_code == 1 and data["error"]["code"] == "binding-transfer", result.output
+    assert _bytes() == before and agent["api"].spawns == spawns and not agent["api"].terminated
+
+
+def test_a_different_generation_binding_refuses_without_a_proven_stop(agent, authority, tmp_path):  # noqa: F811
+    assert bind_authority()[0].exit_code == 0
+    before = _bytes()
+    _other_generation(authority, tmp_path)
+    result, data = bind_pre()
+    assert result.exit_code == 1 and data["error"]["code"] == "binding-transfer"
+    assert _bytes() == before
+
+
+def test_after_a_proven_stop_the_replacement_succeeds(agent, authority, tmp_path):  # noqa: F811
+    assert bind_authority()[0].exit_code == 0
+    assert run("start", "--json")[0].exit_code == 0
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and data["state"] == "stopped"
+    _other_generation(authority, tmp_path)
+    result, data = bind_pre()
+    assert result.exit_code == 0, result.output
+    assert json.loads(_bytes())["authoritySHA256"] == "c" * 64
+
+
+def test_a_fresh_install_with_no_prior_binding_binds(authority, tmp_path):
+    _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+
+
+def test_the_same_generation_upgrade_keeps_the_running_endpoint(agent, authority, tmp_path):  # noqa: F811
+    _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    assert run("start", "--json")[0].exit_code == 0  # pre-enrollment endpoint running (live custody)
+    result, data = bind_authority()  # enrollment upgrade of the SAME authority/manifest
+    assert result.exit_code == 0, result.output
+    assert not agent["api"].terminated

@@ -192,6 +192,51 @@ def _generated_keys(receipt) -> dict:
     return keys
 
 
+STOPPED_MARK = "stopped.json"
+
+
+def _replacement_guard(new: dict, api) -> None:
+    """Never replace the agent binding across generations while the old one
+    may still own processes (review 12be5a63). Allowed: no prior binding; the
+    SAME generation (same authority + manifest: the enrollment upgrade keeps
+    the running endpoint's custody); or a different generation after a proven
+    supported stop of the prior one (stopped.json for exactly that binding, no
+    primary/recovery custody record left, its port not served)."""
+    data = _read_private(_path("binding.json"))
+    if data is None:
+        return
+    try:
+        prior = json.loads(data.decode("utf-8"))
+        assert isinstance(prior, dict)
+    except (ValueError, UnicodeDecodeError, AssertionError):
+        raise AgentError("binding-transfer", "the existing agent binding is unreadable; it may still own processes "
+                         "(run stop, or repair it) — not replacing it") from None
+    same = prior.get("manifestSHA256") == new["manifestSHA256"] and win_same(prior.get("manifest"), new["manifest"]) \
+        and prior.get("authoritySHA256") == new.get("authoritySHA256") \
+        and (prior.get("authority") is None) == (new.get("authority") is None) \
+        and (prior.get("authority") is None or win_same(prior.get("authority"), new.get("authority")))
+    if same:
+        return
+    try:
+        mark = json.loads((_read_private(_path(STOPPED_MARK)) or b"null").decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        mark = None
+    proven = isinstance(mark, dict) and mark.get("manifestSHA256") == prior.get("manifestSHA256") \
+        and mark.get("authoritySHA256") == prior.get("authoritySHA256")
+    custody = [n for n in ("guardian.json", "link.json") if os.path.lexists(_path(n))]
+    custody += [n for stem in ("guardian", "link") for n, _m in _recovery_records(stem)]
+    try:
+        served = api.listener_pids(prior["port"]) if isinstance(prior.get("port"), int) else None
+    except Exception:  # noqa: BLE001 - an unverifiable listener is never absent
+        served = ["unverifiable"]
+    if not proven or custody or served:
+        raise AgentError("binding-transfer", "an existing binding of ANOTHER installation is in place"
+                         + (f" with live custody {sorted(custody)}" if custody else "")
+                         + (f"; 127.0.0.1:{prior.get('port')} is served" if served else "")
+                         + ("" if proven else "; it was not stopped by a proven supported `agent stop`")
+                         + " — stop it first; the binding and its processes are left untouched")
+
+
 def _bind_pre_enrollment(manifest_path: str, authority: Optional[str], *, api) -> dict:
     """Revision D step 2: an endpoint-only binding BEFORE enrollment (the
     supported enrollment probes this endpoint's generated host key). No
@@ -224,6 +269,7 @@ def _bind_pre_enrollment(manifest_path: str, authority: Optional[str], *, api) -
                "helper": None, "helperSHA256": None, "deviceId": "", "port": m.port, "ownerSID": user_sid,
                "hostKey": host_key.line, "authority": authority, "authoritySHA256": authority_sha,
                "enrolled": False}
+    _replacement_guard(binding, api)
     _write_private(_path("binding.json"), json.dumps(binding, indent=1).encode("utf-8"))
     return binding
 
@@ -277,6 +323,7 @@ def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, run
     }
     if authority is not None:
         binding.update(authority=authority, authoritySHA256=authority_sha, enrolled=True)
+    _replacement_guard(binding, api)
     _write_private(_path("binding.json"), json.dumps(binding, indent=1).encode("utf-8"))
     return binding
 
@@ -750,6 +797,7 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
         owner = _owner(api)
         deadline = time.monotonic() + timeout
         _custody_gate(b, m, api)  # before ANY spawn
+        _delete(_path(STOPPED_MARK))  # a start voids any earlier proven stop
         endpoint = _endpoint_status(m, host_key, api, runner, owner["session"])
         if endpoint["state"] != "ready":
             previous = endpoint.get("generation")
@@ -849,6 +897,10 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
                             "message": sanitize("; ".join([*errors, *endpoint.get("custodyProblems", []),
                                                            *outbound.get("problems", [])]) or "still running", 600)}
             return doc, EXIT_ERROR
+        # a PROVEN stop of exactly this binding (every identity gone, listener absent)
+        _write_private(_path(STOPPED_MARK), json.dumps(
+            {"manifestSHA256": b["manifestSHA256"], "authoritySHA256": b.get("authoritySHA256"),
+             "at": time.time()}).encode("utf-8"))
         return doc, EXIT_READY
     return _guarded(operation_id, run)
 
