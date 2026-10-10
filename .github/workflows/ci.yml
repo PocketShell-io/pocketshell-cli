@@ -202,8 +202,8 @@ jobs:
         run: uv run --frozen pytest -v -rs tests/gateway/test_windows_gateway_e2e.py
 
   # Complete-runtime validation of the generic v3 closure: the whole closure is
-  # assembled here from the OWNED backend build (Backend run 38032097879, head
-  # 230035e: quiet OpenSSH 10.3p1 + the stripped 717e49fe MSYS runtime), the
+  # assembled here from the OWNED backend build (Backend run 38040596334, head
+  # 09a5824: quiet OpenSSH 10.3p1 + NULL-PATH fix + the stripped 717e49fe MSYS runtime), the
   # pinned Git-for-Windows 2.56.0.2 archive and the accepted aplexer fc396 pair;
   # the helper is the labelled CI stand-in (never run: no enrollment). Then the
   # revision D new-machine flow runs as an ORDINARY user with the real guardian
@@ -216,7 +216,7 @@ jobs:
       contents: read
       actions: read
     env:
-      BACKEND_RUN_ID: "38032097879"
+      BACKEND_RUN_ID: "38040596334"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
