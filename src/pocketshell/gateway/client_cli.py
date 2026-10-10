@@ -87,7 +87,9 @@ def devices(
 
     Needs `pocketshell login`. The host keys shown are ADVERTISED by the
     gateway and NOT trusted: pin the key you get from the host itself
-    (`pocketshell gateway show --host-key` on the host).
+    (`pocketshell gateway show --host-key` on the host). When the gateway
+    reports presence, an ONLINE column shows whether each host agent is
+    connected to the gateway right now (`?` = not reported).
     """
     endpoint = _resolve_endpoint(server, insecure_dev, trust_gateway)
     try:
@@ -125,6 +127,15 @@ def devices(
                         dev.advertised_key.fingerprint if dev.advertised_key else None
                     ),
                     "pinned_fingerprint": pin_state(dev)[0],
+                    # null = the gateway did not report presence (unknown)
+                    "online": dev.presence.online if dev.presence else None,
+                    "observed_at": dev.presence.observed_at if dev.presence else None,
+                    "connected_since": (
+                        dev.presence.connected_since if dev.presence else None
+                    ),
+                    "session_generation": (
+                        dev.presence.session_generation if dev.presence else None
+                    ),
                 }
                 for dev in listed
             ],
@@ -134,7 +145,19 @@ def devices(
     if not listed:
         click.echo("no devices enrolled under this account")
         return
-    rows = [("DEVICE", "STATE", "ADVERTISED HOST KEY (UNTRUSTED)", "LOCAL PIN")]
+    # The ONLINE column appears only when the gateway reports presence for
+    # at least one device; older gateways keep the exact previous layout.
+    with_presence = any(dev.presence is not None for dev in listed)
+
+    def online_cell(dev: gateway_devices.DeviceInfo) -> str:
+        if dev.presence is None:
+            return "?"
+        return "yes" if dev.presence.online else "no"
+
+    header = ("DEVICE", "STATE", "ADVERTISED HOST KEY (UNTRUSTED)", "LOCAL PIN")
+    if with_presence:
+        header = ("DEVICE", "STATE", "ONLINE") + header[2:]
+    rows = [header]
     for dev in listed:
         advertised = (
             f"{dev.advertised_key.fingerprint} ({dev.advertised_key.label})"
@@ -144,10 +167,26 @@ def devices(
         state = "revoked" if dev.revoked else "active"
         if not dev.id_valid:
             state += ", invalid id"
-        rows.append((dev.display_id, state, advertised, pin_state(dev)[1]))
-    widths = [max(len(r[i]) for r in rows) for i in range(3)]
+        row = (dev.display_id, state, advertised, pin_state(dev)[1])
+        if with_presence:
+            row = (dev.display_id, state, online_cell(dev)) + row[2:]
+        rows.append(row)
+    padded = len(header) - 1
+    widths = [max(len(r[i]) for r in rows) for i in range(padded)]
     for r in rows:
-        click.echo("  ".join(r[i].ljust(widths[i]) for i in range(3)) + "  " + r[3])
+        click.echo(
+            "  ".join(r[i].ljust(widths[i]) for i in range(padded)) + "  " + r[padded]
+        )
+    if with_presence:
+        observed = next(
+            (d.presence.observed_at for d in listed if d.presence and d.presence.observed_at),
+            None,
+        )
+        click.echo(
+            f"\nONLINE = host agent connected to the gateway"
+            f"{f' as of {observed} (gateway clock)' if observed else ''}; "
+            "`?` = not reported."
+        )
     click.echo(
         "\nAdvertised keys come from the gateway and are never trusted. Pin the "
         "key printed by `pocketshell gateway show --host-key` on the host."

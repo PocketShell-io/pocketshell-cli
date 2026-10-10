@@ -561,6 +561,19 @@ JSON output carries fingerprints only, never the advertised key line, so
 `devices --json | … | gateway pin` cannot turn the gateway's claim into
 trust.
 
+When the gateway reports presence (the optional per-device `presence`
+object of newer gateways), the table gains an **ONLINE** column: `yes`
+when the host agent is connected to the gateway right now, `no` when it
+is not (enrolled but never connected, disconnected, or revoked — a
+revoked device is never shown online), `?` when the gateway did not
+report it. A footer gives the gateway's observation time. Against older
+gateways the column is omitted and the layout is unchanged. `--json`
+always carries `online` (`true`/`false`, or `null` = not reported),
+`observed_at`, and — while online — `connected_since` and
+`session_generation`. Presence is advisory and parsed leniently: a
+malformed `presence` object reads as "not reported", never as an error,
+and timestamps that are not plain RFC 3339 are dropped, never printed.
+
 ### 9.3 `gateway pin DEVICE_ID` / `gateway unpin DEVICE_ID`
 
 Pinning is the **only** way a host key becomes trusted. Run

@@ -4,12 +4,18 @@
 Bearer header (never in the URL). Everything in the answer is untrusted
 display data: ids are re-validated, the advertised SSH host key is shown
 only as an *advertised* fingerprint and never becomes a pin.
+
+Newer gateways add an optional per-device ``presence`` object (is the
+host agent connected to the gateway right now?). It is advisory and
+parsed leniently: absent or malformed presence means "unknown", never an
+error and never "offline".
 """
 
 from __future__ import annotations
 
 import http.client
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -29,12 +35,57 @@ class DevicesError(Exception):
     """Listing failed. Message is safe to print."""
 
 
+# RFC 3339 timestamp as the gateway emits it (UTC "Z" or numeric offset,
+# optional fraction). Anything else is dropped rather than echoed.
+_RFC3339_RE = re.compile(
+    r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})\Z"
+)
+MAX_SESSION_GENERATION = (1 << 64) - 1
+
+
+@dataclass(frozen=True)
+class Presence:
+    """Gateway-observed liveness of a device's host agent (advisory)."""
+
+    online: bool
+    observed_at: Optional[str]  # RFC 3339, gateway clock
+    connected_since: Optional[str]  # RFC 3339, only while online
+    session_generation: Optional[int]  # per-device, only while online
+
+
+def _timestamp(value: object) -> Optional[str]:
+    if isinstance(value, str) and len(value) <= 40 and _RFC3339_RE.match(value):
+        return value
+    return None
+
+
+def parse_presence(raw: object, *, revoked: bool) -> Optional[Presence]:
+    """Lenient parse of one device's ``presence`` object; None = unknown."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("online"), bool):
+        return None
+    online = raw["online"] and not revoked  # a revoked device is never online
+    generation = raw.get("session_generation")
+    if not (
+        isinstance(generation, int)
+        and not isinstance(generation, bool)
+        and 0 < generation <= MAX_SESSION_GENERATION
+    ):
+        generation = None
+    return Presence(
+        online=online,
+        observed_at=_timestamp(raw.get("observed_at")),
+        connected_since=_timestamp(raw.get("connected_since")) if online else None,
+        session_generation=generation if online else None,
+    )
+
+
 @dataclass(frozen=True)
 class DeviceInfo:
     id: str  # raw from the gateway; display via display_id
     id_valid: bool
     revoked: bool
     advertised_key: Optional[HostKey]
+    presence: Optional[Presence] = None  # None: gateway gave no (valid) presence
 
     @property
     def display_id(self) -> str:
@@ -108,6 +159,7 @@ def parse_devices(body: bytes) -> list[DeviceInfo]:
                 id_valid=bool(DEVICE_ID_RE.match(item["id"])),
                 revoked=item["revoked"],
                 advertised_key=advertised,
+                presence=parse_presence(item.get("presence"), revoked=item["revoked"]),
             )
         )
     return out
