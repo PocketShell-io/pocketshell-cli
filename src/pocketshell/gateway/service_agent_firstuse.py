@@ -147,7 +147,7 @@ def login_start(*, operation_id: str, label=None) -> tuple:
         _write(pending_path(operation_id), {
             "version": 1, "operationId": operation_id, "brokerUrl": base, "label": label,
             "deviceCode": start.device_code, "userCode": start.user_code, "interval": interval,
-            "expiresAt": expires_at, "nextPollAt": int(_now()) + interval})
+            "expiresAt": expires_at, "nextPollAt": _now() + interval})  # unrounded seconds
     except _Refusal as exc:
         return _doc(action, operation_id, ok=False, error=(exc.code, str(exc)), login=None), EXIT_ERROR
     except AccountError as exc:

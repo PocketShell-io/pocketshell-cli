@@ -45,6 +45,7 @@ pytestmark = pytest.mark.skipif(
 
 HARNESS = Path(__file__).parent / "agent_harness.py"
 SSH_DIR = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "OpenSSH"
+CMD = str(Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "cmd.exe")  # CreateProcessAsUser: no search
 TRIO = ["e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
         "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
         "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce"]
@@ -90,7 +91,7 @@ def test_new_machine_complete_runtime(closure, tmp_path):
     def agent(*args, stdin_file=None):
         argv = [sys.executable, str(HARNESS), str(seams), "gateway", "agent", *args, "--json"]
         if stdin_file is not None:
-            argv = ["cmd.exe", "/d", "/c", subprocess.list2cmdline(argv) + f' < "{stdin_file}"']
+            argv = [CMD, "/d", "/c", subprocess.list2cmdline(argv) + f' < "{stdin_file}"']
         code, out = run_unelevated(argv, env=env, cwd=str(tmp_path), timeout=900)
         text = out.decode("utf-8", "replace")
         print(f"$ (unelevated) pocketshell gateway agent {' '.join(args)} -> exit {code}\n{text[-4000:]}")
@@ -115,11 +116,22 @@ def test_new_machine_complete_runtime(closure, tmp_path):
     authority = str(user_data / "managed-runtime" / "authority.json")
     code, data = agent("bind", "--manifest", endpoint["manifest"], "--authority", authority)
     assert code == 0, data
-    # diagnostics only (never an assertion): the owned daemon's own view of its
-    # binary and the generated config, run unelevated like the guardian would
+    # DIAGNOSTIC PHASE ONLY (never an assertion, NOT a root-cause analysis): the
+    # daemon run unelevated in the INHERITED CI environment and the daemon's own
+    # directory -- NOT the guardian's closed manifest environment/root/desktop
     manifest0 = json.loads(Path(endpoint["manifest"]).read_text(encoding="utf-8"))
+    pins0 = {k.casefold(): v for k, v in manifest0["pins"].items()}
+    # the guardian's exact daemon launch (guardian.py: start_owned(daemon, ['-D', '-f', config], private
+    # desktop, owned job)): image, its pinned sha256 and argv are fixed by the manifest
+    print("DAEMON LAUNCH SPEC:", json.dumps({"image": manifest0["daemon"],
+                                             "sha256": pins0.get(manifest0["daemon"].casefold()),
+                                             "argv": [manifest0["daemon"], "-D", "-f", manifest0["config"]],
+                                             "cwd": manifest0["root"],
+                                             "flags": "0x08080404 (no window, extended startup info, unicode "
+                                                      "env, suspended until assigned to the owned job)",
+                                             "environment": manifest0["environment"]}, ensure_ascii=False))
     for diag in ([manifest0["daemon"], "-V"], [manifest0["daemon"], "-t", "-f", manifest0["config"]]):
-        dcode, dout = run_unelevated(["cmd.exe", "/d", "/c", subprocess.list2cmdline(diag) + " 2>&1"], env=env,
+        dcode, dout = run_unelevated([CMD, "/d", "/c", subprocess.list2cmdline(diag) + " 2>&1"], env=env,
                                      cwd=str(Path(manifest0["daemon"]).parent), timeout=60)
         print("DIAG", diag[1:], "->", dcode, hex(dcode & 0xFFFFFFFF), dout.decode("utf-8", "replace")[-2000:])
     print("SCOPE: acceptJob is a report-only CI seam (job membership accepted and reported), NOT NoJob "
@@ -127,8 +139,8 @@ def test_new_machine_complete_runtime(closure, tmp_path):
     try:  # the finally also stops a start whose READY assertion fails
         code, data = agent("start", "--timeout", "300")
         if code != 0:
-            for p in sorted(Path(endpoint["state"]).rglob("*.json")):
-                print(p, p.read_text(encoding="utf-8", errors="replace")[:3000])
+            for p in sorted([*Path(endpoint["state"]).rglob("*.json"), *Path(endpoint["state"]).rglob("*.log")]):
+                print(p, p.read_text(encoding="utf-8", errors="replace")[-6000:])  # incl. daemon.stderr.log
         assert code == 0 and data["state"] == "pre-enrollment", data
         assert data["endpoint"]["state"] == "ready" and data["endpoint"]["hostKey"]["proven"] is True
         assert data["outbound"]["state"] == "not-enrolled"
@@ -137,7 +149,7 @@ def test_new_machine_complete_runtime(closure, tmp_path):
         # 3. authorize ONE own client key
         key = tmp_path / "client_ed25519"
         subprocess.run([str(SSH_DIR / "ssh-keygen.exe"), "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
-        code, data = agent("authorize-key", "--public-key-stdin", stdin_file=str(key) + ".pub")
+        code, data = agent("authorize-key", "--public-key-stdin", "--confirmed", stdin_file=str(key) + ".pub")
         assert code == 0 and data["authorized"]["type"] == "ssh-ed25519", data
         known = tmp_path / "known_hosts"
         known.write_text(f"[127.0.0.1]:{port} {keys['hostKeyPublic']}\n", encoding="ascii")

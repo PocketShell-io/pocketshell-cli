@@ -323,3 +323,16 @@ def test_an_expired_code_reports_expired(env, monkeypatch):
     fu._sleep(901)
     doc, code = fu.login_complete(operation_id="op-x", login="op-start", timeout=60)
     assert doc["state"] == "expired" and code == 1
+
+
+def test_the_first_poll_never_precedes_the_broker_interval_on_a_fractional_clock(env, monkeypatch):
+    """Review 5a: nextPollAt is stored unrounded (no truncation of the start time)."""
+    fu._sleep(0.9)  # now = …000.9
+    _start_with_interval(env, monkeypatch, 5)
+    started = fu._now()
+    times = []
+    real_poll = broker.poll_device
+    monkeypatch.setattr(broker, "poll_device", lambda b, c, timeout=None: (times.append(fu._now()),
+                                                                          real_poll(b, c, timeout))[1])
+    fu.login_complete(operation_id="op-x", login="op-start", timeout=10)
+    assert times and times[0] >= started + 5

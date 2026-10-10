@@ -251,5 +251,34 @@ jobs:
           uv run --frozen python scripts/release/build_closure.py --out $out --helper "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" --helper-sha256 $h --helper-version ci-standin --backend-openssh "$env:RUNNER_TEMP\backend\backend-openssh" --backend-msys "$env:RUNNER_TEMP\backend\backend-msys" --aplexer-zip release/inputs/aplexer-fc396/windows-native-fc396.zip
           if ($LASTEXITCODE) { exit 1 }
           "POCKETSHELL_TEST_CLOSURE_V3_OUT=$out" >> $env:GITHUB_ENV
+      # CI-only crash evidence on this DISPOSABLE runner (never on a user machine):
+      # WER LocalDumps (a machine key: LocalDumps is read from HKLM) for the
+      # endpoint's own images, written into the runner's temp workspace.
+      - name: Enable crash dumps for the endpoint images (CI runner only)
+        shell: pwsh
+        run: |
+          $dumps = "$env:RUNNER_TEMP\dumps"
+          New-Item -ItemType Directory -Force $dumps | Out-Null
+          foreach ($img in "sshd.exe", "sshd-session.exe", "sshd-auth.exe", "ssh-shellhost.exe", "sftp-server.exe", "bash.exe", "a.exe", "aplexer.exe") {
+            $k = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$img"
+            New-Item -Force $k | Out-Null
+            New-ItemProperty -Force -Path $k -Name DumpFolder -PropertyType ExpandString -Value $dumps | Out-Null
+            New-ItemProperty -Force -Path $k -Name DumpType -PropertyType DWord -Value 1 | Out-Null
+            New-ItemProperty -Force -Path $k -Name DumpCount -PropertyType DWord -Value 5 | Out-Null
+          }
       - name: Complete runtime (new machine, ordinary user)
         run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_complete_runtime_native.py
+      - name: Crash evidence (Application events 1000/1001, dumps)
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001,1026} -MaxEvents 30 -ErrorAction SilentlyContinue |
+            Format-List TimeCreated, Id, ProviderName, Message | Out-String -Width 400
+          Get-ChildItem "$env:RUNNER_TEMP\dumps" -ErrorAction SilentlyContinue | Format-Table Name, Length | Out-String
+      - name: Upload crash dumps
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: complete-runtime-crash-dumps
+          path: ${{ runner.temp }}/dumps
+          if-no-files-found: ignore
