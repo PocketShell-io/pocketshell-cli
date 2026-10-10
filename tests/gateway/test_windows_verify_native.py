@@ -543,3 +543,83 @@ def test_system_reference_refusals(tree, tmp_path, variant):
     if out:
         reply = json.loads(out[0])
         assert not reply["ok"]
+
+
+# --- §16.14 agreed full-closure bounds on the REAL verifier ------------------------------
+
+WHOLE = 9622 + 4  # the PortableGit cardinality (synthetic bytes) + the tree's own files
+
+
+def _whole_tree(tree):
+    from pocketshell import windows_security as ws
+
+    base = Path(tree["release"]) / "endpoint" / "shell"
+    for i in range(9622):
+        ws.write_private(base / f"d{i // 500:02d}" / f"m{i:05d}", b"m%d" % i)
+    files = sorted(p for p in Path(tree["release"]).rglob("*") if p.is_file())
+    assert len(files) >= 9622
+    return files
+
+
+def _stdin_run(tree, requests, extra=()):
+    argv_ = argv(tree, [], extra=["--requests-stdin", *extra])
+    line = json.dumps({"version": 2, "operationId": "op-1", "requests": requests}).encode() + b"\n"
+    proc = subprocess.Popen(argv_, stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=0x08000000)
+    proc.stdin.write(line)
+    proc.stdin.flush()
+    return proc, len(line)
+
+
+def test_the_whole_closure_is_verified_and_held_in_one_call(tree):
+    files = _whole_tree(tree)
+    requests = [{"kind": "binary", "path": str(p), "expect": file_sha(p)} for p in files]
+    requests.append({"kind": "inventory", "path": tree["release"], "expect": inventory_digest(tree["release"])})
+    proc, wire = _stdin_run(tree, requests, extra=["--hold", "--entry", tree["entry"], "--hold-timeout", "60"])
+    first = proc.stdout.readline()
+    reply = json.loads(first)
+    assert reply["ok"] and len(reply["results"]) == len(requests), reply.get("problem")
+    assert [r["index"] for r in reply["results"]] == list(range(len(requests)))
+    assert len(reply["results"][-1]["files"]) == len(files)
+    # held: a member cannot be replaced while the closure is held
+    with pytest.raises(OSError):
+        os.replace(str(files[len(files) // 2]), str(files[len(files) // 2]) + ".moved")
+    proc.stdin.close()
+    proc.wait(timeout=60)
+    print(f"whole closure: {len(requests)} requests, request line {wire} B, reply {len(first)} B")
+
+
+def test_a_failed_last_member_authorizes_nothing_and_custody_lasts_until_close(tree):
+    files = _whole_tree(tree)
+    entry = {"kind": "binary", "path": tree["entry"], "expect": file_sha(tree["entry"])}
+    requests = [entry] + [{"kind": "binary", "path": str(p), "expect": file_sha(p)} for p in files
+                          if str(p) != tree["entry"]]
+    requests[-1]["expect"] = "0" * 64  # only the LAST member fails
+    proc, _wire = _stdin_run(tree, requests, extra=["--hold", "--entry", tree["entry"], "--spawn-entry",
+                                                    "--entry-arg", "-n", "--entry-arg", "30"])
+    reply = json.loads(proc.stdout.readline())
+    assert not reply["ok"] and not reply["results"][-1]["ok"] and all(r["ok"] for r in reply["results"][:-1])
+    try:
+        proc.stdin.write(b'{"version":2,"operationId":"op-1","op":"authorize"}\n')
+        proc.stdin.close()
+    except OSError:
+        pass
+    assert proc.wait(timeout=60) == 1
+    assert not [line for line in proc.stdout.read().splitlines() if b'"launched"' in line]
+
+
+def test_request_count_over_the_bound_is_refused_whole(tree):
+    requests = [{"kind": "directory", "path": tree["root"] + f"\\x{i:05d}"} for i in range(32769)]
+    proc, _wire = _stdin_run(tree, requests)
+    reply = json.loads(proc.stdout.readline())
+    assert proc.wait(timeout=60) == 2 and not reply["ok"] and reply["results"] == []
+    assert "32768" in reply["problem"]
+
+
+def test_requests_line_over_the_bound_is_refused(tree):
+    body = json.dumps({"version": 2, "operationId": "op-1",
+                       "requests": [{"kind": "directory", "path": tree["root"]}]}).encode()
+    proc = subprocess.Popen(argv(tree, [], extra=["--requests-stdin"]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            creationflags=0x08000000)
+    out, _ = proc.communicate(body + b" " * ((32 << 20) - len(body) + 1) + b"\n", timeout=120)
+    reply = json.loads(out.splitlines()[0])
+    assert proc.returncode == 2 and not reply["ok"] and "32 MiB" in reply["problem"]

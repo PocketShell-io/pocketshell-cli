@@ -319,7 +319,7 @@ func verifyFile(path, owner, root string, private, document bool, keep *held) (r
 		}
 	}
 	if document && size > maxDocument {
-		return r, nil, errors.New("document larger than 64 KiB")
+		return r, nil, errors.New("document larger than 8 MiB")
 	}
 	sum := hex.EncodeToString(hash.Sum(nil))
 	r.CanonicalPath, r.Size, r.SHA256 = &canonical, &size, &sum
@@ -411,7 +411,7 @@ func verifyInventory(path, owner, root string, private bool, keep *held) (result
 			} else {
 				files = append(files, name)
 				if len(files) > maxInventory {
-					return errors.New("more than 4096 files")
+					return fmt.Errorf("more than %d files", maxInventory)
 				}
 			}
 		}

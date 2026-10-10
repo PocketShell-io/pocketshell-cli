@@ -79,7 +79,7 @@ func run(args []string, in io.Reader, out *os.File) int {
 	}
 	rep := reply{Version: protocolVersion, OperationID: cfg.OperationID, OwnerSID: sid, OK: ok, Results: results}
 	if b, _ := json.Marshal(rep); len(b) > maxReply {
-		return refuse(1, "the reply would exceed 1 MiB; split the request")
+		return refuse(1, "the reply would exceed 32 MiB")
 	}
 	emit(out, rep)
 	if !ok {

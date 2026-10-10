@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -302,5 +304,43 @@ func TestSystemReferenceExpect(t *testing.T) {
 	}
 	if err := checkExpect(q, &result{SHA256: &other}); err == nil {
 		t.Error("a wrong system-role hash was accepted")
+	}
+}
+
+// GP91 full-closure bounds, bilaterally agreed with Fleet (agreement §16.14).
+func TestAgreedFullClosureBounds(t *testing.T) {
+	if maxInventory != 16384 || maxRequests != 32768 || maxDocument != 8<<20 || maxRequestsLine != 32<<20 ||
+		maxReply != 32<<20 {
+		t.Fatalf("bounds %d %d %d %d %d are not the agreed 16384/32768/8MiB/32MiB/32MiB",
+			maxInventory, maxRequests, maxDocument, maxRequestsLine, maxReply)
+	}
+}
+
+func TestRequestCountBound(t *testing.T) {
+	d := strings.Repeat("a", 64)
+	c := config{OperationID: "op", PrivateRoots: []string{`C:\x\managed-runtime`}}
+	for i := 0; i < maxRequests; i++ {
+		c.Requests = append(c.Requests, request{Kind: "binary", Path: fmt.Sprintf(`C:\x\managed-runtime\f%05d`, i), Expect: d})
+	}
+	if _, err := validate(c); err != nil {
+		t.Fatalf("exactly %d requests refused: %v", maxRequests, err)
+	}
+	c.Requests = append(c.Requests, request{Kind: "binary", Path: `C:\x\managed-runtime\over`, Expect: d})
+	if _, err := validate(c); err == nil {
+		t.Fatalf("%d requests accepted", maxRequests+1)
+	}
+}
+
+func TestRequestsLineBound(t *testing.T) {
+	body := `{"version":2,"operationId":"op","requests":[{"kind":"binary","path":"C:\\x\\managed-runtime\\a"}]}`
+	at := body + strings.Repeat(" ", maxRequestsLine-len(body)) + "\n"
+	cfg := config{OperationID: "op"}
+	if err := readRequests(bufio.NewReader(strings.NewReader(at)), &cfg); err != nil || len(cfg.Requests) != 1 {
+		t.Fatalf("a requests line of exactly %d bytes refused: %v", maxRequestsLine, err)
+	}
+	over := body + strings.Repeat(" ", maxRequestsLine-len(body)+1) + "\n"
+	cfg = config{OperationID: "op"}
+	if err := readRequests(bufio.NewReader(strings.NewReader(over)), &cfg); err == nil {
+		t.Fatal("an over-bound requests line was accepted")
 	}
 }

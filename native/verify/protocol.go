@@ -26,13 +26,17 @@ import (
 
 const (
 	protocolVersion = 2
-	maxRequests     = 512
-	maxDocument     = 64 * 1024
-	maxReply        = 1024 * 1024
-	maxFile         = 256 * 1024 * 1024
-	maxInventory    = 4096
-	defaultHold     = 120
-	maxHold         = 600
+	// agreed full-closure bounds (§16.14, Fleet d3d3b455): the measured
+	// PortableGit-inclusive closure is ~9 777 rows / 1.61 MB catalog /
+	// 2.33 MB manifest; these leave >=1.6x headroom. Over a bound refuses
+	// the whole call (never truncated, never partially authorized).
+	maxRequests  = 32768
+	maxDocument  = 8 << 20
+	maxReply     = 32 << 20
+	maxFile      = 256 * 1024 * 1024
+	maxInventory = 16384
+	defaultHold  = 120
+	maxHold      = 600
 )
 
 var (
@@ -525,9 +529,9 @@ type requestsLine struct {
 	} `json:"requests"`
 }
 
-const maxRequestsLine = 1024 * 1024
+const maxRequestsLine = 32 << 20
 
-// readRequests reads and parses the first stdin line (<= 1 MiB, one JSON
+// readRequests reads and parses the first stdin line (<= 32 MiB, one JSON
 // value, the correlated operation) into cfg.Requests.
 func readRequests(br interface{ ReadByte() (byte, error) }, cfg *config) error {
 	var line []byte
@@ -541,7 +545,7 @@ func readRequests(br interface{ ReadByte() (byte, error) }, cfg *config) error {
 		}
 		line = append(line, b)
 		if len(line) > maxRequestsLine {
-			return errors.New("the requests line exceeds 1 MiB")
+			return errors.New("the requests line exceeds 32 MiB")
 		}
 	}
 	var m requestsLine
