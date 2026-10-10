@@ -63,13 +63,24 @@ def test_an_unprotected_key_file_is_refused(tmp_path):
 
 
 def test_system_roles_are_measured_natively_with_the_servicing_authority():
+    """The production install path: known_folders() (native SystemRoot) +
+    measure_system_roles + check_system_roles. Never env or a literal."""
     from pocketshell.gateway import service_agent_endpoint as eps
+    from pocketshell.gateway import service_agent_install as inst
     from pocketshell.gateway import service_endpoint as ep
     from pocketshell.gateway import service_windows as win
 
     api = win.WindowsApi()
+    system_root = inst.known_folders()["SystemRoot"]
     roles = eps.measure_system_roles(api, api.current_sid())
     assert {k.casefold() for k in roles} == set(ep.SERVICING_IMAGES)
-    import os
-
-    assert eps.check_system_roles(roles, os.environ["SystemRoot"]) and all(len(v) == 64 for v in roles.values())
+    checked = eps.check_system_roles(roles, system_root)
+    assert sorted(checked.values()) == sorted(roles.values()) and all(len(v) == 64 for v in roles.values())
+    refs = eps.system_references(checked)
+    assert [r["name"] for r in refs] == ["cmd.exe", "conhost.exe"]
+    # real refusals on the same production function
+    wow = {k.replace("System32", "SysWOW64"): v for k, v in roles.items()}
+    one = dict(list(roles.items())[:1])
+    for bad in (wow, one, {**roles, **{next(iter(roles)): "X" * 64}}):
+        with pytest.raises(inst.InstallError):
+            eps.check_system_roles(bad, system_root)
