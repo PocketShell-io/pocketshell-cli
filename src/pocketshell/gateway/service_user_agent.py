@@ -160,11 +160,12 @@ def _native_paths(api):
     return inst.NativePaths(api)
 
 
-def _authority_trust(m, authority: str, user_sid: str, api) -> str:
+def _authority_trust(m, authority: str, user_sid: str, api) -> tuple:
     """Setup ABI v3: the installed authority records THIS manifest (its
     endpoint.manifest and manifestSHA256), the generic trio, every pin on disk
     and every release pin equal to its catalog row. Returns the authority's
-    sha256 (recorded in the binding; re-checked at status/start/stop)."""
+    sha256 (recorded in the binding; re-checked at status/start/stop) and the
+    receipt."""
     from pocketshell.gateway import service_agent_endpoint as eps
     from pocketshell.gateway import service_agent_install as inst
     from pocketshell.gateway import service_windows as win
@@ -180,7 +181,51 @@ def _authority_trust(m, authority: str, user_sid: str, api) -> str:
         raise AgentError(exc.code, sanitize(str(exc), 600)) from None
     except ServiceError as exc:
         raise AgentError("authority-invalid", sanitize(str(exc), 600)) from None
-    return authority_sha
+    return authority_sha, receipt
+
+
+def _generated_keys(receipt) -> dict:
+    keys = receipt.get("keys") if isinstance(receipt, dict) else None
+    if not isinstance(keys, dict) or keys.get("mode") != "generated":
+        raise AgentError("authority-invalid", "this needs a new-machine install (agent install --endpoint-keys "
+                         "generate); the installed authority references an existing enrollment's keys")
+    return keys
+
+
+def _bind_pre_enrollment(manifest_path: str, authority: Optional[str], *, api) -> dict:
+    """Revision D step 2: an endpoint-only binding BEFORE enrollment (the
+    supported enrollment probes this endpoint's generated host key). No
+    helper, no enrollment, no link."""
+    from pocketshell.gateway import pins as gateway_pins
+    from pocketshell.gateway import service_windows as win
+    from pocketshell.gateway import service_windows_endpoint as wep
+
+    if authority is None:
+        raise AgentError("usage", "bind without --config-dir is the pre-enrollment bind of a new-machine install; "
+                         "it needs --authority")
+    try:
+        manifest_path = win.validate_path(manifest_path, "endpoint manifest")
+        authority = win.validate_path(authority, "authority")
+        user_sid = api.current_sid()
+        m = wep.load_manifest(manifest_path)
+        authority_sha, receipt = _authority_trust(m, authority, user_sid, api)
+        keys = _generated_keys(receipt)
+        host_key = gateway_pins.parse_host_key(keys["hostKeyPublic"])
+        config = wep.read_bounded(m.config, ep.MAX_MANIFEST_BYTES)
+        if config is None:
+            raise ServiceError("the endpoint config does not exist")
+        ep.config_guard(config.decode("utf-8", "strict"), m)
+        wep.check_authority(m, api)
+    except AgentError:
+        raise
+    except (ServiceError, UnicodeDecodeError, gateway_pins.PinError) as exc:
+        raise AgentError("binding-refused", sanitize(str(exc), 600)) from None
+    binding = {"version": API_VERSION, "manifest": m.path, "manifestSHA256": m.sha256, "configDir": None,
+               "helper": None, "helperSHA256": None, "deviceId": "", "port": m.port, "ownerSID": user_sid,
+               "hostKey": host_key.line, "authority": authority, "authoritySHA256": authority_sha,
+               "enrolled": False}
+    _write_private(_path("binding.json"), json.dumps(binding, indent=1).encode("utf-8"))
+    return binding
 
 
 def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, runner,
@@ -188,7 +233,9 @@ def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, run
     from pocketshell.gateway import service_windows as win
     from pocketshell.gateway import service_windows_endpoint as wep
 
-    authority_sha = None
+    if config_dir is None:
+        return _bind_pre_enrollment(manifest_path, authority, api=api)
+    authority_sha = receipt = None
     try:
         config_dir = win.validate_path(config_dir, "config dir")
         manifest_path = win.validate_path(manifest_path, "endpoint manifest")
@@ -201,12 +248,16 @@ def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, run
             ep.check_trust(m, file_sha256=win.file_sha256)  # legacy: a compiled reviewed digest (none today)
         else:
             authority = win.validate_path(authority, "authority")
-            authority_sha = _authority_trust(m, authority, user_sid, api)
+            authority_sha, receipt = _authority_trust(m, authority, user_sid, api)
         config = wep.read_bounded(m.config, ep.MAX_MANIFEST_BYTES)
         if config is None:
             raise ServiceError("the endpoint config does not exist")
         ep.config_guard(config.decode("utf-8", "strict"), m)
         host_key = ep.check_binding(m, show, user_sid, qualification=False)
+        keys = (receipt or {}).get("keys") if isinstance(receipt, dict) else None
+        if isinstance(keys, dict) and keys.get("mode") == "generated" and host_key.line != keys.get("hostKeyPublic"):
+            raise AgentError("authority-invalid", "the enrollment pinned a host key that is not the generated host "
+                             "key of this install (enroll with --expect-host-key <keys.hostKeyPublic>)")
         wep.check_authority(m, api)
     except AgentError:
         raise
@@ -225,7 +276,7 @@ def bind(manifest_path: str, config_dir: str, helper: Optional[str], *, api, run
         "hostKey": host_key.line,
     }
     if authority is not None:
-        binding.update(authority=authority, authoritySHA256=authority_sha)
+        binding.update(authority=authority, authoritySHA256=authority_sha, enrolled=True)
     _write_private(_path("binding.json"), json.dumps(binding, indent=1).encode("utf-8"))
     return binding
 
@@ -253,13 +304,26 @@ def load_binding(*, api, runner, revalidate: bool):
     if revalidate:
         if "authority" in b:
             try:
-                anchored = _authority_trust(m, b["authority"], b["ownerSID"], api)
+                anchored, receipt = _authority_trust(m, b["authority"], b["ownerSID"], api)
+                keys = receipt.get("keys") if isinstance(receipt, dict) else None
+                if b.get("enrolled") is False:
+                    if _generated_keys(receipt).get("hostKeyPublic") != host_key.line:
+                        raise AgentError("authority-invalid", "the binding's host key is not the generated one")
+                elif isinstance(keys, dict) and keys.get("mode") == "generated" \
+                        and keys.get("hostKeyPublic") != host_key.line:
+                    raise AgentError("authority-invalid", "the enrolled host key is not the generated one")
             except AgentError as exc:
                 raise AgentError("binding-invalid", f"the installed authority no longer anchors this binding "
                                  f"({exc.code}: {sanitize(str(exc), 400)})") from None
             if anchored != b.get("authoritySHA256"):
                 raise AgentError("binding-invalid", "the installed authority changed since `agent bind`; bind "
                                  "again after review")
+        if b.get("enrolled") is False:  # pre-enrollment: no helper, no enrollment yet
+            try:
+                wep.check_authority(m, api)
+            except ServiceError as exc:
+                raise AgentError("binding-invalid", sanitize(str(exc), 600)) from None
+            return b, m, host_key
         try:
             if "authority" not in b:
                 ep.check_trust(m, file_sha256=win.file_sha256)
@@ -462,6 +526,9 @@ def _link_status(b: dict, api) -> dict:
     """running / stopped / unknown from the exact recorded identity
     (tri-state process_identity): unknown, malformed or recovery custody is
     never 'stopped'."""
+    if not b.get("helper"):
+        return {"state": "not-enrolled", "pid": None, "creationFILETIME": None, "helperSHA256": None,
+                "note": "no enrollment yet (revision D pre-enrollment): there is no link to run", "problems": []}
     state = _link_state()
     out = {"state": "stopped", "pid": None, "creationFILETIME": None, "helperSHA256": b["helperSHA256"],
            "note": "the gateway connection itself is not observable locally; this is the exact link process",
@@ -586,6 +653,9 @@ def _collect(b, m, host_key, api, runner) -> tuple:
     custody = endpoint.get("custodyProblems") or outbound["state"] == "unknown" or outbound.get("problems")
     if custody:
         state, code = "failed", EXIT_NOT_READY  # unverifiable / recovery custody: never ready, never stopped
+    elif outbound["state"] == "not-enrolled":
+        state, code = {"ready": ("pre-enrollment", EXIT_NOT_READY),
+                       "stopped": ("stopped", EXIT_STOPPED)}.get(endpoint["state"], ("starting", EXIT_NOT_READY))
     elif endpoint["state"] == "ready" and outbound["state"] == "running":
         state, code = "ready", EXIT_READY
     elif endpoint["state"] == "stopped" and outbound["state"] == "stopped":
@@ -616,7 +686,7 @@ def _guarded(operation_id, fn, *, needs_binding=True):
             return fn()
     except AgentError as exc:
         return _document(operation_id, state="unavailable" if exc.code in ("not-bound", "binding-invalid", "busy")
-                         else "failed", error=exc), EXIT_ERROR
+                         else "failed", error=exc), EXIT_USAGE if exc.code == "usage" else EXIT_ERROR
     except ServiceError as exc:
         return _document(operation_id, state="failed", error=AgentError("error", str(exc))), EXIT_ERROR
 
@@ -650,8 +720,10 @@ def _custody_gate(b, m, api) -> None:
     """Refuse to spawn anything while any custody is unverifiable (malformed
     record, access/query failure) or a recovery record names a process that
     is not proven gone. Proven-gone recovery records are released."""
-    for name, meta, image, what in (("guardian.json", _guardian_launch(), m.python, "launched guardian"),
-                                    ("link.json", _link_state(), b["helper"], "link")):
+    pairs = [("guardian.json", _guardian_launch(), m.python, "launched guardian")]
+    if b.get("helper"):
+        pairs.append(("link.json", _link_state(), b["helper"], "link"))
+    for name, meta, image, what in pairs:
         if meta is MALFORMED:
             raise AgentError("custody-unverifiable", f"the {what} custody record {name} is malformed; it cannot "
                              "prove absence; not starting (run stop, or repair the record)")
@@ -659,6 +731,8 @@ def _custody_gate(b, m, api) -> None:
             raise AgentError("custody-unverifiable", f"the {what} process {meta['pid']} cannot be verified (it "
                              "may still be running); not starting a second one; retry or stop")
     for stem, image in (("guardian", m.python), ("link", b["helper"])):
+        if image is None:
+            continue
         for name, meta in _recovery_records(stem):
             if meta is not MALFORMED and _identity_state(meta, image, api) == GONE:
                 _delete(_path(name))
@@ -693,7 +767,7 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
                     break
                 time.sleep(wep.POLL_SECONDS)
         link = _link_status(b, api)
-        if link["state"] != "running":
+        if link["state"] not in ("running", "not-enrolled"):
             launch = _spawn(api, [b["helper"], "run", "--config-dir", b["configDir"]],
                             ntpath.dirname(b["helper"]), None, b["helperSHA256"], record="link.json")
             _record_launch("link.json", {**launch, "helper": b["helper"]}, b["helper"], api)
@@ -702,6 +776,8 @@ def start(*, api, runner, timeout: float = DEFAULT_START_TIMEOUT, operation_id=N
                 time.sleep(settle)
         owner, endpoint, outbound, state, code = _collect(b, m, host_key, api, runner)
         doc = _document(operation_id, state=state, binding=b, owner=owner, endpoint=endpoint, outbound=outbound)
+        if state == "pre-enrollment":
+            return doc, EXIT_READY  # the endpoint is up for the supported enrollment's probe
         if code != EXIT_READY:
             doc["state"] = "starting" if state != "failed" and endpoint["state"] != "ready" else "failed"
             doc["error"] = {"code": "start-deadline",
@@ -748,8 +824,11 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
         # the guardian WE launched: consumed even without CURRENT/READY (a
         # start that timed out before READY must not orphan it)
         _release_custody("guardian.json", _guardian_launch(), m.python, api, errors, "launched guardian")
-        _release_custody("link.json", _link_state(), b["helper"], api, errors, "link")
+        if b.get("helper"):
+            _release_custody("link.json", _link_state(), b["helper"], api, errors, "link")
         for stem, image in (("guardian", m.python), ("link", b["helper"])):
+            if image is None:
+                continue
             for name, meta in _recovery_records(stem):
                 if meta is not MALFORMED and not win_same(meta.get("image"), image):
                     meta = MALFORMED  # a recovery identity must name the expected image
@@ -778,7 +857,7 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
 
 
 def install_command(*, user_data, catalog, staged, dry_run, api, runner, operation_id=None, paths=None,
-                    folders=None, config_dir=None, endpoint_inputs=None) -> tuple:
+                    folders=None, config_dir=None, endpoint_inputs=None, endpoint_keys=None, port=None) -> tuple:
     """`gateway agent install`: copy the catalogued closure and write the
     public-only authority receipt. Never starts, enrolls, or reads secrets."""
     from pocketshell import __version__
@@ -789,16 +868,22 @@ def install_command(*, user_data, catalog, staged, dry_run, api, runner, operati
                 "dryRun": bool(dry_run), "receipt": receipt,
                 "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600)}}
 
+    if endpoint_keys is not None:
+        if config_dir is not None or endpoint_inputs is not None or port is None:
+            return doc(False, error=AgentError("usage", "--endpoint-keys generate takes --port and excludes "
+                                               "--config-dir/--endpoint-inputs")), EXIT_USAGE
+    elif port is not None:
+        return doc(False, error=AgentError("usage", "--port goes with --endpoint-keys generate")), EXIT_USAGE
     if (config_dir is None) != (endpoint_inputs is None):
         return doc(False, error=AgentError("usage", "--config-dir and --endpoint-inputs go together (setup ABI "
                                            "v3: install first)")), EXIT_USAGE
     if sys.platform != "win32":
         return doc(False, error=AgentError("unsupported-platform", "the ordinary-v2 runtime is Windows-only")), \
             EXIT_ERROR
-    if config_dir is not None:
+    if config_dir is not None or endpoint_keys is not None:
         return _install_endpoint(doc, user_data=user_data, catalog=catalog, staged=staged, dry_run=dry_run,
                                  api=api, runner=runner, paths=paths, folders=folders, config_dir=config_dir,
-                                 endpoint_inputs=endpoint_inputs)
+                                 endpoint_inputs=endpoint_inputs, port=port)
     try:
         with _OperationLock():
             b, _m, host_key = load_binding(api=api, runner=runner, revalidate=True)
@@ -817,9 +902,10 @@ def install_command(*, user_data, catalog, staged, dry_run, api, runner, operati
 
 
 def _install_endpoint(doc, *, user_data, catalog, staged, dry_run, api, runner, paths, folders, config_dir,
-                      endpoint_inputs) -> tuple:
-    """Setup ABI v3: install FIRST (no binding). The public inputs file names
-    the existing key files; it is never a source of executable paths."""
+                      endpoint_inputs, port=None) -> tuple:
+    """Setup ABI v3: install FIRST (no binding). Migration: the public inputs
+    file names the existing key files (never a source of executable paths).
+    Revision D new machine (``config_dir`` None): fresh generated keys."""
     from pocketshell import __version__
     from pocketshell.gateway import service_agent_endpoint as eps
     from pocketshell.gateway import service_agent_install as inst
@@ -831,24 +917,102 @@ def _install_endpoint(doc, *, user_data, catalog, staged, dry_run, api, runner, 
 
     try:
         with _OperationLock():
-            try:
-                with open(win.validate_path(endpoint_inputs, "endpoint inputs"), "rb") as handle:
-                    data = handle.read(eps.MAX_INPUTS + 1)
-            except (OSError, ServiceError) as exc:
-                raise inst.InstallError("endpoint-inputs", f"cannot read --endpoint-inputs "
-                                        f"({sanitize(str(exc), 200)})") from None
             sid = api.current_sid()
-            receipt = eps.install_endpoint_runtime(
-                user_data=user_data, catalog_path=catalog, staged=staged, config_dir=config_dir,
-                endpoint_inputs=data, owner_sid=sid, account=eps.local_account(sid), show=show,
-                system_roles=eps.measure_system_roles(api, sid),
-                paths=paths or inst.NativePaths(api), folders=folders or inst.known_folders(),
-                cli_version=__version__, dry_run=dry_run)
+            common_kw = dict(user_data=user_data, catalog_path=catalog, staged=staged, owner_sid=sid,
+                             account=eps.local_account(sid), system_roles=eps.measure_system_roles(api, sid),
+                             paths=paths or inst.NativePaths(api), folders=folders or inst.known_folders(),
+                             cli_version=__version__, dry_run=dry_run)
+            if config_dir is None:
+                receipt = eps.install_endpoint_runtime(keys_mode="generated", port=port, **common_kw)
+            else:
+                try:
+                    with open(win.validate_path(endpoint_inputs, "endpoint inputs"), "rb") as handle:
+                        data = handle.read(eps.MAX_INPUTS + 1)
+                except (OSError, ServiceError) as exc:
+                    raise inst.InstallError("endpoint-inputs", f"cannot read --endpoint-inputs "
+                                            f"({sanitize(str(exc), 200)})") from None
+                receipt = eps.install_endpoint_runtime(keys_mode="migrated", config_dir=config_dir,
+                                                       endpoint_inputs=data, show=show, **common_kw)
     except (AgentError, inst.InstallError) as exc:
         return doc(False, error=exc), EXIT_USAGE if getattr(exc, "code", "") == "usage" else EXIT_ERROR
     except Exception as exc:  # noqa: BLE001 - a refusal, never a traceback
         return doc(False, error=AgentError("error", str(exc) or type(exc).__name__)), EXIT_ERROR
     return doc(True, receipt), EXIT_READY
+
+
+AUTHORIZED_TYPES = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-rsa")
+MIN_RSA_BITS = 3072
+
+
+def _rsa_bits(blob: bytes) -> int:
+    def take(pos):
+        n = int.from_bytes(blob[pos:pos + 4], "big")
+        return blob[pos + 4:pos + 4 + n], pos + 4 + n
+
+    _name, pos = take(0)
+    _e, pos = take(pos)
+    modulus, _pos = take(pos)
+    return int.from_bytes(modulus, "big").bit_length()
+
+
+def parse_authorized_key(text) -> object:
+    """EXACTLY one plain OpenSSH public-key line: no options, no certificate,
+    no private material; ed25519 / ecdsa / rsa >= 3072. The comment is dropped."""
+    import base64
+
+    from pocketshell.gateway import pins as gateway_pins
+
+    if not isinstance(text, str) or len(text) > 16 * 1024:
+        raise AgentError("key-refused", "one public-key line of at most 16 KiB is required")
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) != 1 or "PRIVATE KEY" in text:
+        raise AgentError("key-refused", "exactly ONE public-key line is required (never a private key)")
+    fields = lines[0].split()
+    if len(fields) < 2 or fields[0] not in AUTHORIZED_TYPES:
+        raise AgentError("key-refused", f"the key type must be one of {', '.join(AUTHORIZED_TYPES)} (no "
+                         "authorized_keys options, no certificates)")
+    try:
+        key = gateway_pins.parse_host_key(" ".join(fields[:2]))
+    except gateway_pins.PinError as exc:
+        raise AgentError("key-refused", sanitize(str(exc), 300)) from None
+    if key.key_type == "ssh-rsa" and _rsa_bits(base64.b64decode(key.blob_b64)) < MIN_RSA_BITS:
+        raise AgentError("key-refused", f"an RSA key must have at least {MIN_RSA_BITS} bits")
+    return key
+
+
+def authorize_key_command(text, *, api, runner, operation_id=None) -> tuple:
+    """`gateway agent authorize-key --public-key-stdin` (revision D): append the
+    user's OWN client public key to the generated authorized_keys, atomically
+    and owner-private. The gateway never brokers user keys (docs/gateway.md
+    §2); nothing is read from a registry or copied from another machine."""
+
+    def doc(ok, authorized=None, error=None):
+        return {"version": API_VERSION, "operationId": operation_id, "action": "authorize-key", "ok": ok,
+                "authorized": authorized,
+                "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600)}}
+
+    if sys.platform != "win32":
+        return doc(False, error=AgentError("unsupported-platform", "Windows-only")), EXIT_ERROR
+    try:
+        key = parse_authorized_key(text)
+        with _OperationLock():
+            b, m, _host_key = load_binding(api=api, runner=runner, revalidate=True)
+            if "authority" not in b:
+                raise AgentError("authority-invalid", "authorize-key needs an authority-bound (revision D) install")
+            _sha, receipt = _authority_trust(m, b["authority"], b["ownerSID"], api)
+            target = _generated_keys(receipt)["authorizedKeys"]
+            current = _read_private(target, 1024 * 1024)
+            if current is None:
+                raise AgentError("authority-invalid", "the generated authorized_keys is missing")
+            lines = current.decode("utf-8").splitlines()
+            if key.line not in lines:
+                lines.append(key.line)
+                _write_private(target, ("\n".join(lines) + "\n").encode("utf-8"))
+    except AgentError as exc:
+        return doc(False, error=exc), EXIT_USAGE if exc.code == "usage" else EXIT_ERROR
+    except Exception as exc:  # noqa: BLE001 - a refusal, never a traceback
+        return doc(False, error=AgentError("error", str(exc) or type(exc).__name__)), EXIT_ERROR
+    return doc(True, {"type": key.key_type, "fingerprint": key.fingerprint}), EXIT_READY
 
 
 def verify_paths_command(*, owner_sid, operation_id, private_roots, resources_roots, requests, api,

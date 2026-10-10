@@ -543,7 +543,8 @@ def agent_group() -> None:
 
 @agent_group.command("bind")
 @click.option("--manifest", required=True, metavar="PATH", help="Protected guardian manifest (reviewed).")
-@click.option("--config-dir", required=True, metavar="DIR", help="Enrolled helper config dir.")
+@click.option("--config-dir", default=None, metavar="DIR",
+              help="Enrolled helper config dir (omit only for the pre-enrollment bind of a new-machine install).")
 @click.option("--helper", default=None, metavar="PATH", help="Reviewed pocketshell-link.exe.")
 @click.option("--authority", default=None, metavar="PATH",
               help="<userData>\\managed-runtime\\authority.json from `agent install` (setup ABI v3).")
@@ -606,16 +607,34 @@ def _emit_raw(doc, code):
 @click.option("--config-dir", default=None, metavar="DIR",
               help="The EXISTING enrollment config dir (setup ABI v3: install first, then bind).")
 @click.option("--endpoint-inputs", default=None, metavar="PATH",
-              help="Public JSON {version:1, hostKey, authorizedKeys}: paths only, never read.")
+              help="Public JSON {version:1, hostKey, authorizedKeys}: paths only, never read (migration).")
+@click.option("--endpoint-keys", type=click.Choice(["generate"]), default=None,
+              help="New machine: generate a fresh owner-private host key before enrollment (with --port).")
+@click.option("--port", type=int, default=None, help="The endpoint's loopback port (with --endpoint-keys).")
 @_JSON
 @_OPERATION_ID
-def agent_install(user_data, catalog, staged, dry_run, config_dir, endpoint_inputs, as_json, operation_id):
+def agent_install(user_data, catalog, staged, dry_run, config_dir, endpoint_inputs, endpoint_keys, port, as_json,
+                  operation_id):
     """Install the catalogued ordinary-v2 runtime and write authority.json (PROPOSED v3)."""
     _check_operation_id(operation_id)
     api, runner = _api_runner()
     _emit_raw(*_agent.install_command(user_data=user_data, catalog=catalog, staged=staged, dry_run=dry_run,
                                       api=api, runner=runner, operation_id=operation_id,
-                                      config_dir=config_dir, endpoint_inputs=endpoint_inputs))
+                                      config_dir=config_dir, endpoint_inputs=endpoint_inputs,
+                                      endpoint_keys=endpoint_keys, port=port))
+
+
+@agent_group.command("authorize-key")
+@click.option("--public-key-stdin", is_flag=True, required=True,
+              help="Read ONE OpenSSH public-key line (your own client device's) from stdin.")
+@_JSON
+@_OPERATION_ID
+def agent_authorize_key(public_key_stdin, as_json, operation_id):
+    """Authorize one of your own client public keys for this endpoint (new-machine installs)."""
+    _check_operation_id(operation_id)
+    api, runner = _api_runner()
+    text = click.get_text_stream("stdin").read(16 * 1024 + 1)
+    _emit_raw(*_agent.authorize_key_command(text, api=api, runner=runner, operation_id=operation_id))
 
 
 @agent_group.command("verify-paths")

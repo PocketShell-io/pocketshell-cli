@@ -170,3 +170,141 @@ def test_status_after_legacy_runtime_tamper_refuses(agent, monkeypatch):  # noqa
     _tamper("legacy-runtime", agent, None, monkeypatch)
     result, data = run("status", "--json")
     assert result.exit_code == 1 and data["state"] == "unavailable" and data["error"]["code"] == "binding-invalid"
+
+
+# --- revision D: pre-enrollment endpoint, then enrollment, then the bind upgrade ----------
+
+
+def _generated(authority, tmp_path, key=None):
+    from gateway_keyblobs import ED25519_LINE
+
+    from pocketshell.gateway import pins
+
+    line = key or ED25519_LINE
+    ak = tmp_path / "authorized_keys"
+    ak.write_bytes(b"")
+    authority["receipt"] = {"version": 3, "endpoint": {"manifest": MANIFEST},
+                            "keys": {"mode": "generated", "hostKey": "C:\\k", "hostKeyPublic": line,
+                                     "hostKeyFingerprint": pins.parse_host_key(line).fingerprint,
+                                     "authorizedKeys": str(ak)}}
+    return ak
+
+
+def bind_pre():
+    return run("bind", "--manifest", MANIFEST, "--authority", AUTHORITY, "--json")
+
+
+def test_pre_enrollment_bind_needs_no_enrollment(authority, tmp_path):
+    _generated(authority, tmp_path)
+    result, data = bind_pre()
+    assert result.exit_code == 0, result.output
+    assert data["binding"]["configDir"] is None and data["binding"]["deviceId"] == ""
+    stored = json.loads(agent_mod._read_private(agent_mod._path("binding.json")))
+    assert stored["helper"] is None and stored["enrolled"] is False
+
+
+def test_pre_enrollment_bind_refuses_a_migrated_authority_and_a_missing_authority(authority, tmp_path):
+    authority["receipt"] = {"version": 3, "endpoint": {"manifest": MANIFEST}, "keys": {"mode": "migrated"}}
+    result, data = bind_pre()
+    assert result.exit_code == 1 and data["error"]["code"] == "authority-invalid"
+    result, data = run("bind", "--manifest", MANIFEST, "--json")
+    assert result.exit_code == 2 and data["error"]["code"] == "usage"
+
+
+def test_pre_enrollment_start_runs_the_endpoint_only(agent, authority, tmp_path):  # noqa: F811
+    _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    result, data = run("start", "--json")
+    assert result.exit_code == 0, result.output
+    assert data["state"] == "pre-enrollment" and data["endpoint"]["state"] == "ready"
+    assert data["outbound"]["state"] == "not-enrolled"
+    assert len(agent["api"].spawns) == 1  # the guardian only; no link without an enrollment
+    result, data = run("status", "--json")
+    assert result.exit_code == 3 and data["state"] == "pre-enrollment"
+    result, data = run("stop", "--json")
+    assert result.exit_code == 0 and data["state"] == "stopped", result.output
+
+
+def test_bind_upgrade_after_enrollment_requires_the_generated_host_key(agent, authority, tmp_path):  # noqa: F811
+    from gateway_keyblobs import ED25519_LINE_2
+
+    _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    result, data = bind_authority()  # show pins ED25519_LINE == the generated key
+    assert result.exit_code == 0, result.output
+    stored = json.loads(agent_mod._read_private(agent_mod._path("binding.json")))
+    assert stored["enrolled"] is True and stored["helper"] == WIN_HELPER
+    _generated(authority, tmp_path, key=ED25519_LINE_2)  # an enrollment that pinned another key
+    result, data = bind_authority()
+    assert result.exit_code == 1 and data["error"]["code"] == "authority-invalid"
+    assert "generated host key" in data["error"]["message"]
+
+
+# --- authorize-key: the user's own client public key (never brokered, never copied) -------
+
+
+def authorize(text):
+    from click.testing import CliRunner
+
+    from pocketshell.cli import cli
+
+    result = CliRunner().invoke(cli, ["gateway", "agent", "authorize-key", "--public-key-stdin", "--json"],
+                                input=text)
+    return result, json.loads(result.stdout) if result.stdout.strip().startswith("{") else None
+
+
+def test_authorize_key_appends_one_validated_public_key(authority, tmp_path):
+    from gateway_keyblobs import ED25519_LINE, ED25519_LINE_2
+
+    ak = _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    result, data = authorize(ED25519_LINE_2 + " phone@me\n")
+    assert result.exit_code == 0, result.output
+    assert data["authorized"]["fingerprint"].startswith("SHA256:")
+    result, data = authorize(ED25519_LINE + "\n")
+    assert result.exit_code == 0
+    assert ak.read_text().splitlines() == [ED25519_LINE_2, ED25519_LINE]
+    result, data = authorize(ED25519_LINE + "\n")  # idempotent: no duplicate line
+    assert result.exit_code == 0 and ak.read_text().splitlines() == [ED25519_LINE_2, ED25519_LINE]
+
+
+@pytest.mark.parametrize("text", [
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n",
+    'command="sh" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK8B0Ctl2bl8wdg50ZKPY7t9WuU170cplZpzuMckYrSU\n',
+    "ssh-ed25519-cert-v01@openssh.com AAAA\n",
+    "ssh-dss AAAAB3NzaC1kc3M=\n",
+    "",
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK8B0Ctl2bl8wdg50ZKPY7t9WuU170cplZpzuMckYrSU\nssh-ed25519 AAAA\n",
+])
+def test_authorize_key_refuses_anything_but_one_plain_public_key(authority, tmp_path, text):
+    ak = _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    result, data = authorize(text)
+    assert result.exit_code in (1, 2) and data["error"]["code"] in ("usage", "key-refused")
+    assert ak.read_bytes() == b""
+
+
+def test_authorize_key_refuses_a_migrated_install(authority, tmp_path):
+    from gateway_keyblobs import ED25519_LINE
+
+    assert bind_authority()[0].exit_code == 0
+    authority["receipt"] = {"version": 3, "endpoint": {"manifest": MANIFEST}, "keys": {"mode": "migrated"}}
+    result, data = authorize(ED25519_LINE + "\n")
+    assert result.exit_code == 1 and data["error"]["code"] == "authority-invalid"
+
+
+def test_install_generate_routes_without_any_enrollment(agent, monkeypatch):  # noqa: F811
+    seen = {}
+    monkeypatch.setattr(eps, "install_endpoint_runtime", lambda **kw: seen.update(kw) or {"version": 3})
+    monkeypatch.setattr(eps, "local_account", lambda sid: "owner")
+    monkeypatch.setattr(eps, "measure_system_roles", lambda api, sid: {"measured": True})
+    doc, code = agent_mod.install_command(user_data="C:\\u", catalog="C:\\c.json", staged="C:\\s", dry_run=False,
+                                          api=agent["api"], runner=None, paths=object(), folders={"x": 1},
+                                          endpoint_keys="generate", port=22100)
+    assert code == 0 and seen["keys_mode"] == "generated" and seen["port"] == 22100
+    assert "config_dir" not in seen and "show" not in seen
+    for bad in (dict(endpoint_keys="generate"), dict(endpoint_keys="generate", port=22100, config_dir=WIN_CONFIG),
+                dict(port=22100)):
+        doc, code = agent_mod.install_command(user_data="C:\\u", catalog="C:\\c.json", staged="C:\\s",
+                                              dry_run=False, api=agent["api"], runner=None, **bad)
+        assert code == 2 and doc["error"]["code"] == "usage"
