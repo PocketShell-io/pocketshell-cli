@@ -358,8 +358,28 @@ def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable
     if m.source_digests() not in ALLOWED_GUARDIAN_SOURCES:
         raise ServiceError("the pinned guardian.py/native_api.py/policy.py are not the reviewed generic guardian "
                            "source trio (ALLOWED_GUARDIAN_SOURCES)")
+    # ALL guardian-required pins: every pin lives below managed-runtime or is
+    # a System32 servicing role; both servicing roles, the config and the
+    # backend config are pinned; with the catalog rows, the WHOLE release
+    # closure is pinned at its catalog digest (no missing startup member).
+    base = ntpath.normcase(ntpath.normpath(root)) + "\\"
+    keys = {ntpath.normcase(p) for p in m.pins}
+    for path in m.pins:
+        if not ntpath.normcase(path).startswith(base) and not is_servicing_image(path):
+            raise ServiceError(f"pinned file {sanitize(path)} is outside managed-runtime and not a System32 "
+                               "servicing role")
+    for image in SERVICING_IMAGES:
+        if image not in keys:
+            raise ServiceError(f"the manifest lacks the servicing role pin {image}")
+    for need in (m.config, m.config_bindings["backendConfig"]):
+        if ntpath.normcase(need) not in keys:
+            raise ServiceError(f"the manifest lacks a pin for {sanitize(need)}")
     if release_pins is not None:
         release = ntpath.normcase(ntpath.join(ntpath.normpath(root), "releases")) + "\\"
+        missing = sorted(k for k in release_pins if k not in keys)
+        if missing:
+            raise ServiceError(f"the manifest lacks catalog closure pins ({len(missing)} missing, e.g. "
+                               f"{sanitize(missing[0])})")
         for path, digest in m.pins.items():
             key = ntpath.normcase(path)
             if key.startswith(release) and release_pins.get(key) != digest:

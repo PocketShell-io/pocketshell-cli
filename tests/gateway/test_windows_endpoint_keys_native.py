@@ -60,3 +60,14 @@ def test_an_unprotected_key_file_is_refused(tmp_path):
     loose.write_bytes(b"SYNTHETIC\n")  # inherits the private dir's ACL: not protected
     with pytest.raises(Exception):
         inst.NativePaths(api).metadata(str(loose), api.current_sid())
+
+
+def test_system_roles_are_measured_natively_with_the_servicing_authority():
+    from pocketshell.gateway import service_agent_endpoint as eps
+    from pocketshell.gateway import service_endpoint as ep
+    from pocketshell.gateway import service_windows as win
+
+    api = win.WindowsApi()
+    roles = eps.measure_system_roles(api, api.current_sid())
+    assert {k.casefold() for k in roles} == set(ep.SERVICING_IMAGES)
+    assert eps.check_system_roles(roles) and all(len(v) == 64 for v in roles.values())

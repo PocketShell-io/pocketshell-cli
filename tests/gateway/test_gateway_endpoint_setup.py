@@ -47,6 +47,8 @@ class Paths(_Paths):
 TRIO = ("6cf7ae85ad21b23496e7187da7e3bb4f171adef5f63edd2fd01f6ce6435bd047",
         "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
         "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce")
+# natively measured System32 servicing roles (here: synthetic digests)
+SYSTEM_ROLES = {"C:\\Windows\\System32\\cmd.exe": "c" * 64, "C:\\Windows\\System32\\conhost.exe": "d" * 64}
 KEY_LINE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK8B0Ctl2bl8wdg50ZKPY7t9WuU170cplZpzuMckYrSU"
 
 
@@ -138,7 +140,7 @@ def inputs(host, **over):
 def install(host, paths, **over):
     kw = dict(user_data=host.user_data, catalog_path=host.catalog_path, staged=host.staged,
               config_dir=host.config_dir, endpoint_inputs=inputs(host), owner_sid=host.sid, account=host.user,
-              show=lambda helper: (host.show, sha(b"helper")), paths=paths, folders=host.folders,
+              show=lambda helper: (host.show, sha(b"helper")), system_roles=dict(SYSTEM_ROLES), paths=paths, folders=host.folders,
               cli_version=__version__, now=0)
     kw.update(over)
     return eps.install_endpoint_runtime(**kw)
@@ -247,6 +249,7 @@ def _installed(host):
     e = receipt["endpoint"]
     data = paths.files[paths.key(e["manifest"])][1]
     disk = {k: sha(v[1]) for k, v in paths.files.items()}
+    disk.update({paths.key(k): v for k, v in SYSTEM_ROLES.items()})
     return paths, receipt, e, data, (lambda p: disk.get(paths.key(p)))
 
 
@@ -260,7 +263,7 @@ def test_trust_accepts_the_recorded_manifest():
 def test_trust_refuses_a_tampered_manifest():
     host = Host()
     _paths, receipt, e, data, digest = _installed(host)
-    tampered = data.replace(b'"port": %d' % host.port, b'"port": %d' % (host.port + 1))
+    tampered = data.replace(b'"port":%d' % host.port, b'"port":%d' % (host.port + 1))
     assert tampered != data
     m = ep.parse_manifest(tampered, e["manifest"])
     with pytest.raises(ep.ServiceError, match="recorded"):
@@ -322,6 +325,7 @@ def test_a_second_synthetic_host_needs_no_rebuild():
     m = ep.parse_manifest(data, e["manifest"])
     assert m.owner_sid == b.sid and m.port == 31337 and m.config_bindings["allowUser"] == "jane.doe"
     disk = {k: sha(v[1]) for k, v in paths_b.files.items()}
+    disk.update({paths_b.key(k): v for k, v in SYSTEM_ROLES.items()})
     ep.check_trust_authority(m, rb, file_sha256=lambda p: disk.get(paths_b.key(p)))
     ep.config_guard(paths_b.files[paths_b.key(e["config"])][1].decode(), m)
 
@@ -398,3 +402,95 @@ def test_load_authority_refuses(mutate):
     with pytest.raises(inst.InstallError) as err:
         eps.load_authority(authority, sid, paths)
     assert err.value.code == "authority-invalid"
+
+
+# --- ALL guardian-required pins (review finding 2 on 91ed08b) ----------------------------
+
+
+def _rows(host):
+    rel = host.user_data + "\\managed-runtime\\releases\\r2026-10-10-3"
+    return {ntpath.normcase(rel + "\\" + f["path"].replace("/", "\\")): f["sha256"] for f in catalog_v3()["files"]}
+
+
+def _rewritten(host, receipt, e, data, mutate):
+    """A manifest variant re-recorded in the authority (the authority is the
+    only anchor, so the controls must hold even for a recorded manifest)."""
+    doc = json.loads(data)
+    mutate(doc)
+    new = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
+    r = json.loads(json.dumps(receipt))
+    r["endpoint"]["manifestSHA256"] = r["binding"]["manifestSHA256"] = sha(new)
+    return ep.parse_manifest(new, e["manifest"]), r
+
+
+def test_the_generated_manifest_pins_the_whole_catalog_closure_and_the_system_roles():
+    host = Host()
+    _paths, receipt, e, data, digest = _installed(host)
+    pins = {ntpath.normcase(k): v for k, v in json.loads(data)["pins"].items()}
+    rows = _rows(host)
+    assert all(pins.get(k) == v for k, v in rows.items())  # every catalog row, python modules included
+    for k, v in SYSTEM_ROLES.items():
+        assert pins[ntpath.normcase(k)] == v
+    ep.check_trust_authority(ep.parse_manifest(data, e["manifest"]), receipt, file_sha256=digest, release_pins=rows)
+
+
+@pytest.mark.parametrize("drop", ["python/Lib/site-packages/pocketshell/__init__.py", "endpoint/bin/libcrypto.dll",
+                                  "cmd.exe", "conhost.exe"])
+def test_a_manifest_missing_any_startup_member_refuses(drop):
+    host = Host()
+    _paths, receipt, e, data, digest = _installed(host)
+
+    def mutate(doc):
+        victim = [k for k in doc["pins"] if k.replace("\\", "/").casefold().endswith(drop.casefold())]
+        assert len(victim) == 1
+        del doc["pins"][victim[0]]
+
+    m, r = _rewritten(host, receipt, e, data, mutate)
+    with pytest.raises(ep.ServiceError, match="lacks|missing"):
+        ep.check_trust_authority(m, r, file_sha256=digest, release_pins=_rows(host))
+
+
+def test_a_wrong_system_role_hash_refuses():
+    host = Host()
+    _paths, receipt, e, data, digest = _installed(host)
+    conhost = ntpath.normcase("C:\\Windows\\System32\\conhost.exe")
+
+    def changed(p):
+        return "e" * 64 if ntpath.normcase(p) == conhost else digest(p)
+
+    with pytest.raises(ep.ServiceError, match="does not match"):
+        ep.check_trust_authority(ep.parse_manifest(data, e["manifest"]), receipt, file_sha256=changed,
+                                 release_pins=_rows(host))
+
+
+def test_a_non_system_dir_conhost_refuses():
+    host = Host()
+    _paths, receipt, e, data, digest = _installed(host)
+
+    def mutate(doc):
+        doc["pins"]["C:\\Users\\owner\\Downloads\\conhost.exe"] = "d" * 64
+
+    m, r = _rewritten(host, receipt, e, data, mutate)
+    with pytest.raises(ep.ServiceError, match="outside"):
+        ep.check_trust_authority(m, r, file_sha256=lambda p: "d" * 64 if "Downloads" in p else digest(p),
+                                 release_pins=_rows(host))
+
+
+@pytest.mark.parametrize("bad", [
+    {}, {"C:\\Windows\\System32\\cmd.exe": "c" * 64},
+    {"C:\\Windows\\System32\\cmd.exe": "c" * 64, "C:\\Temp\\conhost.exe": "d" * 64},
+    {"C:\\Windows\\System32\\cmd.exe": "c" * 64, "C:\\Windows\\System32\\conhost.exe": "XYZ"},
+])
+def test_install_requires_exactly_the_measured_system_roles(bad):
+    host = Host()
+    with pytest.raises(inst.InstallError, match="system"):
+        install(host, staged(host), system_roles=bad)
+
+
+def test_a_closure_over_the_guardian_manifest_bound_refuses_with_its_measurement():
+    host = Host()
+    files = endpoint_files()
+    for i in range(400):
+        files[f"endpoint/shell/usr/share/f{i:04d}.txt"] = (b"x%d" % i, "module")
+    with pytest.raises(inst.InstallError, match="64 KiB"):
+        install(host, staged(host, files=files, catalog=catalog_v3(files)))

@@ -107,6 +107,7 @@ def test_install_first_routes_to_the_endpoint_installer_without_a_binding(agent,
 
     monkeypatch.setattr(eps, "install_endpoint_runtime", fake_install)
     monkeypatch.setattr(eps, "local_account", lambda sid: "owner")
+    monkeypatch.setattr(eps, "measure_system_roles", lambda api, sid: {"measured": True})
     from pocketshell.gateway import service_windows as win
 
     real = win.validate_path
@@ -117,6 +118,7 @@ def test_install_first_routes_to_the_endpoint_installer_without_a_binding(agent,
     assert code == 0 and doc["ok"] and doc["receipt"] == {"version": 3}, doc
     assert seen["config_dir"] == WIN_CONFIG and seen["endpoint_inputs"] == b'{"version":1}'
     assert seen["account"] == "owner" and seen["owner_sid"] == agent["api"].current_sid()
+    assert seen["system_roles"] == {"measured": True}
     text, digest = seen["show"](WIN_HELPER)  # the reviewed helper's show of the enrollment
     assert "pinned ssh host key" in text and digest == QUALIFIED
 

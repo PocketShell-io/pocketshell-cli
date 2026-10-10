@@ -841,6 +841,7 @@ def _install_endpoint(doc, *, user_data, catalog, staged, dry_run, api, runner, 
             receipt = eps.install_endpoint_runtime(
                 user_data=user_data, catalog_path=catalog, staged=staged, config_dir=config_dir,
                 endpoint_inputs=data, owner_sid=sid, account=eps.local_account(sid), show=show,
+                system_roles=eps.measure_system_roles(api, sid),
                 paths=paths or inst.NativePaths(api), folders=folders or inst.known_folders(),
                 cli_version=__version__, dry_run=dry_run)
     except (AgentError, inst.InstallError) as exc:
