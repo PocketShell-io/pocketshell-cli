@@ -219,6 +219,26 @@ def build_openssh(work: Path, out: Path, rec: Recorder) -> dict:
     return {"inputs": inputs, "tools": tools, "outputs": files, "version": "OpenSSH_for_Windows_10.3p1"}
 
 
+MSYS_BUILD = "x86_64-pc-cygwin"  # the pinned configure selects target-winsup only for *-*-cygwin*
+
+
+def msys_build_script(posix_src: str) -> str:
+    """The upstream recipe with the source-supported explicit build triplet. The
+    winsup configure needs the MinGW cross compiler (cygserver/utils); the SDK
+    keeps it in /opt/bin, which is checked and logged, never assumed."""
+    return (f"set -e; export PATH=/opt/bin:$PATH; cd '{posix_src}'; "
+            "command -v x86_64-w64-mingw32-gcc || { echo 'no x86_64-w64-mingw32-gcc in the SDK' >&2; exit 3; }; "
+            "x86_64-w64-mingw32-gcc --version | head -1; gcc -dumpmachine; "
+            "(cd winsup && ./autogen.sh); "
+            f"./configure --disable-dependency-tracking --build={MSYS_BUILD} "
+            f"--with-msys2-runtime-commit={MSYS['commit']}; make -j4")
+
+
+def msys_dll(src: Path) -> Path:
+    """The DLL the pinned build actually emits for MSYS_BUILD."""
+    return Path(src) / MSYS_BUILD / "winsup" / "cygwin" / "new-msys-2.0.dll"
+
+
 def build_msys(work: Path, out: Path, rec: Recorder) -> dict:
     inputs = {"source": fetch(MSYS["url"], work / "msys2-runtime.tar.gz", MSYS["sha256"]),
               "sdk": fetch(GIT_SDK["url"], work / "git-sdk-64.tar.gz", GIT_SDK["sha256"])}
@@ -242,11 +262,10 @@ def build_msys(work: Path, out: Path, rec: Recorder) -> dict:
     bash = sdk / "usr" / "bin" / "bash.exe"
     env = dict(os.environ, MSYSTEM="MSYS", CHERE_INVOKING="1", MSYS="winsymlinks:lnk")
     posix = "/" + str(src).replace("\\", "/").replace(":", "", 1)
-    script = (f"set -e; cd '{posix}'; (cd winsup && ./autogen.sh); "
-              f"./configure --disable-dependency-tracking --with-msys2-runtime-commit={MSYS['commit']}; "
-              "make -j4")
-    rec.run("msys-build", [bash, "-lc", script], cwd=src, env=env)
-    dll = src / "x86_64-pc-msys" / "winsup" / "cygwin" / "new-msys-2.0.dll"
+    rec.run("msys-build", [bash, "-lc", msys_build_script(posix)], cwd=src, env=env)
+    dll = msys_dll(src)
+    if not dll.is_file():  # an aggregate make natural 0 alone is never acceptance
+        raise SystemExit(f"the build emitted no {dll.relative_to(src)}")
     out.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(dll, out / "msys-2.0.dll")
     tools = {"bash": tool(bash), "gcc": tool(sdk / "usr" / "bin" / "gcc.exe"),
@@ -269,8 +288,12 @@ def main() -> int:
     try:
         result = (build_openssh if args.part == "openssh" else build_msys)(work, out / args.part, rec)
         ok = True
-    except SystemExit as exc:
-        result, ok = {"error": str(exc)}, False
+    except (SystemExit, Exception) as exc:  # noqa: BLE001 - every failure class leaves a refused receipt
+        import traceback
+
+        result = {"error": {"type": type(exc).__name__, "message": str(exc)[:2000],
+                            "traceback": traceback.format_exc()[-4000:]}}
+        ok = False
     receipt = {"schema": "pocketshell-backend-build/v1", "part": args.part, "accepted": ok,
                "checkout": {"commit": commit, "tree": tree, "githubSha": os.environ.get("GITHUB_SHA"),
                             "githubRef": os.environ.get("GITHUB_REF"), "run": os.environ.get("GITHUB_RUN_ID"),
