@@ -198,8 +198,6 @@ def test_new_machine_complete_runtime(closure, tmp_path):
         manifest = json.loads(Path(endpoint["manifest"]).read_text(encoding="utf-8"))
         user = manifest["configBindings"]["allowUser"]
         base = _ssh_base(key, known, port)
-        bash = manifest["configBindings"]["backendExecutable"].replace("/", "\\")
-        a_exe = str(Path(manifest["python"]).parent / "a.exe")
 
         # 4a. non-PTY EXEC requests: the command line travels as UTF-8 and sshd hands it to the
         # default shell as Unicode (typing it on cmd's stdin would go through the OEM code page and
@@ -213,11 +211,18 @@ def test_new_machine_complete_runtime(closure, tmp_path):
                   ascii(p.stderr.decode("utf-8", "replace")[-1500:]))
             return p.returncode, out_
 
-        bash_cmd = f'"{bash}" --noprofile --norc -c "echo bash-$((6*7)); uname -s; exit 5"'
+        # The inbox Windows ssh client sends a non-ASCII command line in the ANSI code page (run
+        # 38043511773: "Jos\ufffd ... is not recognized"), so the exec stays ASCII: it reaches the
+        # release through the backend environment the endpoint's SetEnv delivers (APLEXER_STATE_DIR =
+        # <root>/endpoint/backend/state; three levels up is managed-runtime).
+        release = manifest["daemon"].replace("/", "\\").split("\\releases\\")[1].split("\\")[0]
+        to_rel = f'cd /d "%APLEXER_STATE_DIR%\\..\\..\\..\\releases\\{release}'
+        bash_cmd = (f'{to_rel}\\endpoint\\shell\\usr\\bin" && bash.exe --noprofile --norc -c '
+                    f'"echo bash-$((6*7)); uname -s; exit 5"')
         rc, out = exec_(bash_cmd)
         assert "bash-42" in out and "bash-42" not in bash_cmd and "MSYS_NT" in out
         assert rc == 5  # the real exit status of the remote backend shell
-        rc, out = exec_(f'"{a_exe}" --json engines')
+        rc, out = exec_(f'{to_rel}\\python" && a.exe --json engines')
         assert rc == 0 and '"shell"' in out  # the aplexer CLI answered with its engines (incl. the shell engine)
 
         # 4b. PTY session (ssh-shellhost + conhost): a COMPUTED reply absent from the input
