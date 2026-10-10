@@ -715,3 +715,70 @@ def test_windows_ignores_an_extensionless_a(tmp_path, monkeypatch):
     monkeypatch.setattr(_aplexer.sys, "platform", "win32")
     monkeypatch.setattr(_console_scripts.sys, "executable", str(py / "python.exe"))
     assert _aplexer.resolve_a({}).path is None
+
+
+# --- review 648b4d2d: quiet Windows probe launch and Windows timeout cleanup ---------------
+
+
+class _FakeProc:
+    def __init__(self, *, hang=False):
+        self.pid, self.hang, self.killed, self.calls = 4242, hang, False, 0
+
+    def communicate(self, timeout=None):
+        self.calls += 1
+        if self.hang and self.calls == 1:
+            raise subprocess.TimeoutExpired("a", timeout)
+        return ('{"ok": true}' if not self.hang else ""), "late stderr"
+
+    def kill(self):
+        self.killed = True
+
+    @property
+    def returncode(self):
+        return -9 if self.killed else 0
+
+
+def _capture_popen(monkeypatch, proc):
+    seen = {}
+
+    def popen(argv, **kw):
+        seen.update(kw, argv=argv)
+        return proc
+
+    monkeypatch.setattr(_aplexer, "_Popen", popen)
+    return seen
+
+
+def test_windows_probe_is_launched_without_a_console_window(monkeypatch):
+    seen = _capture_popen(monkeypatch, _FakeProc())
+    monkeypatch.setattr(_aplexer.sys, "platform", "win32")
+    _aplexer._probe_captured("C:\\r\\python\\a.exe", ["engines"], env={}, timeout=1)
+    assert seen["creationflags"] & 0x08000000  # CREATE_NO_WINDOW
+    assert "start_new_session" not in seen  # a POSIX session means nothing to a Windows console
+
+
+def test_linux_probe_keeps_its_own_process_group(monkeypatch):
+    seen = _capture_popen(monkeypatch, _FakeProc())
+    monkeypatch.setattr(_aplexer.sys, "platform", "linux")
+    _aplexer._probe_captured("/venv/bin/a", ["engines"], env={}, timeout=1)
+    assert seen["start_new_session"] is True and "creationflags" not in seen
+
+
+def test_windows_timeout_kills_and_reaps_the_owned_child_without_killpg(monkeypatch):
+    proc = _FakeProc(hang=True)
+    _capture_popen(monkeypatch, proc)
+    monkeypatch.setattr(_aplexer.sys, "platform", "win32")
+    monkeypatch.delattr(_aplexer.os, "killpg", raising=False)
+    out, failure = _aplexer._probe_captured("C:\\r\\python\\a.exe", ["engines"], env={}, timeout=0.01)
+    assert out is None and failure.kind == "timeout" and "late stderr" in failure.detail
+    assert proc.killed and proc.calls == 2  # killed, then reaped (terminal collection)
+
+
+def test_linux_timeout_still_kills_the_process_group(monkeypatch):
+    proc = _FakeProc(hang=True)
+    _capture_popen(monkeypatch, proc)
+    monkeypatch.setattr(_aplexer.sys, "platform", "linux")
+    groups = []
+    monkeypatch.setattr(_aplexer.os, "killpg", lambda pid, sig: groups.append((pid, sig)), raising=False)
+    out, failure = _aplexer._probe_captured("/venv/bin/a", ["engines"], env={}, timeout=0.01)
+    assert failure.kind == "timeout" and groups == [(4242, _aplexer.signal.SIGKILL)] and not proc.killed

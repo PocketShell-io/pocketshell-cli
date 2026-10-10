@@ -255,8 +255,31 @@ class AplexerFailure:
         return f"{self.kind}: {self.detail}" if self.detail else self.kind
 
 
+CREATE_NO_WINDOW = 0x08000000
+
+
+def _spawn_kwargs() -> dict:
+    """Platform launch options for the ``a`` probe. POSIX: its own session, so a
+    timeout can kill the whole group. Windows: no console window
+    (CREATE_NO_WINDOW, plus a hidden STARTUPINFO); a POSIX session does not
+    exist there and would not hide a console-subsystem helper."""
+    if sys.platform != "win32":
+        return {"start_new_session": True}
+    kw = {"creationflags": CREATE_NO_WINDOW}
+    if hasattr(subprocess, "STARTUPINFO"):
+        info = subprocess.STARTUPINFO()
+        info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        info.wShowWindow = 0  # SW_HIDE
+        kw["startupinfo"] = info
+    return kw
+
+
 def _kill_process_group(proc: subprocess.Popen) -> None:
-    """SIGKILL the whole ``a`` process group; fall back to the child only."""
+    """POSIX: SIGKILL the whole ``a`` process group; fall back to the child only.
+    Windows (no process groups): kill the held owned child; the caller reaps."""
+    if sys.platform == "win32":
+        proc.kill()
+        return
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except OSError:
@@ -283,7 +306,7 @@ def _probe_captured(
             stderr=subprocess.PIPE,
             text=True,
             env=env_map(env),
-            start_new_session=True,
+            **_spawn_kwargs(),
         )
     except OSError as exc:
         return None, AplexerFailure("spawn", str(exc))
