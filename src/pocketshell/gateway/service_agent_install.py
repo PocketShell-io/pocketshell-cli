@@ -343,9 +343,12 @@ class NativePaths:
         finally:
             self._close(pinned)
 
-    def inventory(self, path: str, owner_sid: str, *, private: bool = True, private_root=None, root=None) -> list:
+    def inventory(self, path: str, owner_sid: str, *, private: bool = True, private_root=None, root=None,
+                  max_files: int = MAX_FILES) -> list:
         """Every regular file under a directory, by handle; any reparse entry
-        refuses, and with ``private`` any non-private object refuses."""
+        refuses, and with ``private`` any non-private object refuses. More than
+        ``max_files`` (catalog v2: 4 096; v3/native: the agreed 16 384) refuses
+        the whole inventory (never sliced)."""
         root_bound = root
         import os
         from pathlib import Path
@@ -376,10 +379,10 @@ class NativePaths:
                             stack.append(full)
                         else:
                             out.append(full.relative_to(root).as_posix())
+                            if len(out) > max_files:
+                                raise ServiceError(f"more than {max_files} files")
         finally:
             self._close(pinned)
-        if len(out) > MAX_FILES:
-            raise ServiceError("more than 4096 files")
         return sorted(out)
 
     def write(self, path: str, data: bytes) -> None:
@@ -525,7 +528,7 @@ def verify_paths(*, owner_sid: str, operation_id: str, private_roots=(), resourc
                     raise ServiceError("the opened directory is not the requested path")
                 item["canonicalPath"] = canonical
             else:
-                item["files"] = paths.inventory(path, owner_sid, private=private,
+                item["files"] = paths.inventory(path, owner_sid, private=private, max_files=CATALOG3_MAX_FILES,
                                                 private_root=root if private else None, root=root)
             item["ok"] = True
         except Exception as exc:  # noqa: BLE001 - every failure is a refusal of that request
@@ -625,10 +628,15 @@ def install_runtime(*, user_data: str, catalog_path: str, staged: str, binding: 
     return receipt
 
 
+def _bound(catalog) -> int:
+    """The inventory bound of this catalog's version (§16.14; v2 unchanged)."""
+    return CATALOG3_MAX_FILES if catalog["version"] == 3 else MAX_FILES
+
+
 def _verify_staged(staged, catalog, owner_sid, paths):
     """1) the staged closure, exactly (set + per-file sha256 by handle)."""
     try:
-        staged_files = paths.inventory(staged, owner_sid, private=False, root=staged)
+        staged_files = paths.inventory(staged, owner_sid, private=False, root=staged, max_files=_bound(catalog))
     except Exception as exc:  # noqa: BLE001
         raise InstallError("staged-invalid", f"the staged release cannot be enumerated safely: "
                            f"{sanitize(str(exc), 300)}") from None
@@ -653,7 +661,7 @@ def _copy_release(root, release_dir, tmp, blobs, want, catalog, owner_sid, paths
     """2) copy with the private shape; 3) re-measure by handle."""
     for folder in (root, ntpath.join(root, "releases"), release_dir, tmp):
         paths.mkdir(folder)
-    present = paths.inventory(release_dir, owner_sid, private_root=root)
+    present = paths.inventory(release_dir, owner_sid, private_root=root, max_files=_bound(catalog))
     stray = sorted(set(p.lower() for p in present) - set(want))
     if stray:
         raise InstallError("release-dirty", f"{release_dir} holds files outside the catalog: {stray[:5]}")
@@ -663,7 +671,8 @@ def _copy_release(root, release_dir, tmp, blobs, want, catalog, owner_sid, paths
         if not _same(parent, release_dir):
             paths.mkdir(parent)
         paths.write(target, data)
-    if sorted(p.lower() for p in paths.inventory(release_dir, owner_sid, private_root=root)) != sorted(want):
+    if sorted(p.lower() for p in paths.inventory(release_dir, owner_sid, private_root=root,
+                                                 max_files=_bound(catalog))) != sorted(want):
         raise InstallError("install-failed", "the installed closure differs from the catalog")
     for f in catalog["files"]:
         got = paths.file(ntpath.join(release_dir, *f["path"].split("/")), owner_sid, private=True, max_bytes=0,

@@ -62,28 +62,80 @@ def test_an_unprotected_key_file_is_refused(tmp_path):
         inst.NativePaths(api).metadata(str(loose), api.current_sid())
 
 
-def test_system_roles_are_measured_natively_with_the_servicing_authority():
+def _measured():
     """The production install path: known_folders() (native SystemRoot) +
-    measure_system_roles + check_system_roles. Never env or a literal."""
+    measure_system_roles. Never env or a literal."""
     from pocketshell.gateway import service_agent_endpoint as eps
     from pocketshell.gateway import service_agent_install as inst
-    from pocketshell.gateway import service_endpoint as ep
     from pocketshell.gateway import service_windows as win
 
     api = win.WindowsApi()
-    system_root = inst.known_folders()["SystemRoot"]
-    roles = eps.measure_system_roles(api, api.current_sid())
-    assert {k.casefold() for k in roles} == set(ep.SERVICING_IMAGES)
+    return inst.known_folders()["SystemRoot"], eps.measure_system_roles(api, api.current_sid())
+
+
+def test_system_roles_are_measured_natively_with_the_servicing_authority():
+    from pocketshell.gateway import service_agent_endpoint as eps
+    from pocketshell.gateway import service_endpoint as ep
+
+    system_root, roles = _measured()
+    assert {k.casefold() for k in roles} == set(ep.SERVICING_IMAGES)  # keys are full System32 PATHS
     checked = eps.check_system_roles(roles, system_root)
     assert sorted(checked.values()) == sorted(roles.values()) and all(len(v) == 64 for v in roles.values())
-    refs = eps.system_references(checked)
-    assert [r["name"] for r in refs] == ["cmd.exe", "conhost.exe"]
-    # real refusals on the same production function
+    assert [r["name"] for r in eps.system_references(checked)] == ["cmd.exe", "conhost.exe"]
+
+
+def _syswow64(roles, system_root):
     import re
 
+    # GetSystemDirectoryW spells "system32": substitute case-insensitively, and prove it happened
     wow = {re.sub("(?i)system32", "SysWOW64", k): v for k, v in roles.items()}
     assert all("SysWOW64" in k for k in wow)
-    one = dict(list(roles.items())[:1])
-    for bad in (wow, one, {**roles, **{next(iter(roles)): "X" * 64}}):
-        with pytest.raises(inst.InstallError):
-            eps.check_system_roles(bad, system_root)
+    return wow, system_root
+
+
+def _syswow64_root(roles, system_root):
+    # the SAME measured hashes claimed under a SysWOW64-shaped system root
+    return roles, system_root + "\\SysWOW64"
+
+
+def _one(roles, system_root):
+    return dict(list(roles.items())[:1]), system_root
+
+
+def _not_hex(roles, system_root):
+    return {**roles, next(iter(roles)): "X" * 64}, system_root
+
+
+@pytest.mark.parametrize("mutate", [_syswow64, _syswow64_root, _one, _not_hex],
+                         ids=["syswow64-paths", "syswow64-system-root", "one-role", "non-hex-digest"])
+def test_system_roles_refusals_on_the_production_check(mutate):
+    from pocketshell.gateway import service_agent_endpoint as eps
+    from pocketshell.gateway import service_agent_install as inst
+
+    system_root, roles = _measured()
+    bad, root = mutate(roles, system_root)
+    with pytest.raises(inst.InstallError):
+        eps.check_system_roles(bad, root)
+
+
+@pytest.mark.parametrize("extra,ok", [(0, True), (1, False)])
+def test_native_inventory_full_closure_bound(tmp_path, extra, ok):
+    """NativePaths.inventory at exactly the agreed 16 384 files, and one over."""
+    from pocketshell import windows_security as ws
+    from pocketshell.gateway import service_agent_install as inst
+    from pocketshell.gateway import service_windows as win
+
+    api = win.WindowsApi()
+    sid = api.current_sid()
+    root = tmp_path / "managed-runtime"
+    ws.write_private(root / "seed", b"0")
+    rel = root / "release"
+    for i in range(inst.CATALOG3_MAX_FILES + extra):
+        ws.write_private(rel / f"d{i // 1000:02d}" / f"f{i:05d}", b"x")
+    paths = inst.NativePaths(api)
+    if ok:
+        got = paths.inventory(str(rel), sid, private_root=str(root), max_files=inst.CATALOG3_MAX_FILES)
+        assert len(got) == inst.CATALOG3_MAX_FILES
+    else:
+        with pytest.raises(inst.ServiceError, match="16384"):
+            paths.inventory(str(rel), sid, private_root=str(root), max_files=inst.CATALOG3_MAX_FILES)

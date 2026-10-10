@@ -709,3 +709,24 @@ def test_catalog_guardian_abi_follows_the_catalog_version():
     from test_gateway_agent_install import make_catalog
 
     assert inst.parse_catalog(json.dumps(make_catalog()).encode())["lineage"]["guardian"]["abi"] == "6cf7ae85"
+
+
+@pytest.mark.parametrize("version,bound", [(3, 16384), (2, 4096)])
+def test_the_staged_and_installed_inventories_use_the_catalog_version_bound(version, bound):
+    """The production installer passes the agreed bound to EVERY inventory
+    (staged, release-dirty check, re-measure); catalog v2 keeps 4 096."""
+    host = Host()
+    paths = staged(host)
+    seen = []
+    real = paths.inventory
+
+    def inventory(path, owner_sid, **kw):
+        seen.append(kw.get("max_files"))
+        return real(path, owner_sid, **{k: v for k, v in kw.items() if k != "max_files"})
+
+    paths.inventory = inventory
+    cat = catalog_v3() if version == 3 else dict(catalog_v3(), version=2)
+    blobs, want = inst._verify_staged(host.staged, cat, host.sid, paths)
+    inst._copy_release(host.user_data + "\\\\mr", host.user_data + "\\\\mr\\\\releases\\\\r", host.user_data + "\\\\mr\\\\tmp",
+                       blobs, want, cat, host.sid, paths)
+    assert seen and set(seen) == {bound}

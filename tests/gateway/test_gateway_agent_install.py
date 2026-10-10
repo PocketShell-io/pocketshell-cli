@@ -75,7 +75,7 @@ class Paths:
         self._refuse(path, False)
         return path
 
-    def inventory(self, path, owner_sid, *, private=True, private_root=None, root=None):
+    def inventory(self, path, owner_sid, *, private=True, private_root=None, root=None, max_files=4096):
         self._refuse(path, private)
         prefix = self.key(path) + "\\"
         out = []
@@ -83,6 +83,8 @@ class Paths:
             if k.startswith(prefix):
                 self._refuse(orig, private)
                 out.append(orig[len(path) + 1:].replace("\\", "/"))
+        if len(out) > max_files:  # mirrors NativePaths.inventory
+            raise inst.ServiceError(f"more than {max_files} files")
         return sorted(out)
 
     def write(self, path, data):
