@@ -200,3 +200,56 @@ jobs:
 
       - name: Windows gateway end to end
         run: uv run --frozen pytest -v -rs tests/gateway/test_windows_gateway_e2e.py
+
+  # Complete-runtime validation of the generic v3 closure: the whole closure is
+  # assembled here from the OWNED backend build (Backend run 38032097879, head
+  # 230035e: quiet OpenSSH 10.3p1 + the stripped 717e49fe MSYS runtime), the
+  # pinned Git-for-Windows 2.56.0.2 archive and the accepted aplexer fc396 pair;
+  # the helper is the labelled CI stand-in (never run: no enrollment). Then the
+  # revision D new-machine flow runs as an ORDINARY user with the real guardian
+  # e862645d and the owned sshd under a space + Unicode userData.
+  windows-complete-runtime:
+    name: Windows complete runtime (v3 closure)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BACKEND_RUN_ID: "38032097879"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          version: "0.10.11"
+      - name: Install pocketshell + dev deps from the committed lock
+        run: uv sync --frozen --group dev --extra link
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: Download the owned backend build
+        uses: actions/download-artifact@v5
+        with:
+          run-id: ${{ env.BACKEND_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/backend
+      - name: Build the v3 closure (CI helper stand-in)
+        shell: pwsh
+        run: |
+          go build -o "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" ./tests/gateway/fakelink/main.go
+          $h = (Get-FileHash "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe").Hash.ToLower()
+          $out = "$env:USERPROFILE\AppData\Local\Temp\pocketshell-release-v3"
+          uv run --frozen python scripts/release/build_closure.py --out $out --helper "$env:RUNNER_TEMP\fakelink\pocketshell-link.exe" --helper-sha256 $h --helper-version ci-standin --backend-openssh "$env:RUNNER_TEMP\backend\backend-openssh" --backend-msys "$env:RUNNER_TEMP\backend\backend-msys" --aplexer-zip release/inputs/aplexer-fc396/windows-native-fc396.zip
+          if ($LASTEXITCODE) { exit 1 }
+          "POCKETSHELL_TEST_CLOSURE_V3_OUT=$out" >> $env:GITHUB_ENV
+      - name: Complete runtime (new machine, ordinary user)
+        run: uv run --frozen pytest -v -rs -s tests/gateway/test_windows_complete_runtime_native.py
