@@ -228,3 +228,30 @@ def test_complete_wall_time_is_bounded_by_the_documented_budget(env, monkeypatch
     t0 = fu._now()
     doc, code = fu.login_complete(operation_id="op-x", login="op-start", timeout=20)
     assert code == 3 and fu._now() - t0 <= 20 and all(t and t <= 15 for t in seen)
+
+
+def test_failed_save_cleanup_is_inside_the_documented_maximum(env, monkeypatch):
+    """Max wall = timeout + SESSION_CHECK_TIMEOUT + LOGOUT_TIMEOUT, even when the
+    session check and the revoke each use their whole allowance."""
+    fu.login_start(operation_id="op-start", label="me@host")
+    env["answers"] = [(200, {"access_token": TOKEN, "token_id": "tid-1", "expires_at": 1_900_000_000,
+                             "email": "me@example.com"})]
+    used = {}
+
+    def slow_session(base, tok, timeout=None):
+        used["session"] = timeout
+        fu._sleep(timeout)
+        raise fu.AccountError("session check failed")
+
+    def slow_logout(base, tok, timeout=None):
+        used["logout"] = timeout
+        fu._sleep(timeout)
+        return True
+
+    monkeypatch.setattr(broker, "get_session", slow_session)
+    monkeypatch.setattr(broker, "logout", slow_logout)
+    t0 = fu._now()
+    doc, code = fu.login_complete(operation_id="op-x", login="op-start", timeout=20)
+    assert code == 1 and doc["state"] == "failed"
+    assert used == {"session": fu.SESSION_CHECK_TIMEOUT, "logout": fu.LOGOUT_TIMEOUT}
+    assert fu._now() - t0 <= 20 + fu.SESSION_CHECK_TIMEOUT + fu.LOGOUT_TIMEOUT == fu.max_wall_seconds(20)

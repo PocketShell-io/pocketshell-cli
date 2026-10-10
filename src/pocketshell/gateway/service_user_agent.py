@@ -207,7 +207,12 @@ def _expect_prior(expect) -> None:
         return
     if expect != "none" and not SHA_RE.match(expect):
         raise AgentError("usage", "--expect-binding-sha256 is none or 64 lowercase hex")
-    current = _binding_sha256()
+    try:  # STRICT: absent only when proven missing; anything unreadable is UNKNOWN and refuses
+        data = _read_private(_path("binding.json"))
+    except OSError as exc:
+        raise AgentError("binding-unreadable", f"the stored binding cannot be read ({type(exc).__name__}); it is "
+                         "not treated as absent and nothing was replaced") from None
+    current = None if data is None else hashlib.sha256(data).hexdigest()
     if (current or "none") != expect:
         raise AgentError("binding-changed", "the stored binding is not the one this bind was prepared against "
                          f"(expected {expect[:12]}, found {(current or 'none')[:12]}); nothing was replaced")
@@ -220,7 +225,11 @@ def _replacement_guard(new: dict, api) -> None:
     the running endpoint's custody); or a different generation after a proven
     supported stop of the prior one (stopped.json for exactly that binding, no
     primary/recovery custody record left, its port not served)."""
-    data = _read_private(_path("binding.json"))
+    try:
+        data = _read_private(_path("binding.json"))
+    except OSError as exc:  # UNKNOWN is never absent
+        raise AgentError("binding-unreadable", f"the stored binding cannot be read ({type(exc).__name__}); "
+                         "nothing was replaced") from None
     if data is None:
         return
     try:

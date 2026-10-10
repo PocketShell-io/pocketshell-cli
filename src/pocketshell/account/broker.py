@@ -300,12 +300,12 @@ def get_session(base_url: str, access_token: str, *, timeout: float = DEFAULT_TI
     )
 
 
-def logout(base_url: str, access_token: str) -> bool:
+def logout(base_url: str, access_token: str, timeout: float = 10) -> bool:
     """Revoke the session server-side. True on 2xx (or 401: already gone).
 
     Raises :class:`BrokerRateLimited` on 429: the session was NOT revoked.
     """
-    resp = request(base_url, "POST", "/cli/logout", bearer=access_token, timeout=10)
+    resp = request(base_url, "POST", "/cli/logout", bearer=access_token, timeout=timeout)
     _raise_if_rate_limited(resp)
     return 200 <= resp.status < 300 or resp.status == 401
 

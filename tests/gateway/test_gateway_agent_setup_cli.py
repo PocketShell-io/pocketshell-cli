@@ -539,3 +539,28 @@ def test_status_after_a_restart_reports_the_durable_public_identity(agent, autho
     result, data = run("status", "--json")  # a fresh process: everything from binding.json
     assert data["binding"]["server"] == "wss://gateway.pocketshell.io"
     assert data["binding"]["deviceId"] == "host-laptop-pha6tcnc-75fu" and data["binding"]["configDir"] == WIN_CONFIG
+
+
+def test_an_unreadable_binding_never_satisfies_expect_none(agent, authority, tmp_path, monkeypatch):  # noqa: F811
+    """Review 71a8ba36: UNKNOWN is not ABSENT. An unreadable binding refuses the
+    CAS; nothing is written and the stored bytes are unchanged."""
+    _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    before = _bytes()
+    real = agent_mod._read_private
+    writes = []
+
+    def denied(path, limit=65536):
+        if path.endswith("binding.json"):
+            raise PermissionError(13, "Access is denied", path)
+        return real(path, limit)
+
+    monkeypatch.setattr(agent_mod, "_read_private", denied)
+    real_write = agent_mod._write_private
+    monkeypatch.setattr(agent_mod, "_write_private", lambda p, d: (writes.append(p), real_write(p, d)))
+    result, data = run("bind", "--manifest", MANIFEST, "--authority", AUTHORITY, "--expect-binding-sha256",
+                       "none", "--json")
+    assert result.exit_code == 1 and data["error"]["code"] == "binding-unreadable", result.output
+    assert not [w for w in writes if w.endswith("binding.json")]
+    monkeypatch.setattr(agent_mod, "_read_private", real)
+    assert _bytes() == before

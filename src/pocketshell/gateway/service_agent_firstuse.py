@@ -71,7 +71,15 @@ def _trusted(value, origin):
 
 
 SESSION_CHECK_TIMEOUT = 10.0
+LOGOUT_TIMEOUT = 10.0
 REQUEST_TIMEOUT = broker.DEFAULT_TIMEOUT
+
+
+def max_wall_seconds(timeout: float) -> float:
+    """The documented whole-operation bound of login-complete: the poll budget,
+    one session check, and one bounded revoke of a token that could not be
+    stored."""
+    return timeout + SESSION_CHECK_TIMEOUT + LOGOUT_TIMEOUT
 
 
 class _Refusal(Exception):
@@ -154,8 +162,9 @@ def login_complete(*, operation_id: str, login: str, timeout: float = 60) -> tup
     """Bounded poll of a started login (re-invocable). ``timeout`` bounds the
     WHOLE operation: sleeps and every poll request share it (each request's own
     HTTP timeout is min(REQUEST_TIMEOUT, remaining)); an approval then adds one
-    session check of at most SESSION_CHECK_TIMEOUT. Maximum wall time:
-    timeout + SESSION_CHECK_TIMEOUT. Every outcome is ONE document."""
+    session check of at most SESSION_CHECK_TIMEOUT, and a failed store one
+    revoke of at most LOGOUT_TIMEOUT. Maximum wall time: max_wall_seconds(timeout)
+    = timeout + 10 + 10 s. Every outcome is ONE document."""
     action = "login-complete"
     extra = {"login": login}
     if not OPERATION_RE.match(operation_id or "") or not OPERATION_RE.match(login or "") \
@@ -232,7 +241,7 @@ def login_complete(*, operation_id: str, login: str, timeout: float = 60) -> tup
         credentials.save(creds)
     except (AccountError, OSError) as exc:
         try:
-            broker.logout(record["brokerUrl"], token.access_token)  # no orphaned session
+            broker.logout(record["brokerUrl"], token.access_token, timeout=LOGOUT_TIMEOUT)  # no orphaned session
         except Exception:  # noqa: BLE001 - best effort
             pass
         text = str(exc).replace(token.access_token, "[redacted]")
