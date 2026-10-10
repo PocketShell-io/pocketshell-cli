@@ -44,7 +44,31 @@ var (
 	digestRE    = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
-var kinds = map[string]bool{"document": true, "binary": true, "directory": true, "inventory": true}
+var kinds = map[string]bool{"document": true, "binary": true, "directory": true, "inventory": true,
+	"system-reference": true}
+
+// systemReferences: the ONLY measured system references (agreement §16.13):
+// the guardian 6cf servicing roles, below the natively measured system
+// directory (GetSystemWindowsDirectory + \System32). Nothing else outside the
+// declared roots is ever accepted.
+var systemReferences = map[string]bool{"cmd.exe": true, "conhost.exe": true}
+
+// systemReferenceMatch: p must be EXACTLY <system32>\<allowed name> (case-
+// insensitive, plain backslashes; no 8.3, \\?\, dot segments, trailing dot,
+// SysWOW64 or other directory).
+func systemReferenceMatch(p, system32 string) error {
+	if !absolute(p) || strings.Contains(p, "/") || strings.Contains(p, "~") {
+		return errors.New("a system reference must be a plain canonical drive path")
+	}
+	i := strings.LastIndex(p, `\`)
+	if i < 0 || !systemReferences[strings.ToLower(p[i+1:])] {
+		return errors.New("not an allowed system reference (cmd.exe, conhost.exe)")
+	}
+	if !strings.EqualFold(p[:i], system32) {
+		return errors.New("a system reference must live directly in the measured system directory")
+	}
+	return nil
+}
 
 // component mirrors the Fleet consumer (ManagedVerifierReply.ts) and the
 // schema absPath rules for one path component.
@@ -236,6 +260,17 @@ func validate(cfg config) ([]root, error) {
 		seen[key] = true
 		if q.Expect != "" && (q.Kind == "directory" || !digestRE.MatchString(q.Expect)) {
 			return nil, usageError{"an expected digest is 64 lowercase hex, for document/binary/inventory only"}
+		}
+		if q.Kind == "system-reference" {
+			name := q.Path[strings.LastIndex(q.Path, `\`)+1:]
+			if q.Expect == "" || !absolute(q.Path) || strings.Contains(q.Path, "/") || !systemReferences[strings.ToLower(name)] {
+				return nil, usageError{"a system-reference is cmd.exe/conhost.exe with an expected digest"}
+			}
+			for _, r := range roots {
+				if under(q.Path, r.Path) {
+					return nil, usageError{"a system-reference is never inside a declared root"}
+				}
+			}
 		}
 		// BI1: nothing may execute unless EVERY content request is natively pinned
 		if cfg.SpawnEntry && q.Kind != "directory" && q.Expect == "" {
@@ -446,7 +481,7 @@ func checkExpect(q request, r *result) error {
 		return nil
 	}
 	switch q.Kind {
-	case "binary", "document":
+	case "binary", "document", "system-reference":
 		if r.SHA256 == nil || *r.SHA256 != q.Expect {
 			return errors.New("sha256 is not the expected digest")
 		}

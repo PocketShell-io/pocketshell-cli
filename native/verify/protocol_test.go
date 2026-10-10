@@ -247,3 +247,60 @@ func TestACLRoleStartsAtTheDeclaredRoot(t *testing.T) {
 		}
 	}
 }
+
+// c1: the narrow measured system-reference kind (agreement §16.13).
+func TestSystemReferenceRequestShape(t *testing.T) {
+	d := strings.Repeat("a", 64)
+	ok := config{OperationID: "op", PrivateRoots: []string{`C:\x\managed-runtime`},
+		Requests: []request{{Kind: "system-reference", Path: `C:\Windows\System32\conhost.exe`, Expect: d},
+			{Kind: "system-reference", Path: `C:\Windows\System32\cmd.exe`, Expect: d}}}
+	if _, err := validate(ok); err != nil {
+		t.Fatal(err)
+	}
+	bad := map[string]request{
+		"no digest":       {Kind: "system-reference", Path: `C:\Windows\System32\cmd.exe`},
+		"not allow-set":   {Kind: "system-reference", Path: `C:\Windows\System32\powershell.exe`, Expect: d},
+		"inside a root":   {Kind: "system-reference", Path: `C:\x\managed-runtime\conhost.exe`, Expect: d},
+		"unc":             {Kind: "system-reference", Path: `\\?\C:\Windows\System32\cmd.exe`, Expect: d},
+		"forward slashes": {Kind: "system-reference", Path: `C:/Windows/System32/cmd.exe`, Expect: d},
+	}
+	for name, q := range bad {
+		c := ok
+		c.Requests = []request{q}
+		if _, err := validate(c); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// never the held/spawned entry
+	c := ok
+	c.Hold, c.Entry = true, `C:\Windows\System32\cmd.exe`
+	if _, err := validate(c); err == nil {
+		t.Error("a system-reference was accepted as the entry")
+	}
+}
+
+func TestSystemReferenceCanonicalMatch(t *testing.T) {
+	sys := `C:\WINDOWS\system32`
+	for _, p := range []string{`C:\Windows\System32\cmd.exe`, `c:\windows\system32\CONHOST.EXE`} {
+		if err := systemReferenceMatch(p, sys); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	for _, p := range []string{`C:\Windows\SysWOW64\cmd.exe`, `C:\WINDOW~1\System32\cmd.exe`, `C:\Windows\System32\..\System32\cmd.exe`,
+		`D:\Windows\System32\cmd.exe`, `C:\Windows\System32\sub\conhost.exe`, `C:\Windows\System32\cmd.exe.`} {
+		if err := systemReferenceMatch(p, sys); err == nil {
+			t.Errorf("%s: accepted", p)
+		}
+	}
+}
+
+func TestSystemReferenceExpect(t *testing.T) {
+	d, other := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	q := request{Kind: "system-reference", Path: `C:\Windows\System32\cmd.exe`, Expect: d}
+	if err := checkExpect(q, &result{SHA256: &d}); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkExpect(q, &result{SHA256: &other}); err == nil {
+		t.Error("a wrong system-role hash was accepted")
+	}
+}

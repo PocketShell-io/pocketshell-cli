@@ -428,6 +428,9 @@ func verifyOne(q request, roots []root, owner string, keep *held) (result, *file
 	if !absolute(q.Path) {
 		return result{}, nil, errors.New("not a plain drive-absolute path")
 	}
+	if q.Kind == "system-reference" {
+		return verifySystemReference(q.Path, owner, keep)
+	}
 	rt, err := ownerOf(q.Path, roots)
 	if err != nil {
 		return result{}, nil, err
@@ -464,4 +467,102 @@ func processImageIdentity(pid int) (fileID, error) {
 		return fileID{}, fmt.Errorf("cannot read the image of process %d", pid)
 	}
 	return entryIdentity(windows.UTF16ToString(buf[:n]))
+}
+
+// verifySystemReference (agreement §16.13, guardian 6cf servicing role): the
+// path must be exactly <GetSystemWindowsDirectory>\System32\{cmd,conhost}.exe;
+// every component is opened by handle without delete sharing and refused if
+// reparse; the ancestors carry no foreign mutation authority; the file is a
+// regular (servicing hard links allowed) system-owned image without ANY
+// write authority for a SID outside SYSTEM/Administrators/TrustedInstaller
+// (the user included); its final path is the requested one; then its digest.
+func verifySystemReference(path, owner string, keep *held) (result, *fileID, error) {
+	var r result
+	windir, err := windows.GetSystemWindowsDirectory()
+	if err != nil {
+		return r, nil, errors.New("cannot measure the system directory")
+	}
+	if err := systemReferenceMatch(path, strings.TrimSuffix(windir, `\`)+`\System32`); err != nil {
+		return r, nil, err
+	}
+	if err := chain(parent(path), path, owner, path[:3], false, keep); err != nil {
+		return r, nil, err
+	}
+	h, err := open(path, accessFile, windows.FILE_SHARE_READ, false)
+	if err != nil {
+		return r, nil, err
+	}
+	keep.keep(h)
+	d, err := info(h)
+	if err != nil {
+		return r, nil, fmt.Errorf("cannot inspect %s", path)
+	}
+	if d.FileAttributes&(attrReparse|attrDirectory) != 0 || d.NumberOfLinks < 1 {
+		return r, nil, fmt.Errorf("refusing a reparse point or directory as a system reference: %s", path)
+	}
+	if err := checkServicing(h, path); err != nil {
+		return r, nil, err
+	}
+	canonical, err := finalPath(h)
+	if err != nil {
+		return r, nil, err
+	}
+	if !strings.EqualFold(canonical, path) {
+		return r, nil, errors.New("the opened system reference is not the requested canonical path")
+	}
+	sum, size, err := digestHandle(h, path)
+	if err != nil {
+		return r, nil, err
+	}
+	r.CanonicalPath, r.Size, r.SHA256 = &canonical, &size, &sum
+	id := identity(d)
+	return r, &id, nil
+}
+
+// checkServicing mirrors the guardian's check_acl(role="file", servicing=True).
+func checkServicing(h windows.Handle, path string) error {
+	s, err := security(h)
+	if err != nil {
+		return fmt.Errorf("refusing the security of %s: %v", path, err)
+	}
+	trusted := map[string]bool{"S-1-5-18": true, "S-1-5-32-544": true, trustedInstaller: true}
+	if !trusted[s.owner] {
+		return fmt.Errorf("system reference %s is not system-owned", path)
+	}
+	if s.nullDACL {
+		return fmt.Errorf("%s has a NULL DACL", path)
+	}
+	for _, a := range s.entries {
+		if a.typ != 0 && a.typ != 1 {
+			return fmt.Errorf("%s has an unsupported ACE type", path)
+		}
+		if a.typ != 0 || a.flags&8 != 0 || trusted[a.sid] {
+			continue
+		}
+		if a.mask&0x500D0116 != 0 {
+			return fmt.Errorf("%s: %s holds write authority on a system reference (mask 0x%08X)", path, a.sid, a.mask)
+		}
+	}
+	return nil
+}
+
+func digestHandle(h windows.Handle, path string) (string, int64, error) {
+	hash := sha256.New()
+	var size int64
+	buf := make([]byte, 1<<20)
+	for {
+		var n uint32
+		if err := windows.ReadFile(h, buf, &n, nil); err != nil {
+			return "", 0, fmt.Errorf("cannot read %s", path)
+		}
+		if n == 0 {
+			break
+		}
+		size += int64(n)
+		if size > maxFile {
+			return "", 0, errors.New("file larger than 256 MiB")
+		}
+		hash.Write(buf[:n])
+	}
+	return hex.EncodeToString(hash.Sum(nil)), size, nil
 }
