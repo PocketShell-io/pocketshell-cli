@@ -229,14 +229,39 @@ def test_new_machine_complete_runtime(closure, tmp_path):
         rc, out = exec_(f'{to_rel}\\python" && a.exe --json engines')
         assert rc == 0 and '"shell"' in out  # the aplexer CLI answered with its engines (incl. the shell engine)
 
-        # 4b. PTY session (ssh-shellhost + conhost): a COMPUTED reply absent from the input
-        pty_in = b"set /a 6*7+1000\r\nexit 7\r\n"
-        p = subprocess.run([str(SSH_DIR / "ssh.exe"), *base, "-tt", "-p", str(port), f"{user}@127.0.0.1"],
-                           input=pty_in, capture_output=True, timeout=120)
-        out = p.stdout.decode("utf-8", "replace")
-        print("PTY:", p.returncode, out[-2000:])
+        # 4b. PTY session (ssh-shellhost + conhost), driven like a terminal: input is sent only
+        # after the shell prompt appears (run 38046668305: input written before conhost was ready
+        # was never seen). The oracle is a COMPUTED reply absent from the input, plus the exit status.
+        import threading
+        import time as _time
+
+        pty = subprocess.Popen([str(SSH_DIR / "ssh.exe"), *base, "-tt", "-p", str(port), f"{user}@127.0.0.1"],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        chunks = []
+        reader = threading.Thread(target=lambda: [chunks.append(b) for b in iter(lambda: pty.stdout.read1(4096), b"")],
+                                  daemon=True)
+        reader.start()
+
+        def seen(marker, deadline):
+            end_ = _time.monotonic() + deadline
+            while _time.monotonic() < end_:
+                if marker in b"".join(chunks):
+                    return True
+                _time.sleep(0.2)
+            return False
+
+        assert seen(b">", 60), b"".join(chunks)[-2000:]  # the cmd prompt
+        pty_in = b"set /a 6*7+1000\r"
+        pty.stdin.write(pty_in)
+        pty.stdin.flush()
+        assert seen(b"1042", 30), b"".join(chunks)[-2000:]
+        pty.stdin.write(b"exit 7\r")
+        pty.stdin.flush()
+        rc = pty.wait(timeout=60)
+        out = b"".join(chunks).decode("utf-8", "replace")
+        print("PTY:", rc, ascii(out[-2000:]))
         assert "1042" in out and b"1042" not in pty_in
-        assert p.returncode == 7  # the real exit status through the PTY
+        assert rc == 7  # the real exit status through the PTY
 
         # 4c. SFTP put/get through the owned sftp-server
         local = tmp_path / "payload.bin"
