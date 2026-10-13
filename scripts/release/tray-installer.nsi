@@ -19,10 +19,10 @@ Section "PocketShell Gateway"
   CreateDirectory "$SMPROGRAMS\PocketShell Gateway"
   CreateShortcut "$SMPROGRAMS\PocketShell Gateway\PocketShell Gateway.lnk" "$INSTDIR\runtime\GatewayTray.exe"
   CreateShortcut "$SMPROGRAMS\PocketShell Gateway\Gateway Setup.lnk" "$INSTDIR\runtime\GatewayTray.exe" "--setup"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "PocketShellTray" '$"$INSTDIR\runtime\GatewayTray.exe$"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "PocketShellTray" '$\"$INSTDIR\runtime\GatewayTray.exe$\"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketShellGateway" "DisplayName" "PocketShell Gateway"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketShellGateway" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketShellGateway" "UninstallString" '$"$INSTDIR\Uninstall.exe$"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketShellGateway" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketShellGateway" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketShellGateway" "NoRepair" 1
 SectionEnd
@@ -34,7 +34,7 @@ Function .onInstSuccess
 FunctionEnd
 
 Section "Uninstall"
-  ExecWait '$"$INSTDIR\runtime\GatewayTray.exe$" --uninstall'
+  ExecWait '$\"$INSTDIR\runtime\GatewayTray.exe$\" --uninstall'
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "PocketShellTray"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketShellGateway"
   RMDir /r "$SMPROGRAMS\PocketShell Gateway"

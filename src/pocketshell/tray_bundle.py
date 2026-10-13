@@ -173,6 +173,20 @@ def needs_recovery(doc):
             or outbound.get("state") == "stopped")
 
 
+def control(action):
+    """Only the bound guardian controls this endpoint; no PATH/task fallback."""
+    try:
+        if action in ("stop", "restart"):
+            set_enabled(False)
+            agent("stop", timeout=120)
+        if action in ("start", "restart"):
+            agent("start", timeout=180)
+            set_enabled(True)
+        return True, f"Gateway {action} completed"
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+
+
 def managed_status():
     from pocketshell.gateway import status
     from pocketshell.gateway.service_agent_endpoint import BACKEND_DIRS
@@ -243,22 +257,15 @@ def run_tray(root):
 
         def start_gateway(self, timeout=120):
             with self.guard:
-                result = super().start_gateway(timeout)
-                if result[0]:
-                    set_enabled(True)
-                return result
+                return control("start")
 
         def stop_gateway(self, timeout=90):
             with self.guard:
-                set_enabled(False)
-                return super().stop_gateway(timeout)
+                return control("stop")
 
         def restart_gateway(self, timeout=180):
             with self.guard:
-                result = super().restart_gateway(timeout)
-                if result[0]:
-                    set_enabled(True)
-                return result
+                return control("restart")
 
     class ManagedApp(TrayApp):
         def do_open_logs(self):

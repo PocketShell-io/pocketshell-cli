@@ -32,3 +32,19 @@ def test_receipt_cannot_redirect_launcher_outside_managed_root(tmp_path, monkeyp
         bundle.installed_root({"location": {"root": str(tmp_path / "managed-runtime")}, "release": "../../evil"})
     assert bundle.installed_root({"location": {"root": str(tmp_path / "managed-runtime")},
                                   "release": "tray-123"}) == tmp_path / "managed-runtime/releases/tray-123"
+
+
+def test_restart_uses_bound_agent_and_remembers_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    actions = []
+    def call(action, **kwargs):
+        actions.append(action)
+        if action == "start":
+            raise RuntimeError("refused startup")
+    monkeypatch.setattr(bundle, "agent", call)
+    assert bundle.control("restart") == (False, "refused startup")
+    assert actions == ["stop", "start"]
+    assert not bundle.enabled()
+    monkeypatch.setattr(bundle, "agent", lambda action, **kw: actions.append(action))
+    assert bundle.control("start")[0]
+    assert bundle.enabled()
