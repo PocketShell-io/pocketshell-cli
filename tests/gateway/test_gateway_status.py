@@ -366,6 +366,7 @@ def test_cli_gateway_lifecycle_mocked(monkeypatch):
 
 
 def test_start_gateway_service_installed(monkeypatch):
+    monkeypatch.setattr(gst.sys, "platform", "linux")
     commands = []
 
     def fake_run(argv, **kwargs):
@@ -381,6 +382,7 @@ def test_start_gateway_service_installed(monkeypatch):
 
 
 def test_start_gateway_fallback_when_not_installed(monkeypatch):
+    monkeypatch.setattr(gst.sys, "platform", "linux")
     monkeypatch.setattr("pocketshell.gateway.service_linux.unit_path", lambda: "/tmp/fake.service")
     monkeypatch.setattr(os.path, "lexists", lambda p: False)
 
@@ -415,6 +417,7 @@ def test_start_gateway_windows_fallback(monkeypatch):
 
 
 def test_stop_gateway_service_installed(monkeypatch):
+    monkeypatch.setattr(gst.sys, "platform", "linux")
     commands = []
 
     def fake_run(argv, **kwargs):
@@ -451,6 +454,7 @@ def test_stop_gateway_nothing_running(monkeypatch):
 
 
 def test_restart_gateway_service_installed(monkeypatch):
+    monkeypatch.setattr(gst.sys, "platform", "linux")
     commands = []
 
     def fake_run(argv, **kwargs):
@@ -466,6 +470,7 @@ def test_restart_gateway_service_installed(monkeypatch):
 
 
 def test_restart_gateway_fallback_when_not_installed(monkeypatch):
+    monkeypatch.setattr(gst.sys, "platform", "linux")
     monkeypatch.setattr("pocketshell.gateway.service_linux.unit_path", lambda: "/tmp/fake.service")
     monkeypatch.setattr(os.path, "lexists", lambda p: False)
     monkeypatch.setattr(gst, "find_running_gateway_pids", lambda runner=None: [1111])
