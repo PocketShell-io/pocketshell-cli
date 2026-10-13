@@ -14,7 +14,9 @@ the browser code using your PocketShell account. These per-user identities
 cannot be bundled in an installer. Cancelled setup can be resumed from the
 Start menu's **Gateway Setup** shortcut without regenerating keys.
 
-The tray starts at login. Right-click for online/offline status, current
+The tray starts at login. If the user's Run registry key is read-only (as
+observed on win35), it uses a per-user Startup-folder shortcut instead.
+Right-click for online/offline status, current
 connections, active aplexer sessions, Start, Stop, Restart and Open Logs.
 The helper reconnects after network outages. The tray checks dead local
 processes every 30 seconds and asks the measured guardian to recover them.

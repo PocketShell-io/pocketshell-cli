@@ -8,6 +8,9 @@ Supported platforms:
 from __future__ import annotations
 
 import os
+import base64
+import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -66,7 +69,46 @@ def _win_open_run_key(write: bool = False, winreg_mod: Any = None):
     if reg is None:
         import winreg as reg
     access = reg.KEY_SET_VALUE if write else reg.KEY_READ
-    return reg.OpenKey(reg.HKEY_CURRENT_USER, WINDOWS_REG_KEY, 0, access)
+    opener = reg.CreateKeyEx if write else reg.OpenKey
+    return opener(reg.HKEY_CURRENT_USER, WINDOWS_REG_KEY, 0, access)
+
+
+def windows_startup_shortcut(home: Optional[Path] = None) -> Path:
+    roaming = home / "AppData/Roaming" if home else Path(os.environ.get("APPDATA") or (Path.home() / "AppData/Roaming"))
+    return roaming / "Microsoft/Windows/Start Menu/Programs/Startup/PocketShell Gateway.lnk"
+
+
+def _create_startup_shortcut(command: str, target: Path) -> None:
+    """Native shortcut fallback for a user whose Run registry key is read-only."""
+    import ctypes
+    argc = ctypes.c_int()
+    parse = ctypes.windll.shell32.CommandLineToArgvW
+    parse.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+    parse.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    argv = parse(command, ctypes.byref(argc))
+    if not argv:
+        raise OSError("Cannot parse the autostart command")
+    try:
+        parts = [argv[i] for i in range(argc.value)]
+    finally:
+        free = ctypes.windll.kernel32.LocalFree
+        free.argtypes = [ctypes.c_void_p]
+        free.restype = ctypes.c_void_p
+        free(argv)
+    if not parts or not Path(parts[0]).is_absolute():
+        raise OSError("Autostart needs an absolute executable")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    script = """$ErrorActionPreference='Stop'; $p=[Console]::In.ReadToEnd()|ConvertFrom-Json;
+$s=(New-Object -ComObject WScript.Shell).CreateShortcut($p.path);
+$s.TargetPath=$p.exe; $s.Arguments=$p.arguments; $s.WindowStyle=7; $s.Save()"""
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    result = subprocess.run([str(powershell), "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                            input=json.dumps({"path": str(target), "exe": parts[0],
+                                              "arguments": subprocess.list2cmdline(parts[1:])}),
+                            text=True, capture_output=True, timeout=20, creationflags=0x08000000)
+    if result.returncode or not target.is_file():
+        raise OSError("Cannot create the Windows Startup shortcut")
 
 
 # --- Public Cross-Platform API ---
@@ -89,7 +131,7 @@ def is_autostart_installed(
                 reg.QueryValueEx(key, RUN_KEY_NAME)
                 return True
         except (OSError, FileNotFoundError):
-            return False
+            return windows_startup_shortcut(home).is_file()
     else:
         path = get_linux_desktop_file_path(home)
         return path.is_file()
@@ -113,9 +155,15 @@ def install_autostart(
                 import winreg as reg
             with _win_open_run_key(write=True, winreg_mod=reg) as key:
                 reg.SetValueEx(key, RUN_KEY_NAME, 0, reg.REG_SZ, cmd)
+            windows_startup_shortcut(home).unlink(missing_ok=True)
             return True, f"Installed autostart registry entry '{RUN_KEY_NAME}'"
         except OSError as exc:
-            return False, f"Failed to set Windows autostart registry key: {exc}"
+            try:
+                shortcut = windows_startup_shortcut(home)
+                _create_startup_shortcut(cmd, shortcut)
+                return True, f"Installed autostart Startup shortcut at {shortcut}"
+            except (OSError, subprocess.TimeoutExpired) as fallback:
+                return False, f"Cannot configure autostart: registry {exc}; Startup folder {fallback}"
     else:
         try:
             target = get_linux_desktop_file_path(home)
@@ -137,6 +185,11 @@ def remove_autostart(
     plat = platform or sys.platform
 
     if plat == "win32":
+        shortcut = windows_startup_shortcut(home)
+        try:
+            shortcut.unlink(missing_ok=True)
+        except OSError as exc:
+            return False, f"Cannot remove Startup shortcut: {exc}"
         try:
             reg = winreg_mod or sys.modules.get("winreg")
             if reg is None:
@@ -148,6 +201,15 @@ def remove_autostart(
                     pass
             return True, f"Removed autostart registry entry '{RUN_KEY_NAME}'"
         except OSError as exc:
+            # A read-only Run key with no value does not block removal of the
+            # Startup-folder fallback (the Win35 ordinary-user case).
+            try:
+                with _win_open_run_key(write=False, winreg_mod=reg) as key:
+                    reg.QueryValueEx(key, RUN_KEY_NAME)
+            except FileNotFoundError:
+                return True, "Removed autostart Startup shortcut"
+            except OSError:
+                pass
             return False, f"Failed to remove Windows autostart registry key: {exc}"
     else:
         try:

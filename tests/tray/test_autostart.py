@@ -80,6 +80,8 @@ class FakeWinreg:
     def SetValueEx(self, key, value_name, reserved, val_type, value):
         self.store[value_name] = value
 
+    CreateKeyEx = OpenKey
+
     def QueryValueEx(self, key, value_name):
         if value_name not in self.store:
             raise FileNotFoundError("Value not found")
@@ -91,24 +93,39 @@ class FakeWinreg:
         del self.store[value_name]
 
 
-def test_windows_autostart_lifecycle():
+def test_windows_autostart_lifecycle(tmp_path):
     fake_reg = FakeWinreg()
 
     # Initially not installed
-    assert is_autostart_installed(platform="win32", winreg_mod=fake_reg) is False
+    assert is_autostart_installed(platform="win32", winreg_mod=fake_reg, home=tmp_path) is False
 
-    # Install
-    ok, msg = install_autostart(
-        command=r'"C:\pythonw.exe" -m pocketshell tray',
-        platform="win32",
-        winreg_mod=fake_reg,
-    )
+    ok, msg = install_autostart(command=r'"C:\pythonw.exe" -m pocketshell tray',
+                                platform="win32", winreg_mod=fake_reg, home=tmp_path)
     assert ok is True
     assert fake_reg.store.get(RUN_KEY_NAME) == r'"C:\pythonw.exe" -m pocketshell tray'
-    assert is_autostart_installed(platform="win32", winreg_mod=fake_reg) is True
-
-    # Remove
-    ok, msg = remove_autostart(platform="win32", winreg_mod=fake_reg)
-    assert ok is True
+    assert is_autostart_installed(platform="win32", winreg_mod=fake_reg, home=tmp_path) is True
+    assert remove_autostart(platform="win32", winreg_mod=fake_reg, home=tmp_path)[0]
     assert RUN_KEY_NAME not in fake_reg.store
-    assert is_autostart_installed(platform="win32", winreg_mod=fake_reg) is False
+    assert is_autostart_installed(platform="win32", winreg_mod=fake_reg, home=tmp_path) is False
+
+
+def test_readonly_run_key_uses_startup_folder(tmp_path, monkeypatch):
+    from pocketshell.tray import autostart
+    class ReadOnlyRun(FakeWinreg):
+        def SetValueEx(self, *args):
+            raise PermissionError("Run key is read-only")
+        def CreateKeyEx(self, *args):
+            raise PermissionError("Run key is read-only")
+    def make_shortcut(command, path):
+        assert command == '"C:\\Program Files\\PocketShell\\GatewayTray.exe"'
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"native shortcut fixture")
+    monkeypatch.setattr(autostart, "_create_startup_shortcut", make_shortcut)
+    reg = ReadOnlyRun()
+    ok, _ = autostart.install_autostart(command='"C:\\Program Files\\PocketShell\\GatewayTray.exe"',
+                                      platform="win32", home=tmp_path, winreg_mod=reg)
+    assert ok
+    assert autostart.is_autostart_installed(platform="win32", home=tmp_path, winreg_mod=reg)
+    assert autostart.remove_autostart(platform="win32", home=tmp_path, winreg_mod=reg)[0]
+    assert not autostart.is_autostart_installed(platform="win32", home=tmp_path, winreg_mod=reg)
+
