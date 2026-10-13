@@ -245,6 +245,16 @@ def managed_status():
     return doc
 
 
+def status_document():
+    # Polling failures are data for the tray, never a modal dialog in a child.
+    try:
+        return managed_status()
+    except Exception as exc:
+        logging.exception("Managed status unavailable")
+        return {"v": 1, "state": "error", "summary": f"Gateway status unavailable: {str(exc)[:300]}",
+                "clients": [], "sessions": [], "errors": [str(exc)[:300]]}
+
+
 def run_tray(root):
     from pocketshell.tray.app import TrayApp
     from pocketshell.tray.autostart import install_autostart
@@ -288,6 +298,22 @@ def run_tray(root):
         def do_open_logs(self):
             os.startfile(home())
 
+        def do_control(self, action):
+            ok, detail = getattr(self.status_client, action + "_gateway")()
+            if not ok:
+                self.notify(detail, "Gateway needs attention")
+                logging.error("Gateway %s failed: %s", action, detail)
+            self.poll_once()
+
+        def do_start(self):
+            self.do_control("start")
+
+        def do_stop(self):
+            self.do_control("stop")
+
+        def do_restart(self):
+            self.do_control("restart")
+
         def _poll_worker(self):
             while not self._stop_event.is_set():
                 if (home() / "tray-exit").exists():
@@ -323,7 +349,7 @@ def main():
             agent("stop", timeout=120)
             return
         if "--status" in sys.argv:
-            print(json.dumps(managed_status()))
+            print(json.dumps(status_document()))
             return
         authority = home() / "managed-runtime/authority.json"
         if authority.exists():

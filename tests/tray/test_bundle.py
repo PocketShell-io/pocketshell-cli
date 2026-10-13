@@ -48,3 +48,12 @@ def test_restart_uses_bound_agent_and_remembers_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, "agent", lambda action, *args, **kw: actions.append(action))
     assert bundle.control("start")[0]
     assert bundle.enabled()
+
+
+def test_status_failure_returns_json_data_without_a_modal(monkeypatch):
+    def fail():
+        raise RuntimeError("agent busy")
+    monkeypatch.setattr(bundle, "managed_status", fail)
+    monkeypatch.setattr(bundle, "message", lambda *args, **kw: pytest.fail("polling must not open a dialog"))
+    assert bundle.status_document()["state"] == "error"
+    assert bundle.status_document()["errors"] == ["agent busy"]
