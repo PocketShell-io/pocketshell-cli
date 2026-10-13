@@ -76,7 +76,10 @@ def build(args):
                         "x86_64-pc-windows-msvc", "--python-version", "3.12", "--only-binary", ":all:",
                         "--no-deps", "--require-hashes", "--no-cache", "--link-mode", "copy",
                         "-r", str(requirements)], check=True)
-        shutil.copytree(REPO / "src/pocketshell", site / "pocketshell", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        subprocess.run(["uv", "build", "--wheel", "--out-dir", str(work / "wheel")], cwd=REPO, check=True)
+        wheel = next((work / "wheel").glob("pocketshell-*.whl"))
+        subprocess.run(["uv", "pip", "install", "--target", str(site), "--python-platform",
+                        "x86_64-pc-windows-msvc", "--python-version", "3.12", "--no-deps", str(wheel)], check=True)
         for name in ("bin", "Scripts"):
             shutil.rmtree(site / name, ignore_errors=True)
         native = {p.relative_to(site).parts[0] for p in site.rglob("*") if p.suffix.lower() in (".pyd", ".dll")}
@@ -104,6 +107,10 @@ def build(args):
     data = json.dumps(catalog, indent=1, sort_keys=True).encode()
     parse_catalog(data)
     (out / "payload/host-runtime-catalog.json").write_bytes(data)
+    if sys.platform == "win32":
+        # Catch missing metadata / native wheels before producing a broken EXE.
+        subprocess.run([str(root / "python/python.exe"), "-I", "-B", "-c",
+                        "import PIL.Image, pystray, pocketshell.tray_bundle, aplexer; print('Bundled imports OK')"], check=True)
     script = REPO / "scripts/release/tray-installer.nsi"
     exe = out / "PocketShellGateway-Setup-x64.exe"
     subprocess.run([args.makensis, f"/DPAYLOAD={out / 'payload'}", f"/DOUTPUT={exe}",
