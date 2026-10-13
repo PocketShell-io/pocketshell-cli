@@ -8,6 +8,7 @@ from __future__ import annotations
 import ctypes
 import json
 import logging
+import re
 import os
 from pathlib import Path
 import subprocess
@@ -66,7 +67,7 @@ def setup(root: Path):
         agent("install", "--user-data", str(home()), "--catalog", str(root.parent / "host-runtime-catalog.json"),
               "--staged", str(root), "--endpoint-keys", "generate", "--port", "22235", timeout=600)
     receipt = json.loads(authority.read_text())
-    installed = Path(receipt["location"]["root"]) / "releases" / receipt["release"]
+    installed = installed_root(receipt)
     # All subsequent commands use the measured installed closure.
     global_interpreter = installed / "python" / "python.exe"
     if Path(sys.executable).resolve() != global_interpreter.resolve():
@@ -147,6 +148,14 @@ def enabled():
         return True
 
 
+def installed_root(receipt):
+    expected = home() / "managed-runtime"
+    if (Path(receipt["location"]["root"]).resolve() != expected.resolve()
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", receipt["release"])):
+        raise RuntimeError("The gateway installation receipt names an unexpected location.")
+    return expected / "releases" / receipt["release"]
+
+
 def set_enabled(value):
     home().mkdir(parents=True, exist_ok=True)
     target = home() / "tray-preferences.json"
@@ -164,6 +173,47 @@ def needs_recovery(doc):
             or outbound.get("state") == "stopped")
 
 
+def managed_status():
+    from pocketshell.gateway import status
+    from pocketshell.gateway.service_agent_endpoint import BACKEND_DIRS
+    from pocketshell.runtime import sessions
+
+    receipt = json.loads((home() / "managed-runtime/authority.json").read_text())
+    installed_root(receipt)
+    local = agent("status", timeout=90)
+    endpoint = Path(receipt["endpoint"]["state"]).parent
+    env = dict(os.environ, APLEXER_CONFIG=str(endpoint / "aplexer.toml"))
+    env.update({k: str(endpoint / "backend" / v) for k, v in BACKEND_DIRS.items()})
+    def enumerate_sessions():
+        managed, errors = sessions.enumerate_live_sessions(env=env)
+        existing, other_errors = sessions.enumerate_live_sessions()
+        rows = {s.aplexer_id: s for s in [*existing, *managed]}
+        return list(rows.values()), [*errors, *other_errors]
+    # Read recent authentication records, not an unbounded log. OpenSSH normally
+    # emits to its Operational event channel on Windows, including our endpoint.
+    log_text = ""
+    for log in Path(receipt["endpoint"]["state"]).glob("*/daemon.stderr.log"):
+        with log.open("rb") as stream:
+            stream.seek(max(0, log.stat().st_size - (1 << 20)))
+            log_text += stream.read(1 << 20).decode("utf-8", "replace")
+    try:
+        events = subprocess.run([
+            str(Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"),
+            "-NoProfile", "-NonInteractive", "-Command",
+            "Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 200 -ErrorAction Stop | ForEach-Object { $_.Message }"],
+            capture_output=True, timeout=8, creationflags=0x08000000)
+        log_text += events.stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    keys = status.load_authorized_keys_comments([receipt["keys"]["authorizedKeys"]])
+    doc = status.collect_gateway_status(auth_log_text=log_text, auth_keys_comments=keys,
+                                        enumerate_sessions_fn=enumerate_sessions)
+    outbound = local.get("outbound") or {}
+    doc["agent"].update(installed=True, running=outbound.get("state") == "running", pid=outbound.get("pid"))
+    doc["state"], doc["summary"] = status.derive_state(doc["agent"], doc["sshd"], doc["device_id"])
+    return doc
+
+
 def run_tray(root):
     from pocketshell.tray.app import TrayApp
     from pocketshell.tray.autostart import install_autostart
@@ -172,20 +222,21 @@ def run_tray(root):
 
     class ManagedClient(GatewayStatusClient):
         def __init__(self):
-            super().__init__()
+            super().__init__(status_command=[sys.executable, "-I", "-B", "-m", "pocketshell.tray_bundle", "--status"])
             self.guard = threading.Lock()
             self.last_retry = 0.0
 
-        def fetch_status(self, timeout=20):
+        def fetch_status(self, timeout=120):
             with self.guard:
                 if enabled() and time.monotonic() - self.last_retry >= 30:
                     self.last_retry = time.monotonic()
                     try:
-                        status = agent("status", timeout=30)
+                        status = agent("status", timeout=90)
                         if needs_recovery(status):
                             # STOP reaps measured custody before replacing a dead generation.
                             agent("stop", timeout=90)
-                            agent("start", timeout=120)
+                            if enabled():
+                                agent("start", timeout=120)
                     except (RuntimeError, subprocess.TimeoutExpired):
                         logging.exception("Gateway recovery refused; will retry")
                 return super().fetch_status(timeout=timeout)
@@ -213,6 +264,17 @@ def run_tray(root):
         def do_open_logs(self):
             os.startfile(home())
 
+        def _poll_worker(self):
+            while not self._stop_event.is_set():
+                if (home() / "tray-exit").exists():
+                    self.quit()
+                    return
+                try:
+                    self.poll_once()
+                except Exception:
+                    logging.exception("Tray status refresh failed")
+                self._stop_event.wait(self.poll_interval)
+
     instance = SingleInstance()
     if not instance.acquire():
         return
@@ -231,9 +293,24 @@ def main():
     logging.basicConfig(filename=home() / "tray.log", level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     try:
+        if "--uninstall" in sys.argv:
+            set_enabled(False)
+            (home() / "tray-exit").touch()
+            agent("stop", timeout=120)
+            return
+        if "--status" in sys.argv:
+            print(json.dumps(managed_status()))
+            return
+        authority = home() / "managed-runtime/authority.json"
+        if authority.exists():
+            installed = installed_root(json.loads(authority.read_text()))
+            if root.resolve() != installed.resolve():
+                subprocess.Popen([str(installed / "GatewayTray.exe"), *sys.argv[1:]], creationflags=0x08000000)
+                return
         if "--setup" in sys.argv or not (home() / "managed-runtime" / "authority.json").exists():
             if not setup(root):
                 return
+        (home() / "tray-exit").unlink(missing_ok=True)
         run_tray(root)
     except Exception as exc:
         logging.exception("Gateway tray failed")
