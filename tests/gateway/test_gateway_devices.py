@@ -279,3 +279,130 @@ def test_malformed_http_response_is_a_clean_error(fake_account, raw):
     assert "malformed HTTP response from the gateway" in result.output
     assert "\x1b" not in result.output and "\x07" not in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+# --- presence (gateways that report host-agent liveness) -------------------
+
+OBSERVED = "2026-10-10T12:01:00.250Z"
+
+
+def _presence(online, since=None, generation=None, observed=OBSERVED):
+    p = {"online": online, "observed_at": observed}
+    if since is not None:
+        p["connected_since"] = since
+    if generation is not None:
+        p["session_generation"] = generation
+    return p
+
+
+def _rows(output):
+    return {line.split()[0]: line.split() for line in output.splitlines() if line.strip()}
+
+
+def test_online_column_when_gateway_reports_presence(server, fake_account):
+    up = _dev("home-lab")
+    up["presence"] = _presence(True, "2026-10-10T11:58:12.004Z", 3)
+    down = _dev("spare-box")
+    down["presence"] = _presence(False)
+    gone = _dev("old-box", revoked=True)
+    gone["presence"] = _presence(True, "2026-10-10T11:00:00.000Z", 1)  # never trusted
+    server.body = json.dumps({"devices": [up, down, gone]}).encode()
+    result = _invoke(server)
+    assert result.exit_code == 0, result.output
+    rows = _rows(result.output)
+    assert rows["DEVICE"][:3] == ["DEVICE", "STATE", "ONLINE"]
+    assert rows["home-lab"][1:3] == ["active", "yes"]
+    assert rows["spare-box"][1:3] == ["active", "no"]
+    assert rows["old-box"][1:3] == ["revoked", "no"]
+    assert f"as of {OBSERVED} (gateway clock)" in result.output
+
+    js = CliRunner().invoke(
+        cli,
+        ["gateway", "devices", "--json", "--server", server.url,
+         "--insecure-dev", "--trust-gateway", "127.0.0.1"],
+    )
+    assert js.exit_code == 0, js.output
+    by_id = {d["id"]: d for d in json.loads(js.stdout)["devices"]}
+    assert by_id["home-lab"]["online"] is True
+    assert by_id["home-lab"]["observed_at"] == OBSERVED
+    assert by_id["home-lab"]["connected_since"] == "2026-10-10T11:58:12.004Z"
+    assert by_id["home-lab"]["session_generation"] == 3
+    assert by_id["spare-box"]["online"] is False
+    assert by_id["spare-box"]["connected_since"] is None
+    assert by_id["old-box"]["online"] is False
+    assert by_id["old-box"]["connected_since"] is None
+    assert by_id["old-box"]["session_generation"] is None
+
+
+def test_no_presence_keeps_previous_layout(server, fake_account):
+    server.body = json.dumps({"devices": [_dev("home-lab")]}).encode()
+    result = _invoke(server)
+    assert result.exit_code == 0, result.output
+    assert "ONLINE" not in result.output
+    assert _rows(result.output)["DEVICE"][:3] == ["DEVICE", "STATE", "ADVERTISED"]
+    js = CliRunner().invoke(
+        cli,
+        ["gateway", "devices", "--json", "--server", server.url,
+         "--insecure-dev", "--trust-gateway", "127.0.0.1"],
+    )
+    dev = json.loads(js.stdout)["devices"][0]
+    assert dev["online"] is None and dev["observed_at"] is None
+
+
+def test_mixed_presence_marks_unreported_as_unknown(server, fake_account):
+    up = _dev("home-lab")
+    up["presence"] = _presence(True, "2026-10-10T11:58:12.004Z", 1)
+    server.body = json.dumps({"devices": [up, _dev("legacy-box")]}).encode()
+    result = _invoke(server)
+    assert result.exit_code == 0, result.output
+    rows = _rows(result.output)
+    assert rows["home-lab"][2] == "yes"
+    assert rows["legacy-box"][2] == "?"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "yes",
+        [],
+        {},
+        {"online": "true"},
+        {"online": 1},
+        {"online": None},
+    ],
+)
+def test_malformed_presence_is_unknown_not_an_error(raw):
+    item = _dev("home-lab")
+    item["presence"] = raw
+    (dev,) = parse_devices(json.dumps({"devices": [item]}).encode())
+    assert dev.presence is None
+
+
+def test_hostile_presence_fields_are_dropped(server, fake_account):
+    item = _dev("home-lab")
+    item["presence"] = {
+        "online": True,
+        "observed_at": "\x1b]0;pwned\x07",
+        "connected_since": "2026-10-10T11:58:12Z\x1b[31m",
+        "session_generation": True,  # bool is not a generation
+    }
+    (dev,) = parse_devices(json.dumps({"devices": [item]}).encode())
+    assert dev.presence is not None and dev.presence.online is True
+    assert dev.presence.observed_at is None
+    assert dev.presence.connected_since is None
+    assert dev.presence.session_generation is None
+    server.body = json.dumps({"devices": [item]}).encode()
+    result = _invoke(server)
+    assert result.exit_code == 0, result.output
+    assert "\x1b" not in result.output and "\x07" not in result.output
+    assert "as of" not in result.output  # no trustworthy observation time
+
+
+def test_offline_presence_drops_session_fields():
+    item = _dev("home-lab")
+    item["presence"] = _presence(False, "2026-10-10T11:58:12.004Z", 9)
+    (dev,) = parse_devices(json.dumps({"devices": [item]}).encode())
+    assert dev.presence.online is False
+    assert dev.presence.connected_since is None
+    assert dev.presence.session_generation is None
+    assert dev.presence.observed_at == OBSERVED
