@@ -27,6 +27,9 @@ import (
 
 const createNoWindow = 0x08000000
 
+// The installer builds a second GUI entry with -X main.module=pocketshell.tray_bundle.
+var module = "pocketshell"
+
 func main() {
 	self, err := os.Executable()
 	if err != nil {
@@ -34,7 +37,7 @@ func main() {
 		os.Exit(1)
 	}
 	python := filepath.Join(filepath.Dir(self), "python", "python.exe")
-	cmd := exec.Command(python, append([]string{"-I", "-B", "-m", "pocketshell"}, os.Args[1:]...)...)
+	cmd := exec.Command(python, append([]string{"-I", "-B", "-m", module}, os.Args[1:]...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow, HideWindow: true}
 	// Console control events reach the child directly; the launcher only waits.
