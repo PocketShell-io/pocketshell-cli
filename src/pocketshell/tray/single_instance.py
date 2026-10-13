@@ -39,10 +39,16 @@ class SingleInstance:
             import ctypes
 
             kernel32 = ctypes.windll.kernel32
+            kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+            kernel32.CreateMutexW.restype = ctypes.c_void_p
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
             mutex_name = f"Local\\{self.name}"
             # CreateMutexW(security_attributes, initial_owner, name)
             handle = kernel32.CreateMutexW(None, False, mutex_name)
             error = kernel32.GetLastError()
+            if not handle:
+                return False
             ERROR_ALREADY_EXISTS = 183
             if error == ERROR_ALREADY_EXISTS:
                 if handle:
@@ -52,8 +58,8 @@ class SingleInstance:
             self.is_acquired = True
             return True
         except Exception:
-            # Fallback to file lock if ctypes/win32 api fails
-            return self._acquire_posix()
+            # Windows has no fcntl fallback. Refuse an unverifiable lock.
+            return False
 
     def _acquire_posix(self) -> bool:
         import fcntl

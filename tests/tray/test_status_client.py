@@ -128,7 +128,9 @@ def test_resolve_logs_dir():
     assert "logs" in str(dir_path)
 
 
-def test_open_logs_folder(tmp_path: Path):
+def test_open_logs_folder(tmp_path: Path, monkeypatch):
+    # Exercise the Linux branch without opening an actual Windows Explorer window.
+    monkeypatch.setattr("pocketshell.tray.status_client.sys.platform", "linux")
     with patch("pocketshell.tray.status_client.resolve_logs_dir", return_value=tmp_path / "logs"):
         with patch("subprocess.Popen") as mock_popen:
             ok, path_str = open_logs_folder()
