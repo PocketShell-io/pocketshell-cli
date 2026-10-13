@@ -68,3 +68,26 @@ def test_tray_cannot_adopt_another_installations_binding(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="another installation"):
         bundle.check_own_binding({"authority": str(tmp_path / "some-other-runtime/authority.json")})
     bundle.check_own_binding({"authority": str(tmp_path / "managed-runtime/authority.json")})
+
+
+def test_status_uses_this_gateways_enrollment_not_global_defaults(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from pocketshell.gateway import status
+    monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    root = tmp_path / "managed-runtime"
+    root.mkdir()
+    (root / "authority.json").write_text(json.dumps({"location": {"root": str(root)}, "release": "tray-test",
+        "endpoint": {"state": str(root / "endpoint/state")}, "keys": {"authorizedKeys": str(root / "keys")}}))
+    enrollment = str(root / "enrollment")
+    monkeypatch.setattr(bundle, "observe_agent", lambda: {"binding": {"configDir": enrollment},
+        "outbound": {"state": "running", "pid": 123}})
+    monkeypatch.setattr(bundle.subprocess, "run", lambda *a, **kw: SimpleNamespace(stdout=b"", returncode=0))
+    monkeypatch.setattr(status, "load_authorized_keys_comments", lambda *a: {})
+    calls = []
+    def collect(**kwargs):
+        calls.append(kwargs["config_dir"])
+        return {"device_id": "this-device", "agent": {"connected": False}, "sshd": {"reachable": False}}
+    monkeypatch.setattr(status, "collect_gateway_status", collect)
+    assert bundle.managed_status()["device_id"] == "this-device"
+    assert calls == [enrollment]

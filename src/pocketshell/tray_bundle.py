@@ -225,7 +225,7 @@ def observe_agent():
         check_own_binding(binding)
         owner, endpoint, outbound, state, _ = service_user_agent._collect(
             binding, manifest, key, api, service_common.run_child)
-    return {"owner": owner, "endpoint": endpoint, "outbound": outbound, "state": state}
+    return {"owner": owner, "binding": binding, "endpoint": endpoint, "outbound": outbound, "state": state}
 
 
 def managed_status():
@@ -261,7 +261,8 @@ def managed_status():
     except (OSError, subprocess.TimeoutExpired):
         pass
     keys = status.load_authorized_keys_comments([receipt["keys"]["authorizedKeys"]])
-    doc = status.collect_gateway_status(auth_log_text=log_text, auth_keys_comments=keys,
+    config = (local.get("binding") or {}).get("configDir") or str(home() / "managed-runtime/enrollment")
+    doc = status.collect_gateway_status(config_dir=config, auth_log_text=log_text, auth_keys_comments=keys,
                                         enumerate_sessions_fn=enumerate_sessions)
     outbound = local.get("outbound") or {}
     doc["agent"].update(installed=True, running=outbound.get("state") == "running", pid=outbound.get("pid"))
