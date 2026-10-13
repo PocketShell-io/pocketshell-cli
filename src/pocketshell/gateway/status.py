@@ -654,14 +654,69 @@ def parse_wmic_cim_timestamp(val: str) -> Optional[str]:
         return None
 
 
+def read_proc_btime(proc_stat_path: str = "/proc/stat") -> Optional[int]:
+    """Read system boot time (seconds since Epoch) from /proc/stat 'btime' field."""
+    try:
+        with open(proc_stat_path, "r", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def parse_proc_pid_stat_starttime(
+    stat_content: str,
+    btime: Optional[int],
+    *,
+    clk_tck: Optional[int] = None,
+) -> Optional[str]:
+    """Parse process start time from /proc/[pid]/stat field 22 (starttime) and btime.
+
+    Returns ISO 8601 UTC timestamp e.g. '2026-10-13T19:45:00Z'.
+    """
+    if btime is None:
+        return None
+    rparen = stat_content.rfind(")")
+    if rparen == -1:
+        return None
+    fields = stat_content[rparen + 1:].split()
+    # Field 3 (state) is index 0 in fields; field 22 (starttime) is index 19.
+    if len(fields) < 20:
+        return None
+    try:
+        starttime_ticks = int(fields[19])
+    except ValueError:
+        return None
+
+    if clk_tck is None:
+        try:
+            clk_tck = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        except (ValueError, OSError):
+            clk_tck = 100
+    if clk_tck <= 0:
+        clk_tck = 100
+
+    start_epoch = btime + (starttime_ticks / float(clk_tck))
+    try:
+        dt = datetime.fromtimestamp(start_epoch, timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def discover_sshd_session_processes(
     runner: Optional[common.Runner] = None,
     *,
     platform: Optional[str] = None,
+    proc_dir: Optional[str] = None,
 ) -> list[SshdProcessSession]:
     """Discover active sshd user session processes on the host.
 
-    Linux: inspects /proc for 'sshd: USER@...' processes (or runs 'ps -eo pid,user,etimes,args').
+    Linux: inspects /proc for 'sshd: USER@...' processes with start time derived from
+    /proc/stat 'btime' and /proc/[pid]/stat field 22 (starttime in clock ticks since boot),
+    falling back to 'ps -eo pid,user,etimes,args'.
     Windows: inspects sshd.exe child processes with owner via psutil, or tasklist /V + wmic.
     """
     sessions: list[SshdProcessSession] = []
@@ -685,7 +740,7 @@ def discover_sshd_session_processes(
                         )
                         sessions.append(SshdProcessSession(pid=p.info.get("pid"), user=user, since=since))
             if sessions:
-                return sessions
+                return sorted(sessions, key=lambda s: (s.since or "", s.pid or 0), reverse=True)
         except Exception:
             pass
 
@@ -721,17 +776,29 @@ def discover_sshd_session_processes(
         except Exception:
             pass
 
-        return sessions
+        return sorted(sessions, key=lambda s: (s.since or "", s.pid or 0), reverse=True)
 
     # Linux / POSIX
-    # 1. When runner is None and /proc is readable, scan /proc directly (fast, no subprocess)
-    if runner is None and os.path.isdir("/proc"):
+    # 1. When runner is None or proc_dir is explicitly provided, read /proc directly
+    proc_root = proc_dir or "/proc"
+    if (runner is None or proc_dir is not None) and os.path.isdir(proc_root):
+        btime = read_proc_btime(os.path.join(proc_root, "stat"))
+        try:
+            clk_tck = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        except (ValueError, OSError):
+            clk_tck = 100
+
+        try:
+            entries = os.listdir(proc_root)
+        except OSError:
+            entries = []
+
         import pwd
-        for entry in os.listdir("/proc"):
+        for entry in entries:
             if not entry.isdigit():
                 continue
             pid = int(entry)
-            cmd_path = os.path.join("/proc", entry, "cmdline")
+            cmd_path = os.path.join(proc_root, entry, "cmdline")
             try:
                 with open(cmd_path, "rb") as f:
                     cmd_raw = f.read().decode("utf-8", "replace")
@@ -750,21 +817,40 @@ def discover_sshd_session_processes(
             if user_candidate in ("sshd", "root") and "@" not in cmd_raw:
                 continue
 
-            try:
-                st = os.stat(os.path.join("/proc", entry))
+            # Parse start time from /proc/[pid]/stat field 22 (starttime) + btime
+            since = None
+            stat_path = os.path.join(proc_root, entry, "stat")
+            if os.path.isfile(stat_path):
                 try:
-                    pw = pwd.getpwuid(st.st_uid)
-                    user = pw.pw_name if pw.pw_name != "root" else user_candidate
-                except (KeyError, ValueError):
-                    user = user_candidate
+                    with open(stat_path, "r", encoding="ascii", errors="replace") as f:
+                        stat_content = f.read()
+                    since = parse_proc_pid_stat_starttime(stat_content, btime, clk_tck=clk_tck)
+                except OSError:
+                    pass
 
-                since = datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                sessions.append(SshdProcessSession(pid=pid, user=user, since=since, cmdline=cmd_raw.strip("\x00")))
-            except OSError:
-                continue
+            user = user_candidate
+            proc_entry_path = os.path.join(proc_root, entry)
+            if user in ("root", "sshd"):
+                try:
+                    st = os.stat(proc_entry_path)
+                    pw = pwd.getpwuid(st.st_uid)
+                    if pw.pw_name not in ("root", "sshd"):
+                        user = pw.pw_name
+                except Exception:
+                    pass
+
+            if since is None:
+                try:
+                    st = os.stat(proc_entry_path)
+                    since = datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                except OSError:
+                    pass
+
+            sessions.append(SshdProcessSession(pid=pid, user=user, since=since, cmdline=cmd_raw.strip("\x00")))
 
         if sessions:
-            return sorted(sessions, key=lambda s: (s.since or "", s.pid or 0))
+            # Sort newest first so active connections match the most recently spawned session
+            return sorted(sessions, key=lambda s: (s.since or "", s.pid or 0), reverse=True)
 
     # 2. Try 'ps -eo pid,user,etimes,args'
     run_fn = runner or common.run_child
@@ -798,7 +884,8 @@ def discover_sshd_session_processes(
     except Exception:
         pass
 
-    return sorted(sessions, key=lambda s: (s.since or "", s.pid or 0))
+    # Sort newest first
+    return sorted(sessions, key=lambda s: (s.since or "", s.pid or 0), reverse=True)
 
 
 def find_loopback_connections(

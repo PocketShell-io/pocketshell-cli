@@ -177,6 +177,62 @@ def test_discover_sshd_session_processes_linux():
     assert sessions[0].since is not None
 
 
+def test_parse_proc_pid_stat_starttime():
+    btime = 1728840000
+    # Field 22 is 1000 ticks at 100 Hz = 10.0 seconds after boot
+    stat_content = "12345 (sshd: alexey@notty) S 1 1 1 0 -1 4194304 100 0 0 0 0 0 0 0 20 0 1 0 1000 10000 100"
+    since = gst.parse_proc_pid_stat_starttime(stat_content, btime, clk_tck=100)
+    assert since == "2024-10-13T17:20:10Z"
+
+    # comm with spaces and parentheses: (sshd: user (test)@pts/1)
+    stat_tricky = "12345 (sshd: user (test)@pts/1) S 1 1 1 0 -1 4194304 100 0 0 0 0 0 0 0 20 0 1 0 2000 10000 100"
+    since_tricky = gst.parse_proc_pid_stat_starttime(stat_tricky, btime, clk_tck=100)
+    assert since_tricky == "2024-10-13T17:20:20Z"
+
+
+def test_discover_sshd_session_processes_fake_proc(tmp_path):
+    proc_dir = tmp_path / "proc"
+    proc_dir.mkdir()
+
+    # /proc/stat
+    (proc_dir / "stat").write_text("cpu 1 2 3\nbtime 1728840000\n", encoding="ascii")
+
+    # PID 101: sshd: alexey@notty, starttime = 1000 ticks (10s)
+    pid101 = proc_dir / "101"
+    pid101.mkdir()
+    (pid101 / "cmdline").write_bytes(b"sshd: alexey@notty\x00")
+    (pid101 / "stat").write_text("101 (sshd: alexey@notty) S 1 1 1 0 -1 4194304 100 0 0 0 0 0 0 0 20 0 1 0 1000 10000 100\n", encoding="ascii")
+
+    # PID 102: sshd: bob@pts/1, starttime = 2000 ticks (20s)
+    pid102 = proc_dir / "102"
+    pid102.mkdir()
+    (pid102 / "cmdline").write_bytes(b"sshd: bob@pts/1\x00")
+    (pid102 / "stat").write_text("102 (sshd: bob@pts/1) S 1 1 1 0 -1 4194304 100 0 0 0 0 0 0 0 20 0 1 0 2000 10000 100\n", encoding="ascii")
+
+    # PID 103: sshd: /usr/sbin/sshd -D -e [listener] (ignored)
+    pid103 = proc_dir / "103"
+    pid103.mkdir()
+    (pid103 / "cmdline").write_bytes(b"sshd: /usr/sbin/sshd -D -e [listener]\x00")
+    (pid103 / "stat").write_text("103 (sshd) S 1 1 1 0 -1 4194304 100 0 0 0 0 0 0 0 20 0 1 0 500 10000 100\n", encoding="ascii")
+
+    # PID 104: sshd: alexey [priv] (ignored privsep monitor)
+    pid104 = proc_dir / "104"
+    pid104.mkdir()
+    (pid104 / "cmdline").write_bytes(b"sshd: alexey [priv]\x00")
+    (pid104 / "stat").write_text("104 (sshd) S 1 1 1 0 -1 4194304 100 0 0 0 0 0 0 0 20 0 1 0 999 10000 100\n", encoding="ascii")
+
+    sessions = gst.discover_sshd_session_processes(proc_dir=str(proc_dir), platform="linux")
+    assert len(sessions) == 2
+    # Sorted newest first: 102 (20s) comes before 101 (10s)
+    assert sessions[0].pid == 102
+    assert sessions[0].user == "bob"
+    assert sessions[0].since == "2024-10-13T17:20:20Z"
+
+    assert sessions[1].pid == 101
+    assert sessions[1].user == "alexey"
+    assert sessions[1].since == "2024-10-13T17:20:10Z"
+
+
 def test_discover_sshd_session_processes_windows():
     tasklist_csv = """"Image Name","PID","Session Name","Session#","Mem Usage","Status","User Name","CPU Time","Window Title"
 "sshd.exe","1234","Services","0","4,500 K","Unknown","NT AUTHORITY\\SYSTEM","0:00:00","N/A"
