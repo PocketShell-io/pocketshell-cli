@@ -24,6 +24,7 @@ import click
 from pocketshell import __version__
 from pocketshell.account.cli import login_command, logout_command, whoami_command
 from pocketshell.gateway import gateway_group
+from pocketshell.tray.cli import tray_command
 
 if os.name != "nt":
     from pocketshell.agents.conversations.cli import agent_log_command
@@ -117,6 +118,7 @@ else:
 cli.add_command(login_command, name="login")
 cli.add_command(logout_command, name="logout")
 cli.add_command(whoami_command, name="whoami")
+cli.add_command(tray_command, name="tray")
 
 
 # ---------------------------------------------------------------------------

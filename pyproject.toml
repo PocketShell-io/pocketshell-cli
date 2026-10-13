@@ -225,6 +225,11 @@ dev = [
 link = [
     "websockets>=15,<17",
 ]
+# Background system tray app (docs/tray.md). Imported lazily inside `pocketshell tray`.
+tray = [
+    "pillow>=10.0.0",
+    "pystray>=0.19.5",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pocketshell"]
