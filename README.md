@@ -71,6 +71,7 @@ pocketshell gateway enroll|run|show         # gateway host agent (docs/gateway.m
 pocketshell login [--label T] [--no-open]   # device-flow account login (docs/account.md)
 pocketshell whoami [--json]                 # show the logged-in account
 pocketshell logout                          # revoke and delete the CLI session
+pocketshell keys add|generate|list|public|remove|passwd  # device-password SSH key vault (docs/keys.md)
 ```
 
 Run `pocketshell --help` or `pocketshell <command> --help` for the live

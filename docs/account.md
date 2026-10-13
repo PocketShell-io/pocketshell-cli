@@ -127,6 +127,11 @@ credentials file.
   For a symlink or a file someone else owns, `logout` just removes the entry
   and doesn't contact the broker.
 
+SSH private keys are not part of the account. `pocketshell keys` keeps
+them in a separate device-password vault, `key-vault.json`, in the same
+directory and with the same file checks. That vault never leaves this
+device. See [keys.md](keys.md).
+
 ## Network and trust
 
 - Only HTTPS, with TLS verification always on. Redirects aren't followed,
