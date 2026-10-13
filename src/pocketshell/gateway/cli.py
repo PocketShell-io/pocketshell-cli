@@ -480,8 +480,81 @@ gateway_group.add_command(run)
 gateway_group.add_command(show)
 gateway_group.add_command(gateway_service.service_group)
 
+
+@click.command("status")
+@click.option("--json", "as_json", is_flag=True, help="Emit status contract JSON (schema v1).")
+@click.option(
+    "--config-dir",
+    default=None,
+    metavar="DIR",
+    help="Agent state directory (default: ${XDG_CONFIG_HOME:-$HOME/.config}/pocketshell-link).",
+)
+@click.pass_context
+def gateway_status(ctx: click.Context, as_json: bool, config_dir: Optional[str]) -> None:
+    """Current readiness, agent presence, clients, and active sessions."""
+    import json as _json
+    from pocketshell.gateway import status as gateway_status_mod
+
+    doc = gateway_status_mod.collect_gateway_status(config_dir=config_dir)
+    if as_json:
+        click.echo(_json.dumps(doc, indent=2))
+    else:
+        click.echo(gateway_status_mod.format_human_status(doc))
+
+
+@click.command("start")
+@click.pass_context
+def gateway_start(ctx: click.Context) -> None:
+    """Start the host gateway agent (systemd unit, scheduled task, or detached)."""
+    from pocketshell.gateway import status as gateway_status_mod
+
+    try:
+        msg = gateway_status_mod.start_gateway()
+        click.echo(msg)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else "start failed"
+        click.echo(f"error: {first_line}", err=True)
+        ctx.exit(getattr(exc, "exit_code", 1))
+
+
+@click.command("stop")
+@click.pass_context
+def gateway_stop(ctx: click.Context) -> None:
+    """Stop the host gateway agent."""
+    from pocketshell.gateway import status as gateway_status_mod
+
+    try:
+        msg = gateway_status_mod.stop_gateway()
+        click.echo(msg)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else "stop failed"
+        click.echo(f"error: {first_line}", err=True)
+        ctx.exit(getattr(exc, "exit_code", 1))
+
+
+@click.command("restart")
+@click.pass_context
+def gateway_restart(ctx: click.Context) -> None:
+    """Restart the host gateway agent."""
+    from pocketshell.gateway import status as gateway_status_mod
+
+    try:
+        msg = gateway_status_mod.restart_gateway()
+        click.echo(msg)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else "restart failed"
+        click.echo(f"error: {first_line}", err=True)
+        ctx.exit(getattr(exc, "exit_code", 1))
+
+
+gateway_group.add_command(gateway_status)
+gateway_group.add_command(gateway_start)
+gateway_group.add_command(gateway_stop)
+gateway_group.add_command(gateway_restart)
+
 for _client_command in gateway_client_cli.CLIENT_COMMANDS:
     gateway_group.add_command(_client_command)
+
 
 
 # --- `gateway agent`: the ordinary-user Windows runtime (API v1) -----------------------
