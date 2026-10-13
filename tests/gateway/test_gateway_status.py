@@ -347,9 +347,6 @@ def test_cli_gateway_status_plain():
 
 
 def test_cli_gateway_lifecycle_mocked(monkeypatch):
-    def fake_run(argv, **kwargs):
-        return common.ChildResult(0, b"", b"")
-
     monkeypatch.setattr(gst, "start_gateway", lambda runner=None: "started pocketshell-gateway.service")
     monkeypatch.setattr(gst, "stop_gateway", lambda runner=None: "stopped pocketshell-gateway.service")
     monkeypatch.setattr(gst, "restart_gateway", lambda runner=None: "restarted pocketshell-gateway.service")
@@ -366,3 +363,140 @@ def test_cli_gateway_lifecycle_mocked(monkeypatch):
     r_restart = runner.invoke(cli, ["gateway", "restart"])
     assert r_restart.exit_code == 0
     assert "restarted pocketshell-gateway.service" in r_restart.output
+
+
+def test_start_gateway_service_installed(monkeypatch):
+    commands = []
+
+    def fake_run(argv, **kwargs):
+        commands.append(list(argv))
+        return common.ChildResult(0, b"", b"")
+
+    monkeypatch.setattr("pocketshell.gateway.service_linux.unit_path", lambda: "/tmp/fake.service")
+    monkeypatch.setattr(os.path, "lexists", lambda p: True if p == "/tmp/fake.service" else False)
+
+    msg = gst.start_gateway(runner=fake_run)
+    assert "started pocketshell-gateway.service" in msg
+    assert any("start" in cmd for cmd in commands)
+
+
+def test_start_gateway_fallback_when_not_installed(monkeypatch):
+    monkeypatch.setattr("pocketshell.gateway.service_linux.unit_path", lambda: "/tmp/fake.service")
+    monkeypatch.setattr(os.path, "lexists", lambda p: False)
+
+    spawned = []
+
+    class FakeProc:
+        pid = 4242
+
+    def fake_spawn(argv):
+        spawned.append(argv)
+        return FakeProc()
+
+    msg = gst.start_gateway(spawn_fn=fake_spawn)
+    assert "pocketshell-gateway.service is not installed" in msg
+    assert "spawned detached 'pocketshell gateway run' (PID 4242)" in msg
+    assert len(spawned) == 1
+    assert "gateway" in spawned[0] and "run" in spawned[0]
+
+
+def test_start_gateway_windows_fallback(monkeypatch):
+    monkeypatch.setattr(gst.sys, "platform", "win32")
+
+    def fake_run(argv, **kwargs):
+        return common.ChildResult(1, b"ERROR: not found", b"")
+
+    class FakeProc:
+        pid = 9999
+
+    msg = gst.start_gateway(runner=fake_run, spawn_fn=lambda argv: FakeProc())
+    assert "Task Scheduler task is not installed" in msg
+    assert "spawned detached 'pocketshell gateway run' (PID 9999)" in msg
+
+
+def test_stop_gateway_service_installed(monkeypatch):
+    commands = []
+
+    def fake_run(argv, **kwargs):
+        commands.append(list(argv))
+        return common.ChildResult(0, b"", b"")
+
+    monkeypatch.setattr("pocketshell.gateway.service_linux.unit_path", lambda: "/tmp/fake.service")
+    monkeypatch.setattr(os.path, "lexists", lambda p: True if p == "/tmp/fake.service" else False)
+    monkeypatch.setattr(gst, "find_running_gateway_pids", lambda runner=None: [])
+
+    msg = gst.stop_gateway(runner=fake_run)
+    assert "stopped pocketshell-gateway.service" in msg
+    assert any("stop" in cmd for cmd in commands)
+
+
+def test_stop_gateway_detached_process(monkeypatch):
+    monkeypatch.setattr("pocketshell.gateway.service_linux.unit_path", lambda: "/tmp/fake.service")
+    monkeypatch.setattr(os.path, "lexists", lambda p: False)
+    monkeypatch.setattr(gst, "find_running_gateway_pids", lambda runner=None: [5678])
+
+    killed = []
+    msg = gst.stop_gateway(kill_fn=lambda pid: killed.append(pid))
+    assert killed == [5678]
+    assert "stopped detached gateway agent (PID 5678)" in msg
+
+
+def test_stop_gateway_nothing_running(monkeypatch):
+    monkeypatch.setattr("pocketshell.gateway.service_linux.unit_path", lambda: "/tmp/fake.service")
+    monkeypatch.setattr(os.path, "lexists", lambda p: False)
+    monkeypatch.setattr(gst, "find_running_gateway_pids", lambda runner=None: [])
+
+    msg = gst.stop_gateway()
+    assert msg == "gateway agent is not running"
+
+
+def test_restart_gateway_service_installed(monkeypatch):
+    commands = []
+
+    def fake_run(argv, **kwargs):
+        commands.append(list(argv))
+        return common.ChildResult(0, b"", b"")
+
+    monkeypatch.setattr("pocketshell.gateway.service_linux.unit_path", lambda: "/tmp/fake.service")
+    monkeypatch.setattr(os.path, "lexists", lambda p: True if p == "/tmp/fake.service" else False)
+
+    msg = gst.restart_gateway(runner=fake_run)
+    assert "restarted pocketshell-gateway.service" in msg
+    assert any("restart" in cmd for cmd in commands)
+
+
+def test_restart_gateway_fallback_when_not_installed(monkeypatch):
+    monkeypatch.setattr("pocketshell.gateway.service_linux.unit_path", lambda: "/tmp/fake.service")
+    monkeypatch.setattr(os.path, "lexists", lambda p: False)
+    monkeypatch.setattr(gst, "find_running_gateway_pids", lambda runner=None: [1111])
+
+    killed = []
+
+    class FakeProc:
+        pid = 2222
+
+    msg = gst.restart_gateway(
+        kill_fn=lambda pid: killed.append(pid),
+        spawn_fn=lambda argv: FakeProc(),
+    )
+    assert killed == [1111]
+    assert "pocketshell-gateway.service is not installed" in msg
+    assert "restarted detached 'pocketshell gateway run' (PID 2222)" in msg
+
+
+def test_lifecycle_cli_failures_exit_nonzero_with_single_line_stderr(monkeypatch):
+    def boom(*args, **kwargs):
+        raise common.ServiceError("systemctl failed with error 5\nMore multi-line details here")
+
+    monkeypatch.setattr(gst, "start_gateway", boom)
+    monkeypatch.setattr(gst, "stop_gateway", boom)
+    monkeypatch.setattr(gst, "restart_gateway", boom)
+
+    runner = CliRunner()
+    for verb in ("start", "stop", "restart"):
+        result = runner.invoke(cli, ["gateway", verb])
+        assert result.exit_code != 0
+        err_lines = [line for line in result.output.splitlines() if line.strip()]
+        assert len(err_lines) == 1
+        assert err_lines[0].startswith("error: systemctl failed with error 5")
+

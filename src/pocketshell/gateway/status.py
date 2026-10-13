@@ -17,7 +17,9 @@ from datetime import datetime, timezone
 import json
 import os
 import re
+import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -831,107 +833,233 @@ def format_human_status(doc: Mapping[str, Any]) -> str:
 
 # --- Lifecycle commands (start / stop / restart) --------------------------------------
 
-def start_gateway(runner: Optional[common.Runner] = None) -> str:
-    """Start the host gateway agent."""
+def find_running_gateway_pids(runner: Optional[common.Runner] = None) -> list[int]:
+    """Find process IDs of running pocketshell-link run or pocketshell gateway run processes."""
+    pids: list[int] = []
+    if sys.platform.startswith("linux"):
+        try:
+            for entry in os.scandir("/proc"):
+                if not entry.name.isdigit():
+                    continue
+                pid = int(entry.name)
+                if pid == os.getpid():
+                    continue
+                cmdline_path = os.path.join(entry.path, "cmdline")
+                try:
+                    with open(cmdline_path, "rb") as f:
+                        raw = f.read(1024)
+                    cmd = raw.replace(b"\x00", b" ").decode("utf-8", "replace")
+                    if ("pocketshell-link" in cmd and " run" in cmd) or (
+                        "pocketshell" in cmd and "gateway" in cmd and "run" in cmd
+                    ):
+                        pids.append(pid)
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        if not pids:
+            run_fn = runner or common.run_child
+            try:
+                res = run_fn(["pgrep", "-f", "pocketshell-link run"])
+                if res.returncode == 0:
+                    for line in res.stdout.split():
+                        if line.isdigit() and int(line) != os.getpid():
+                            pids.append(int(line))
+            except Exception:
+                pass
+    elif sys.platform == "win32":
+        run_fn = runner or common.run_child
+        try:
+            res = run_fn(["tasklist", "/FI", "IMAGENAME eq pocketshell-link.exe", "/FO", "CSV", "/NH"])
+            if res.returncode == 0:
+                for line in res.stdout.decode("ascii", "replace").splitlines():
+                    parts = [p.strip(' "') for p in line.split(",")]
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        pids.append(int(parts[1]))
+        except Exception:
+            pass
+    return pids
+
+
+def spawn_detached_run(
+    spawn_fn: Optional[Callable[..., Any]] = None,
+) -> int:
+    """Spawn a detached `pocketshell gateway run` process and return its PID."""
+    argv = [sys.executable, "-m", "pocketshell", "gateway", "run"]
+    if spawn_fn is not None:
+        proc = spawn_fn(argv)
+        return getattr(proc, "pid", 12345)
+
+    kwargs: dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if sys.platform == "win32":
+        flags = 0x08000000 | 0x00000008  # CREATE_NO_WINDOW | DETACHED_PROCESS
+        kwargs["creationflags"] = flags
+    else:
+        kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(argv, **kwargs)
+    return proc.pid
+
+
+def start_gateway(
+    runner: Optional[common.Runner] = None,
+    spawn_fn: Optional[Callable[..., Any]] = None,
+) -> str:
+    """Start the host gateway agent.
+
+    Wraps existing service mechanisms (systemd user unit on Linux, Task Scheduler on Windows).
+    If the service is not installed, falls back to spawning detached `pocketshell gateway run`.
+    """
     run_fn = runner or common.run_child
 
     if sys.platform.startswith("linux"):
         from pocketshell.gateway import service_linux
         path = service_linux.unit_path()
-        if not os.path.lexists(path):
-            raise common.ServiceError(
-                "pocketshell-gateway.service is not installed; run `pocketshell gateway service install` first"
-            )
-        res = run_fn(service_linux.systemctl_argv("start", service_linux.UNIT_NAME))
-        if res.returncode != 0:
-            err = common.decode(res.stderr or res.stdout)
-            raise common.ServiceError(f"failed to start pocketshell-gateway.service: {err}")
-        return "started pocketshell-gateway.service"
+        if os.path.lexists(path):
+            res = run_fn(service_linux.systemctl_argv("start", service_linux.UNIT_NAME))
+            if res.returncode != 0:
+                err = common.decode(res.stderr or res.stdout).strip()
+                raise common.ServiceError(f"failed to start pocketshell-gateway.service: {err}")
+            return "started pocketshell-gateway.service"
+
+        pid = spawn_detached_run(spawn_fn=spawn_fn)
+        return f"pocketshell-gateway.service is not installed; spawned detached 'pocketshell gateway run' (PID {pid})"
 
     elif sys.platform == "win32":
-        agent_dir = os.path.join(
-            os.environ.get("XDG_CONFIG_HOME")
-            or os.path.join(os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".config"),
-            "pocketshell",
-            "agent",
-        )
-        if os.path.isfile(os.path.join(agent_dir, "binding.json")):
-            from pocketshell.gateway import service_windows, service_user_agent
-            api = service_windows.WindowsApi()
-            doc, code = service_user_agent.start(api=api, runner=run_fn)
-            if code != 0:
-                err = doc.get("error", {}).get("message", "start failed")
-                raise common.ServiceError(f"failed to start gateway agent: {err}")
-            return "started gateway agent"
-        else:
+        task_installed = False
+        try:
+            res = run_fn(["schtasks.exe", "/Query", "/TN", r"\PocketShell\GatewayLink", "/FO", "CSV"])
+            task_installed = (res.returncode == 0)
+        except Exception:
+            task_installed = False
+
+        if task_installed:
             res = run_fn(["schtasks.exe", "/Run", "/TN", r"\PocketShell\GatewayLink"])
             if res.returncode != 0:
-                err = common.decode(res.stderr or res.stdout)
+                err = common.decode(res.stderr or res.stdout).strip()
                 raise common.ServiceError(f"failed to start GatewayLink task: {err}")
             return r"started \PocketShell\GatewayLink task"
 
+        pid = spawn_detached_run(spawn_fn=spawn_fn)
+        return f"Task Scheduler task is not installed; spawned detached 'pocketshell gateway run' (PID {pid})"
+
     raise common.ServiceError(f"unsupported platform: {sys.platform}")
 
 
-def stop_gateway(runner: Optional[common.Runner] = None) -> str:
-    """Stop the host gateway agent."""
+def stop_gateway(
+    runner: Optional[common.Runner] = None,
+    kill_fn: Optional[Callable[[int], Any]] = None,
+) -> str:
+    """Stop the host gateway agent.
+
+    Wraps existing service mechanisms and also stops any detached gateway processes.
+    """
     run_fn = runner or common.run_child
 
     if sys.platform.startswith("linux"):
         from pocketshell.gateway import service_linux
         path = service_linux.unit_path()
-        if not os.path.lexists(path):
-            return "pocketshell-gateway.service is not installed; nothing to stop"
-        res = run_fn(service_linux.systemctl_argv("stop", service_linux.UNIT_NAME))
-        if res.returncode != 0:
-            err = common.decode(res.stderr or res.stdout)
-            raise common.ServiceError(f"failed to stop pocketshell-gateway.service: {err}")
-        return "stopped pocketshell-gateway.service"
+        stopped_unit = False
+        if os.path.lexists(path):
+            res = run_fn(service_linux.systemctl_argv("stop", service_linux.UNIT_NAME))
+            if res.returncode != 0:
+                err = common.decode(res.stderr or res.stdout).strip()
+                raise common.ServiceError(f"failed to stop pocketshell-gateway.service: {err}")
+            stopped_unit = True
+
+        pids = find_running_gateway_pids(runner=run_fn)
+        for pid in pids:
+            if kill_fn is not None:
+                kill_fn(pid)
+            else:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+
+        if stopped_unit:
+            return "stopped pocketshell-gateway.service"
+        elif pids:
+            return f"stopped detached gateway agent (PID {', '.join(map(str, pids))})"
+        else:
+            return "gateway agent is not running"
 
     elif sys.platform == "win32":
-        agent_dir = os.path.join(
-            os.environ.get("XDG_CONFIG_HOME")
-            or os.path.join(os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".config"),
-            "pocketshell",
-            "agent",
-        )
-        if os.path.isfile(os.path.join(agent_dir, "binding.json")):
-            from pocketshell.gateway import service_windows, service_user_agent
-            api = service_windows.WindowsApi()
-            doc, code = service_user_agent.stop(api=api, runner=run_fn)
-            if code != 0:
-                err = doc.get("error", {}).get("message", "stop failed")
-                raise common.ServiceError(f"failed to stop gateway agent: {err}")
-            return "stopped gateway agent"
-        else:
+        task_installed = False
+        try:
+            res = run_fn(["schtasks.exe", "/Query", "/TN", r"\PocketShell\GatewayLink", "/FO", "CSV"])
+            task_installed = (res.returncode == 0)
+        except Exception:
+            task_installed = False
+
+        stopped_task = False
+        if task_installed:
             res = run_fn(["schtasks.exe", "/End", "/TN", r"\PocketShell\GatewayLink"])
             if res.returncode != 0:
-                err = common.decode(res.stderr or res.stdout)
+                err = common.decode(res.stderr or res.stdout).strip()
                 raise common.ServiceError(f"failed to stop GatewayLink task: {err}")
+            stopped_task = True
+
+        pids = find_running_gateway_pids(runner=run_fn)
+        for pid in pids:
+            if kill_fn is not None:
+                kill_fn(pid)
+            else:
+                run_fn(["taskkill", "/PID", str(pid), "/F"])
+
+        if stopped_task:
             return r"stopped \PocketShell\GatewayLink task"
+        elif pids:
+            return f"stopped detached gateway agent (PID {', '.join(map(str, pids))})"
+        else:
+            return "gateway agent is not running"
 
     raise common.ServiceError(f"unsupported platform: {sys.platform}")
 
 
-def restart_gateway(runner: Optional[common.Runner] = None) -> str:
-    """Restart the host gateway agent."""
+def restart_gateway(
+    runner: Optional[common.Runner] = None,
+    spawn_fn: Optional[Callable[..., Any]] = None,
+    kill_fn: Optional[Callable[[int], Any]] = None,
+) -> str:
+    """Restart the host gateway agent.
+
+    Wraps existing service mechanisms or restarts detached gateway process.
+    """
     run_fn = runner or common.run_child
 
     if sys.platform.startswith("linux"):
         from pocketshell.gateway import service_linux
         path = service_linux.unit_path()
-        if not os.path.lexists(path):
-            raise common.ServiceError(
-                "pocketshell-gateway.service is not installed; run `pocketshell gateway service install` first"
-            )
-        res = run_fn(service_linux.systemctl_argv("restart", service_linux.UNIT_NAME))
-        if res.returncode != 0:
-            err = common.decode(res.stderr or res.stdout)
-            raise common.ServiceError(f"failed to restart pocketshell-gateway.service: {err}")
-        return "restarted pocketshell-gateway.service"
+        if os.path.lexists(path):
+            res = run_fn(service_linux.systemctl_argv("restart", service_linux.UNIT_NAME))
+            if res.returncode != 0:
+                err = common.decode(res.stderr or res.stdout).strip()
+                raise common.ServiceError(f"failed to restart pocketshell-gateway.service: {err}")
+            return "restarted pocketshell-gateway.service"
+
+        stop_gateway(runner=run_fn, kill_fn=kill_fn)
+        pid = spawn_detached_run(spawn_fn=spawn_fn)
+        return f"pocketshell-gateway.service is not installed; restarted detached 'pocketshell gateway run' (PID {pid})"
 
     elif sys.platform == "win32":
-        stop_gateway(runner=run_fn)
-        return start_gateway(runner=run_fn)
+        task_installed = False
+        try:
+            res = run_fn(["schtasks.exe", "/Query", "/TN", r"\PocketShell\GatewayLink", "/FO", "CSV"])
+            task_installed = (res.returncode == 0)
+        except Exception:
+            task_installed = False
+
+        if task_installed:
+            stop_gateway(runner=run_fn, kill_fn=kill_fn)
+            return start_gateway(runner=run_fn, spawn_fn=spawn_fn)
+
+        stop_gateway(runner=run_fn, kill_fn=kill_fn)
+        pid = spawn_detached_run(spawn_fn=spawn_fn)
+        return f"Task Scheduler task is not installed; restarted detached 'pocketshell gateway run' (PID {pid})"
 
     raise common.ServiceError(f"unsupported platform: {sys.platform}")

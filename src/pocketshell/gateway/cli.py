@@ -505,15 +505,16 @@ def gateway_status(ctx: click.Context, as_json: bool, config_dir: Optional[str])
 @click.command("start")
 @click.pass_context
 def gateway_start(ctx: click.Context) -> None:
-    """Start the host gateway agent (systemd unit or scheduled task)."""
+    """Start the host gateway agent (systemd unit, scheduled task, or detached)."""
     from pocketshell.gateway import status as gateway_status_mod
 
     try:
         msg = gateway_status_mod.start_gateway()
         click.echo(msg)
-    except gateway_service.common.ServiceError as exc:
-        click.echo(f"error: {exc}", err=True)
-        ctx.exit(exc.exit_code)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else "start failed"
+        click.echo(f"error: {first_line}", err=True)
+        ctx.exit(getattr(exc, "exit_code", 1))
 
 
 @click.command("stop")
@@ -525,9 +526,10 @@ def gateway_stop(ctx: click.Context) -> None:
     try:
         msg = gateway_status_mod.stop_gateway()
         click.echo(msg)
-    except gateway_service.common.ServiceError as exc:
-        click.echo(f"error: {exc}", err=True)
-        ctx.exit(exc.exit_code)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else "stop failed"
+        click.echo(f"error: {first_line}", err=True)
+        ctx.exit(getattr(exc, "exit_code", 1))
 
 
 @click.command("restart")
@@ -539,9 +541,10 @@ def gateway_restart(ctx: click.Context) -> None:
     try:
         msg = gateway_status_mod.restart_gateway()
         click.echo(msg)
-    except gateway_service.common.ServiceError as exc:
-        click.echo(f"error: {exc}", err=True)
-        ctx.exit(exc.exit_code)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else "restart failed"
+        click.echo(f"error: {first_line}", err=True)
+        ctx.exit(getattr(exc, "exit_code", 1))
 
 
 gateway_group.add_command(gateway_status)
