@@ -23,7 +23,7 @@ def home() -> Path:
     return Path(os.environ["LOCALAPPDATA"]) / "PocketShellGateway"
 
 
-def run_cli(args, *, timeout=180, input=None, pending=False, accepted=(0,)):
+def run_cli(args, *, timeout=600, input=None, pending=False, accepted=(0,)):
     proc = subprocess.run(
         [sys.executable, "-I", "-B", "-m", "pocketshell", *args],
         input=input, capture_output=True, timeout=timeout,
@@ -65,7 +65,7 @@ def setup(root: Path):
     if not authority.exists():
         message("PocketShell will install its bundled aplexer, Git Bash and private SSH endpoint. This can take a few minutes.")
         agent("install", "--user-data", str(home()), "--catalog", str(root.parent / "host-runtime-catalog.json"),
-              "--staged", str(root), "--endpoint-keys", "generate", "--port", "22235", timeout=600)
+              "--staged", str(root), "--endpoint-keys", "generate", "--port", "22235", timeout=1800)
     receipt = json.loads(authority.read_text())
     installed = installed_root(receipt)
     # All subsequent commands use the measured installed closure.
@@ -90,7 +90,7 @@ def setup(root: Path):
                     break
             else:
                 raise RuntimeError("Sign-in is still pending. Run Gateway Setup again after approving.")
-        agent("start")  # enrollment must probe the actual generated endpoint
+        agent("start", "--timeout", "300", timeout=900)  # enrollment probes the generated endpoint
         config = home() / "managed-runtime" / "enrollment"
         helper = installed / "bin" / "pocketshell-link.exe"
         agent("enroll", "--config-dir", str(config), "--helper", str(helper))
@@ -102,7 +102,7 @@ def setup(root: Path):
         if not key:
             return False
         agent("authorize-key", "--public-key-stdin", "--confirmed", input=key.encode("utf-8"))
-    agent("start")
+    agent("start", "--timeout", "300", timeout=900)
     set_enabled(True)
     from pocketshell.tray.autostart import install_autostart
     ok, detail = install_autostart(command=f'"{installed / "GatewayTray.exe"}"')
@@ -180,11 +180,28 @@ def control(action):
             set_enabled(False)
             agent("stop", timeout=120)
         if action in ("start", "restart"):
-            agent("start", timeout=180)
+            agent("start", "--timeout", "300", timeout=900)
             set_enabled(True)
         return True, f"Gateway {action} completed"
     except (RuntimeError, subprocess.TimeoutExpired) as exc:
         return False, str(exc)
+
+
+def observe_agent():
+    """Read custody and native process identities for display, without launching.
+
+    Full closure and authority validation still gates every start/bind. A tray
+    refresh observes the protected binding, manifest hash, process births and
+    pinned SSH host key, rather than re-hashing 10,000 unopened files each time.
+    """
+    from pocketshell.gateway import service_common, service_user_agent, service_windows
+    api = service_windows.WindowsApi()
+    with service_user_agent._OperationLock():
+        binding, manifest, key = service_user_agent.load_binding(api=api, runner=service_common.run_child,
+                                                                revalidate=False)
+        owner, endpoint, outbound, state, _ = service_user_agent._collect(
+            binding, manifest, key, api, service_common.run_child)
+    return {"owner": owner, "endpoint": endpoint, "outbound": outbound, "state": state}
 
 
 def managed_status():
@@ -194,7 +211,7 @@ def managed_status():
 
     receipt = json.loads((home() / "managed-runtime/authority.json").read_text())
     installed_root(receipt)
-    local = agent("status", timeout=90)
+    local = observe_agent()
     endpoint = Path(receipt["endpoint"]["state"]).parent
     env = dict(os.environ, APLEXER_CONFIG=str(endpoint / "aplexer.toml"))
     env.update({k: str(endpoint / "backend" / v) for k, v in BACKEND_DIRS.items()})
@@ -245,12 +262,12 @@ def run_tray(root):
                 if enabled() and time.monotonic() - self.last_retry >= 30:
                     self.last_retry = time.monotonic()
                     try:
-                        status = agent("status", timeout=90)
+                        status = observe_agent()
                         if needs_recovery(status):
                             # STOP reaps measured custody before replacing a dead generation.
                             agent("stop", timeout=90)
                             if enabled():
-                                agent("start", timeout=120)
+                                agent("start", "--timeout", "300", timeout=900)
                     except (RuntimeError, subprocess.TimeoutExpired):
                         logging.exception("Gateway recovery refused; will retry")
                 return super().fetch_status(timeout=timeout)

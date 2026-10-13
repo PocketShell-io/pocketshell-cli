@@ -37,7 +37,7 @@ def test_receipt_cannot_redirect_launcher_outside_managed_root(tmp_path, monkeyp
 def test_restart_uses_bound_agent_and_remembers_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, "home", lambda: tmp_path)
     actions = []
-    def call(action, **kwargs):
+    def call(action, *args, **kwargs):
         actions.append(action)
         if action == "start":
             raise RuntimeError("refused startup")
@@ -45,6 +45,6 @@ def test_restart_uses_bound_agent_and_remembers_failure(tmp_path, monkeypatch):
     assert bundle.control("restart") == (False, "refused startup")
     assert actions == ["stop", "start"]
     assert not bundle.enabled()
-    monkeypatch.setattr(bundle, "agent", lambda action, **kw: actions.append(action))
+    monkeypatch.setattr(bundle, "agent", lambda action, *args, **kw: actions.append(action))
     assert bundle.control("start")[0]
     assert bundle.enabled()

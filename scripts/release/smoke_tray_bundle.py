@@ -47,10 +47,10 @@ print(json.dumps({'tray_visible': True}))
         if target.exists():
             raise RuntimeError("The installation check must use a fresh directory")
         target.mkdir(parents=True)
-        install = json.loads(run([str(root / "pocketshell.exe"), "gateway", "agent", "install",
+        install = json.loads(run([str(root / "python/python.exe"), "-I", "-B", "-m", "pocketshell", "gateway", "agent", "install",
                                   "--user-data", str(target), "--catalog", str(payload / "host-runtime-catalog.json"),
                                   "--staged", str(root), "--endpoint-keys", "generate", "--port", "22236",
-                                  "--json", "--operation-id", "installer-smoke"], timeout=600))
+                                  "--json", "--operation-id", "installer-smoke"], timeout=1800))
         assert install["ok"] and install["receipt"]["keys"]["mode"] == "generated"
         result["installedClosure"] = install["receipt"]["installer"]["closure"]
     print(json.dumps(result, indent=2))
