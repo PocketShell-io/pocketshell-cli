@@ -18,6 +18,9 @@ The tray starts at login. If the user's Run registry key is read-only (as
 observed on win35), it uses a per-user Startup-folder shortcut instead.
 Right-click for online/offline status, current
 connections, active aplexer sessions, Start, Stop, Restart and Open Logs.
+The tray owns its gateway workers in a Windows job and cleans them up when it
+quits or crashes. This also works when Explorer itself has inherited job
+restrictions. The ordinary CLI retains its separate independent-launch policy.
 The helper reconnects after network outages. The tray checks dead local
 processes every 30 seconds and asks the measured guardian to recover them.
 Stop is remembered across app restarts and logins. An existing unrelated

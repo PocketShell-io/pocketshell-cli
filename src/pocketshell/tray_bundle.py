@@ -44,6 +44,28 @@ def agent(action, *args, **kw):
     return run_cli(["gateway", "agent", action, *args, "--json", "--operation-id", uuid.uuid4().hex], **kw)
 
 
+def own_binding():
+    from pocketshell.gateway import service_user_agent
+    data = service_user_agent._read_private(service_user_agent._path("binding.json"))
+    if not data:
+        raise RuntimeError("Run Gateway Setup before starting this gateway")
+    binding = json.loads(data)
+    check_own_binding(binding)
+    return binding
+
+
+def start_gateway():
+    own_binding()
+    from pocketshell.tray_supervisor import start
+    return start()
+
+
+def check_own_binding(binding):
+    authority = home() / "managed-runtime/authority.json"
+    if Path(binding.get("authority") or "").resolve() != authority.resolve():
+        raise RuntimeError("The gateway binding belongs to another installation")
+
+
 def message(text, *, question=False):
     return ctypes.windll.user32.MessageBoxW(None, text, "PocketShell Gateway", 0x40 | (1 if question else 0))
 
@@ -90,7 +112,7 @@ def setup(root: Path):
                     break
             else:
                 raise RuntimeError("Sign-in is still pending. Run Gateway Setup again after approving.")
-        agent("start", "--timeout", "300", timeout=900)  # enrollment probes the generated endpoint
+        start_gateway()  # enrollment probes the generated endpoint
         config = home() / "managed-runtime" / "enrollment"
         helper = installed / "bin" / "pocketshell-link.exe"
         agent("enroll", "--config-dir", str(config), "--helper", str(helper))
@@ -102,7 +124,7 @@ def setup(root: Path):
         if not key:
             return False
         agent("authorize-key", "--public-key-stdin", "--confirmed", input=key.encode("utf-8"))
-    agent("start", "--timeout", "300", timeout=900)
+    start_gateway()
     set_enabled(True)
     from pocketshell.tray.autostart import install_autostart
     ok, detail = install_autostart(command=f'"{installed / "GatewayTray.exe"}"')
@@ -176,11 +198,12 @@ def needs_recovery(doc):
 def control(action):
     """Only the bound guardian controls this endpoint; no PATH/task fallback."""
     try:
+        own_binding()
         if action in ("stop", "restart"):
             set_enabled(False)
             agent("stop", timeout=120)
         if action in ("start", "restart"):
-            agent("start", "--timeout", "300", timeout=900)
+            start_gateway()
             set_enabled(True)
         return True, f"Gateway {action} completed"
     except (RuntimeError, subprocess.TimeoutExpired) as exc:
@@ -199,6 +222,7 @@ def observe_agent():
     with service_user_agent._OperationLock():
         binding, manifest, key = service_user_agent.load_binding(api=api, runner=service_common.run_child,
                                                                 revalidate=False)
+        check_own_binding(binding)
         owner, endpoint, outbound, state, _ = service_user_agent._collect(
             binding, manifest, key, api, service_common.run_child)
     return {"owner": owner, "endpoint": endpoint, "outbound": outbound, "state": state}
@@ -266,18 +290,24 @@ def run_tray(root):
             super().__init__(status_command=[sys.executable, "-I", "-B", "-m", "pocketshell.tray_bundle", "--status"])
             self.guard = threading.Lock()
             self.last_retry = 0.0
+            self.first_fetch = True
 
         def fetch_status(self, timeout=120):
+            if self.first_fetch:
+                self.first_fetch = False
+                from pocketshell.tray.model import TrayModel
+                return TrayModel(state="offline", summary="Starting gateway; verifying the installed runtime")
             with self.guard:
                 if enabled() and time.monotonic() - self.last_retry >= 30:
                     self.last_retry = time.monotonic()
                     try:
                         status = observe_agent()
                         if needs_recovery(status):
-                            # STOP reaps measured custody before replacing a dead generation.
-                            agent("stop", timeout=90)
+                            # A dead link does not require restarting a healthy SSH endpoint.
+                            if (status.get("endpoint") or {}).get("state") != "ready":
+                                agent("stop", timeout=90)
                             if enabled():
-                                agent("start", "--timeout", "300", timeout=900)
+                                start_gateway()
                     except (RuntimeError, subprocess.TimeoutExpired):
                         logging.exception("Gateway recovery refused; will retry")
                 return super().fetch_status(timeout=timeout)
@@ -346,7 +376,12 @@ def main():
         if "--uninstall" in sys.argv:
             set_enabled(False)
             (home() / "tray-exit").touch()
-            agent("stop", timeout=120)
+            try:
+                own_binding()
+            except RuntimeError:
+                logging.info("No gateway owned by this installation to stop")
+            else:
+                agent("stop", timeout=120)
             return
         if "--status" in sys.argv:
             print(json.dumps(status_document()))
@@ -366,6 +401,9 @@ def main():
         logging.exception("Gateway tray failed")
         message(f"PocketShell Gateway needs attention: {exc}\n\nRun Gateway Setup again to resume. Logs: {home()}")
         raise SystemExit(1) from None
+    finally:
+        from pocketshell.tray_supervisor import close
+        close()
 
 
 if __name__ == "__main__":

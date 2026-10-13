@@ -36,16 +36,20 @@ def test_receipt_cannot_redirect_launcher_outside_managed_root(tmp_path, monkeyp
 
 def test_restart_uses_bound_agent_and_remembers_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    monkeypatch.setattr(bundle, "own_binding", lambda: {})
     actions = []
     def call(action, *args, **kwargs):
         actions.append(action)
-        if action == "start":
-            raise RuntimeError("refused startup")
     monkeypatch.setattr(bundle, "agent", call)
+    def start():
+        actions.append("start")
+        raise RuntimeError("refused startup")
+    monkeypatch.setattr(bundle, "start_gateway", start)
     assert bundle.control("restart") == (False, "refused startup")
     assert actions == ["stop", "start"]
     assert not bundle.enabled()
     monkeypatch.setattr(bundle, "agent", lambda action, *args, **kw: actions.append(action))
+    monkeypatch.setattr(bundle, "start_gateway", lambda: actions.append("start"))
     assert bundle.control("start")[0]
     assert bundle.enabled()
 
@@ -57,3 +61,10 @@ def test_status_failure_returns_json_data_without_a_modal(monkeypatch):
     monkeypatch.setattr(bundle, "message", lambda *args, **kw: pytest.fail("polling must not open a dialog"))
     assert bundle.status_document()["state"] == "error"
     assert bundle.status_document()["errors"] == ["agent busy"]
+
+
+def test_tray_cannot_adopt_another_installations_binding(tmp_path, monkeypatch):
+    monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    with pytest.raises(RuntimeError, match="another installation"):
+        bundle.check_own_binding({"authority": str(tmp_path / "some-other-runtime/authority.json")})
+    bundle.check_own_binding({"authority": str(tmp_path / "managed-runtime/authority.json")})

@@ -808,6 +808,10 @@ class WindowsApi:
             k.CloseHandle(handle)
             raise
 
+    def _job_policy(self, child_handle, *, caller_in_job, broke_away, child_in_job, nearest_kill):
+        return job_verdict(caller_in_job=caller_in_job, broke_away=broke_away,
+                           child_in_job=child_in_job, nearest_kill=nearest_kill)
+
     def _spawn_measured(self, argv: list, cwd: str, env: Optional[dict], *, held_identity) -> dict:
         """Start ``argv`` directly (no shell, no window) in the caller's session,
         SUSPENDED, and MEASURE the child before resuming it (the native owner's
@@ -934,8 +938,8 @@ class WindowsApi:
                 info = (c.c_byte * 144)()  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION (x64)
                 if k.QueryInformationJobObject(None, 9, info, c.sizeof(info), None):
                     nearest_kill = bool(c.c_uint32.from_buffer(info, 16).value & 0x2000)
-            verdict = job_verdict(caller_in_job=caller_in_job, broke_away=broke_away, child_in_job=child_in_job,
-                                  nearest_kill=nearest_kill)
+            verdict = self._job_policy(pi.hProcess, caller_in_job=caller_in_job, broke_away=broke_away,
+                                       child_in_job=child_in_job, nearest_kill=nearest_kill)
             times = [w.FILETIME() for _ in range(4)]
             if not k.GetProcessTimes(pi.hProcess, *[c.byref(t) for t in times]):
                 raise ServiceError("cannot read the child's creation time")
