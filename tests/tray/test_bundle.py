@@ -17,6 +17,20 @@ def test_background_refuses_unenrolled_install(monkeypatch):
         bundle.run_background()
 
 
+def test_enrollment_config_uses_native_private_storage(monkeypatch, tmp_path):
+    from pocketshell.gateway import service_agent_install, service_windows
+    from types import SimpleNamespace
+    made = []
+    sentinel = object()
+    monkeypatch.setattr(service_windows, "WindowsApi", lambda: sentinel)
+    def paths(api):
+        assert api is sentinel
+        return SimpleNamespace(mkdir=made.append)
+    monkeypatch.setattr(service_agent_install, "NativePaths", paths)
+    bundle.prepare_enrollment_directory(tmp_path / "enrollment")
+    assert made == [str(tmp_path / "enrollment")]
+
+
 def test_login_handoff_does_not_wait_on_interactive_owner(tmp_path, monkeypatch):
     from pocketshell.gateway import service_user_agent
     monkeypatch.setattr(bundle, "home", lambda: tmp_path)

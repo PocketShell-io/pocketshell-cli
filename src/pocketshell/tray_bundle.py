@@ -114,6 +114,7 @@ def setup(root: Path):
                 raise RuntimeError("Sign-in is still pending. Run Gateway Setup again after approving.")
         start_gateway()  # enrollment probes the generated endpoint
         config = home() / "managed-runtime" / "enrollment"
+        prepare_enrollment_directory(config)
         helper = installed / "bin" / "pocketshell-link.exe"
         agent("enroll", "--config-dir", str(config), "--helper", str(helper))
         agent("bind", "--manifest", receipt["endpoint"]["manifest"], "--authority", str(authority),
@@ -132,6 +133,13 @@ def setup(root: Path):
         raise RuntimeError(detail)
     message("PocketShell Gateway is ready and will start at login. Right-click its tray icon for status, sessions and controls.")
     return True
+
+
+def prepare_enrollment_directory(path):
+    """Create the config root with the same protected owner-only ACL as setup."""
+    from pocketshell.gateway.service_agent_install import NativePaths
+    from pocketshell.gateway.service_windows import WindowsApi
+    NativePaths(WindowsApi()).mkdir(str(path))
 
 
 def select_public_key():
