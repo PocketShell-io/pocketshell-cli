@@ -11,6 +11,7 @@ on:
       - gateway-user-agent
     paths:
       - scripts/release/build_backend_windows.py
+      - scripts/release/private_shell_overlay.py
       - release/inputs/openssh-quiet-e302fe1/**
       - release/inputs/msys2-runtime-5a1665c8/**
       - .github/workflows/backend.yml

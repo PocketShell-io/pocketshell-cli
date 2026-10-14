@@ -131,6 +131,29 @@ def configure_offline_psc(destination):
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
+def stage_private_backend(source, receipt_sha256, root, catalog):
+    """Accept a complete, measured private-shell rebuild, never arbitrary sshd.exe."""
+    source = Path(source)
+    receipt = source / "receipt.json"
+    if digest(receipt) != receipt_sha256:
+        raise ValueError("Endpoint build receipt SHA256 differs")
+    doc = json.loads(receipt.read_text())
+    required = {"sshd.exe", "sshd-auth.exe", "sshd-session.exe", "ssh-shellhost.exe",
+                "sftp-server.exe", "libcrypto.dll", "LICENSE.txt", "NOTICE.txt"}
+    if (set(doc["files"]) != required or set(p.name for p in source.iterdir()) != required | {"receipt.json"}
+            or doc["sourceArchiveSHA256"] != "8545e33b809f7ec6eb8363cbbbd2d4d68982d8ab7a8b7e6bb63506d82ae62223"
+            or not doc.get("processes") or any(p["naturalExit"] != 0 for p in doc["processes"])):
+        raise ValueError("Incomplete private endpoint build")
+    for name, sha256 in doc["files"].items():
+        if digest(source / name) != sha256:
+            raise ValueError("Private endpoint build file digest differs")
+    for name in doc["files"]:
+        shutil.copyfile(source / name, root / "endpoint/bin" / name)
+    catalog["lineage"]["endpoint"]["openssh"]["buildReceiptSHA256"] = receipt_sha256
+    catalog["lineage"]["endpoint"]["sftp"]["sha256"] = doc["files"]["sftp-server.exe"]
+    return {"receiptSHA256": receipt_sha256, "files": doc["files"], "source": doc["source"]}
+
+
 def build(args):
     source = Path(args.resources).resolve()
     cat_path = source / "host-runtime-catalog.json"
@@ -152,6 +175,8 @@ def build(args):
     psc_receipt["installVariant"] = "gateway-ssh10"
     psc_receipt["adaptedInstallerSHA256"] = digest(out / "payload" / "psc-package/install.ps1")
     shutil.copytree(source / "runtime", root)
+    backend_receipt = stage_private_backend(args.endpoint_backend, args.endpoint_backend_receipt_sha256, root, catalog)
+    shutil.copyfile(Path(args.endpoint_backend) / "receipt.json", out / "payload/private-endpoint-build-receipt.json")
     shutil.copyfile(args.tray_launcher, root / "GatewayTray.exe")
     with tempfile.TemporaryDirectory() as scratch:
         work = Path(scratch)
@@ -209,6 +234,7 @@ def build(args):
         "installerBytes": exe.stat().st_size, "files": len(catalog["files"]),
         "aplexerSHA256": digest(root / "python/a.exe"), "launcherSHA256": digest(root / "GatewayTray.exe")}
     receipt["psc"] = psc_receipt
+    receipt["privateEndpoint"] = backend_receipt
     (out / "installer-receipt.json").write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt, indent=2))
 
@@ -222,6 +248,8 @@ if __name__ == "__main__":
     parser.add_argument("--psc-sha256", required=True, help="Expected SHA256 of the PSC zip")
     parser.add_argument("--ssh-zip", required=True, help="Microsoft's portable OpenSSH-Win64.zip")
     parser.add_argument("--ssh-sha256", required=True, help="Expected SHA256 of the OpenSSH zip")
+    parser.add_argument("--endpoint-backend", required=True, help="Complete owned private-shell OpenSSH rebuild")
+    parser.add_argument("--endpoint-backend-receipt-sha256", required=True)
     parser.add_argument("--makensis", required=True)
     parser.add_argument("--out", required=True)
     build(parser.parse_args())

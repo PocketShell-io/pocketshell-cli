@@ -37,6 +37,8 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from private_shell_overlay import patch_pwd, patch_session
 
 REPO = Path(__file__).resolve().parents[2]
 INPUTS = REPO / "release" / "inputs"
@@ -170,6 +172,11 @@ def build_openssh(work: Path, out: Path, rec: Recorder) -> dict:
         shutil.copyfile(repl, target)
         overlay[rel] = {"upstream": upstream, "reviewed": reviewed}
     inputs["overlay"] = overlay
+    for name, patch in (("pwd.c", patch_pwd), ("w32-doexec.c", patch_session)):
+        target = src / "contrib/win32/win32compat" / name
+        upstream = sha256(target)
+        target.write_text(patch(target.read_text(encoding="utf-8")), encoding="utf-8")
+        overlay[name] = {"upstream": upstream, "reviewed": sha256(target), "kind": "private-release-shell"}
 
     vsroot = vswhere("-latest", "-version", "[17.0,18.0)", "-requires", "Microsoft.Component.MSBuild",
                      "-property", "installationPath")
@@ -323,6 +330,12 @@ def main() -> int:
                "started": started, "ended": time.time(), "processes": rec.processes, **result,
                "executedOutputs": False}
     (out / f"{args.part}-build-receipt.json").write_text(json.dumps(receipt, indent=1))
+    if ok and args.part == "openssh":
+        staging = {"sourceArchiveSHA256": OPENSSH["sha256"],
+                   "source": {name: result["inputs"]["overlay"][name]["reviewed"]
+                              for name in ("pwd.c", "w32-doexec.c")},
+                   "files": result["outputs"], "processes": rec.processes}
+        (out / "openssh/receipt.json").write_text(json.dumps(staging, indent=2))
     print(json.dumps({k: receipt.get(k) for k in ("part", "accepted", "outputs", "error")}, indent=1))
     return 0 if ok else 1
 

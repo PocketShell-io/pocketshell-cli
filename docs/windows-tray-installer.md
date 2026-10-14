@@ -87,6 +87,16 @@ For unattended file installation, use `/S`; run Gateway Setup in the destination
 user's interactive desktop afterwards. Browser approval and public-key selection
 are intentional first-use steps.
 
+The tray builder also requires `--endpoint-backend OWNED_OPENSSH_OUTPUT` and
+`--endpoint-backend-receipt-sha256 RECEIPT_SHA256`. Build the pinned backend with
+`scripts/release/build_backend_windows.py --part openssh --work FRESH_WORK --out
+BACKEND_OUTPUT`; its `openssh` directory includes the measured `receipt.json`.
+The private OpenSSH source overlay derives Bash and command PATH from its own
+release directory, not the registry's DefaultShell or user/system PATH. Plain
+`pocketshell` and `a` commands from older PSC clients therefore resolve the
+bundled executables without client provisioning. The builder verifies the
+complete rebuilt executable/DLL inventory and every digest before staging it.
+
 Obtain the PSC zip and SHA256 from the reviewed pocketshell-tui-client release
 or its Windows package workflow artifact. The tray builder validates the zip
 hash, complete inventory, and individual payload hashes before staging it.

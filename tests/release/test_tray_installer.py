@@ -15,6 +15,28 @@ def inventory(root):
             for p in root.rglob("*") if p.is_file()]
 
 
+def test_private_backend_refuses_changed_build_files_before_replacing_any(tmp_path):
+    source = tmp_path / "build"
+    source.mkdir()
+    root = tmp_path / "runtime"
+    (root / "endpoint/bin").mkdir(parents=True)
+    names = ("sshd.exe", "sshd-auth.exe", "sshd-session.exe", "ssh-shellhost.exe",
+             "sftp-server.exe", "libcrypto.dll", "LICENSE.txt", "NOTICE.txt")
+    for name in names:
+        (source / name).write_bytes(name.encode())
+    receipt = source / "receipt.json"
+    receipt.write_text(json.dumps({"sourceArchiveSHA256": "8545e33b809f7ec6eb8363cbbbd2d4d68982d8ab7a8b7e6bb63506d82ae62223",
+                                  "files": {n: builder.digest(source / n) for n in names},
+                                  "source": {}, "processes": [{"naturalExit": 0}]}))
+    sha = builder.digest(receipt)
+    (source / "NOTICE.txt").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="file digest"):
+        builder.stage_private_backend(source, sha, root, {})
+    assert not list((root / "endpoint/bin").iterdir())
+    with pytest.raises(ValueError, match="receipt SHA256"):
+        builder.stage_private_backend(source, "0" * 64, root, {})
+
+
 def test_offline_client_is_pinned_and_does_not_ship_a_server(tmp_path, monkeypatch):
     archive = tmp_path / "OpenSSH.zip"
     with zipfile.ZipFile(archive, "w") as z:
