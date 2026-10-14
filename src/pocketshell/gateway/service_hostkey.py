@@ -14,6 +14,7 @@ verification failed" / "REMOTE HOST IDENTIFICATION HAS CHANGED".
 from __future__ import annotations
 
 import os
+import ntpath
 import shutil
 import sys
 import tempfile
@@ -32,6 +33,14 @@ _ACCEPTED = ("permission denied",)
 
 def find_ssh() -> str:
     if sys.platform == "win32":
+        # The private closure's MSYS client also runs in an invisible SSH
+        # session. Native Win32 clients can stall during initialization there,
+        # before processing even `-G`. This probe never uses a
+        # ProxyCommand or a login shell, and keeps exact strict host-key checks.
+        bundled = ntpath.normpath(ntpath.join(ntpath.dirname(sys.executable),
+                                 "..", "endpoint", "shell", "usr", "bin", "ssh.exe"))
+        if os.path.isfile(bundled):
+            return bundled
         from pocketshell.gateway import winssh
 
         try:
