@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: PocketShell-io/pocketshell-tui-client
-          ref: ceda4d24b0cdbc3d449cff5c173584ff9d794d52
+          ref: 9520cbcacdaac86903d4cdd23dc94103fbce606c
           path: client
       - uses: actions/checkout@v4
         with:
