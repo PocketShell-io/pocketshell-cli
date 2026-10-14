@@ -94,6 +94,7 @@ if os.name != "nt":
     cli.add_command(gateway_group, name="gateway")
     cli.add_command(workspaces_group, name="workspaces")
 else:
+    from pocketshell.windows_sessions import sessions_group as windows_sessions_group
     # These groups load Unix locks/PTY/daemon modules. Do not fake those APIs
     # or let their import failure disable the independent account/gateway CLI.
     def _unsupported_windows(ctx: click.Context) -> None:
@@ -103,7 +104,7 @@ else:
         )
 
     for _name in (
-        "usage", "agent", "agents", "profiles", "engines", "sessions", "tree",
+        "usage", "agent", "agents", "profiles", "engines", "tree",
         "agent-log", "repos", "github", "env", "hooks", "logs", "prune-attachments",
         "push", "serve", "link", "relay", "workspaces",
     ):
@@ -111,6 +112,7 @@ else:
             _name, callback=click.pass_context(_unsupported_windows),
             context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
         ))
+    cli.add_command(windows_sessions_group, name="sessions")
     cli.add_command(gateway_group, name="gateway")
 
 # Account device-flow login (docs/account.md). The stored CLI session only
