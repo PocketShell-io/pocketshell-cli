@@ -9,13 +9,24 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 ShowInstDetails show
 ShowUninstDetails show
-Page directory
 Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
 
 Section "PocketShell Gateway"
   SetRegView 64
+  ; Fixed per-user staging directory. Private state lives separately under
+  ; LOCALAPPDATA\PocketShellGateway and must never be removed during upgrades.
+  StrCpy $INSTDIR "$LOCALAPPDATA\Programs\PocketShellGateway"
+  ; A catalog describes an exact inventory: File /r alone preserves obsolete
+  ; wheel/bytecode files from an older installer and makes verification fail.
+  IfFileExists "$INSTDIR\host-runtime-catalog.json" 0 runtime_clean
+  RMDir /r "$INSTDIR\runtime"
+  IfFileExists "$INSTDIR\runtime\*.*" 0 runtime_clean
+  MessageBox MB_ICONSTOP "Close Gateway Setup and retry installation. The previous staged runtime is still in use." /SD IDOK
+  SetErrorLevel 1
+  Quit
+  runtime_clean:
   SetOutPath "$INSTDIR"
   File /r "${PAYLOAD}\*.*"
   ; Install the identical standalone PSC payload under its versioned per-user prefix.
