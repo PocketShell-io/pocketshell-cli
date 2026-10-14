@@ -98,9 +98,7 @@ def login(
         echo(f"To log in, open:  {complete_uri}")
     else:
         echo(f"To log in, open:  {verification_uri}")
-        echo(f"and enter code:   {user_code}")
-    echo(f"Confirm the code shown in the browser matches: {user_code}")
-    echo("The page will ask you to type its last 4 characters before approving.")
+    echo(f"and type this code: {user_code}")
     if open_browser and complete_uri is not None:
         try:
             browser_open(complete_uri)
