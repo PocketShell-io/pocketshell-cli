@@ -8,8 +8,16 @@
 # the PSC zip and GatewayTray.exe are built from pinned source; the aplexer
 # wheels and portable OpenSSH come from their pinned upstream releases.
 name: Windows tray release
+# TEMPORARY bootstrap trigger: GitHub only registers `workflow_dispatch`
+# workflows once the file exists on the default branch, so a branch-only
+# manual workflow cannot be dispatched at all (API answers 404 naming the
+# default branch). This push trigger runs the identical job body from this
+# branch with no registration needed. REMOVE it after the first green run;
+# the final file is `workflow_dispatch` only.
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/tray-aplexer-0.1.11]
 permissions:
   contents: read
 jobs:
