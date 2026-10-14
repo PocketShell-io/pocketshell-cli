@@ -58,7 +58,7 @@ $env:GOOS = 'windows'
 $env:GOARCH = 'amd64'
 $env:CGO_ENABLED = '0'
 go -C native/launcher build -trimpath -buildvcs=false '-ldflags=-s -w -buildid= -H=windowsgui -X main.module=pocketshell.tray_bundle' -o C:/BUILD/GatewayTray.exe .
-uv run --frozen python scripts/release/build_tray_installer.py --resources BASE --catalog-sha256 CATALOG_SHA256 --tray-launcher C:/BUILD/GatewayTray.exe --psc-zip C:/BUILD/psc-windows-x64-0.3.1.zip --psc-sha256 PSC_ZIP_SHA256 --makensis C:/NSIS/makensis.exe --out FRESH_OUTPUT
+uv run --frozen python scripts/release/build_tray_installer.py --resources BASE --catalog-sha256 CATALOG_SHA256 --tray-launcher C:/BUILD/GatewayTray.exe --psc-zip C:/BUILD/psc-windows-x64-0.3.2.zip --psc-sha256 PSC_ZIP_SHA256 --makensis C:/NSIS/makensis.exe --out FRESH_OUTPUT
 uv run --frozen --extra tray python -m pytest tests/tray tests/release/test_tray_installer.py tests/gateway/test_gateway_status.py
 uv run --frozen python scripts/release/smoke_tray_bundle.py --payload FRESH_OUTPUT/payload --install-check FRESH_TEST_USER_DATA
 ```

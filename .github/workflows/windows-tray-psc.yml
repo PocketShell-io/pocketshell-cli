@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: PocketShell-io/pocketshell-tui-client
-          ref: 2908d228019c8eee5829ac1460c0fef28885e061
+          ref: 26ff1aeb10bd12f9c9c7423e3ac542146c31f527
           path: client
       - uses: actions/checkout@v4
         with:
@@ -74,7 +74,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed' }
           $p = Start-Process $exe -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "NSIS installation failed: $($p.ExitCode)" }
-          $prefix = "$env:LOCALAPPDATA\PocketShell\psc\0.3.1"
+          $version = (Get-Content "$payload\psc-package\package-manifest.json" -Raw | ConvertFrom-Json).version
+          $prefix = "$env:LOCALAPPDATA\PocketShell\psc\$version"
           & "$prefix\psc.cmd" --version
           if ($LASTEXITCODE -ne 0) { throw 'Tray-installed PSC failed' }
           & "$prefix\node.exe" client/scripts/windows/smoke.mjs $prefix
