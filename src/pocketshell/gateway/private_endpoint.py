@@ -32,6 +32,38 @@ def _private(path: Path, mode: int) -> None:
         raise EndpointError(f"{path} must be owned by you with mode {mode:o}")
 
 
+def _openssh_version() -> tuple[int, int]:
+    """(major, minor) of the installed OpenSSH, (0, 0) when unknown."""
+    import re
+    try:
+        out = subprocess.run(["ssh", "-V"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return (0, 0)
+    match = re.search(r"OpenSSH_(\d+)\.(\d+)", out.stderr + out.stdout)
+    return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+
+def session_env_lines(runtime_root: Path = Path("/run/user"), version: tuple[int, int] | None = None) -> list[str]:
+    """The login-session variables the system sshd gets from PAM (pam_systemd).
+
+    The private endpoint runs with UsePAM no, so without these a session has
+    no XDG_RUNTIME_DIR and user services (aplexer's daemon sockets under
+    /run/user/<uid>, the user D-Bus, `systemctl --user`) are unreachable.
+    Server-side SetEnv needs OpenSSH 8.7+; older daemons would reject it.
+    """
+    if not sys.platform.startswith("linux"):
+        return []
+    runtime = runtime_root / str(os.getuid())
+    if not runtime.is_dir():
+        return []
+    if (version or _openssh_version()) < (8, 7):
+        return []
+    values = [f"XDG_RUNTIME_DIR={runtime}"]
+    if (runtime / "bus").exists():
+        values.append(f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus")
+    return ["SetEnv " + " ".join(values)]
+
+
 def init() -> list[str]:
     if sys.platform == "win32":
         raise EndpointError("Windows uses gateway agent install's private loopback endpoint")
@@ -66,27 +98,32 @@ def init() -> list[str]:
     if not user or any(c.isspace() or c in '*?![]@#\\"\r\n' for c in user):
         raise EndpointError("unsupported account name")
     config = directory / "sshd_config"
-    content = "\n".join([
+    policy = [
         f"HostKey {_quoted(key)}",
         f"AuthorizedKeysFile {_quoted(Path.home() / '.ssh/authorized_keys')} {_quoted(authorized)}",
         "PasswordAuthentication no", "KbdInteractiveAuthentication no", "PubkeyAuthentication yes",
         "PermitRootLogin no", "UsePAM no", "StrictModes yes", "PidFile none",
         "Subsystem sftp internal-sftp", "LogLevel ERROR", f"AllowUsers {user}",
         "AllowTcpForwarding local", "GatewayPorts no", "X11Forwarding no",
-        "AllowAgentForwarding no", "AllowStreamLocalForwarding no", "PermitTunnel no", "",
-    ])
-    # Upgrade only the byte-identical former generated policy. User edits stay intact.
-    legacy = content.replace(
-        "AllowTcpForwarding local\nGatewayPorts no\nX11Forwarding no\n"
-        "AllowAgentForwarding no\nAllowStreamLocalForwarding no\nPermitTunnel no\n",
-        "DisableForwarding yes\n",
-    )
+        "AllowAgentForwarding no", "AllowStreamLocalForwarding no", "PermitTunnel no",
+    ]
+    content = "\n".join(policy + session_env_lines() + [""])
+    # Upgrade only byte-identical former generated policies. User edits stay intact.
+    without_env = "\n".join(policy + [""])
+    previous = {
+        without_env,
+        without_env.replace(
+            "AllowTcpForwarding local\nGatewayPorts no\nX11Forwarding no\n"
+            "AllowAgentForwarding no\nAllowStreamLocalForwarding no\nPermitTunnel no\n",
+            "DisableForwarding yes\n",
+        ),
+    } - {content}
     if not config.exists():
         fd = os.open(config, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(content)
     _private(config, 0o600)
-    if config.read_bytes() == legacy.encode("utf-8"):
+    if config.read_bytes() in {p.encode("utf-8") for p in previous}:
         # Atomic replacement retains the owner-private mode and never leaves a
         # partially rewritten config visible to a new sshd process.
         name = None
