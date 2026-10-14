@@ -5,8 +5,8 @@ Name "PocketShell Gateway"
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\PocketShellGateway"
 RequestExecutionLevel user
-SetCompressor /SOLID lzma
-SetCompressorDictSize 64
+; Fast offline packaging and extraction for the full portable runtime.
+SetCompressor /SOLID zlib
 ShowInstDetails show
 ShowUninstDetails show
 Page instfiles
