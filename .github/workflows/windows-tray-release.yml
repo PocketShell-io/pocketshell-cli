@@ -112,9 +112,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PSC build failed' }
           $zip = Get-ChildItem out/windows/*.zip | Select-Object -First 1
           if (!$zip) { throw 'PSC zip not produced' }
-          $sha = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
-          Add-Content $env:GITHUB_ENV "PSC_ZIP=$($zip.FullName)"
+          # The pinned client/core checkouts live inside the release tree, so
+          # the release-cleanliness gate in the assembly step would flag them
+          # as dirt. The zip is the only thing assembly still needs: stage it
+          # under RUNNER_TEMP (hash what is consumed) and drop the checkouts
+          # in the next step.
+          $stagedZip = Join-Path $env:RUNNER_TEMP 'input\psc-windows-x64.zip'
+          Copy-Item $zip.FullName $stagedZip
+          $sha = (Get-FileHash $stagedZip -Algorithm SHA256).Hash.ToLower()
+          Add-Content $env:GITHUB_ENV "PSC_ZIP=$stagedZip"
           Add-Content $env:GITHUB_ENV "PSC_SHA256=$sha"
+      - name: Remove pinned source checkouts from the release tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # CI scaffolding only: the PSC zip above is already staged under
+          # RUNNER_TEMP. Deleting the nested checkouts restores a clean release
+          # tree for the sourceDirty gate; the gate itself is unchanged.
+          Set-Location $env:GITHUB_WORKSPACE
+          Remove-Item -Recurse -Force "$env:GITHUB_WORKSPACE\client", "$env:GITHUB_WORKSPACE\pocketshell-core"
       - name: Build tray launcher GUI entry
         shell: pwsh
         run: |
