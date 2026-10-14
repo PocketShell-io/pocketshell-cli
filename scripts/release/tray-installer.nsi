@@ -15,9 +15,11 @@ UninstPage instfiles
 
 Section "PocketShell Gateway"
   SetRegView 64
-  ; Fixed per-user staging directory. Private state lives separately under
-  ; LOCALAPPDATA\PocketShellGateway and must never be removed during upgrades.
-  StrCpy $INSTDIR "$LOCALAPPDATA\Programs\PocketShellGateway"
+  ; Fixed per-user staging directory (no directory page): every install lands
+  ; here so upgrades replace only the staged runtime. Private state lives
+  ; separately under LOCALAPPDATA\PocketShellGateway and must never be removed
+  ; during upgrades. $INSTDIR already carries an explicit /D= override (CI
+  ; failure fixtures install elsewhere), so it must not be overwritten here.
   ; A catalog describes an exact inventory: File /r alone preserves obsolete
   ; wheel/bytecode files from an older installer and makes verification fail.
   IfFileExists "$INSTDIR\host-runtime-catalog.json" 0 runtime_clean

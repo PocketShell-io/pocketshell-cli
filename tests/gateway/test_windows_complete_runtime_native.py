@@ -213,14 +213,20 @@ def test_new_machine_complete_runtime(closure, tmp_path):
 
         # The inbox Windows ssh client sends a non-ASCII command line in the ANSI code page (run
         # 38043511773: "Jos\ufffd ... is not recognized"), so the exec stays ASCII: it reaches the
-        # release through the backend environment the endpoint's SetEnv delivers (APLEXER_STATE_DIR =
-        # <root>/endpoint/backend/state; three levels up is managed-runtime).
+        # release through the backend environment the endpoint's SetEnv delivers. Since the
+        # per-user aplexer namespace (APLEXER_STATE_DIR = %LOCALAPPDATA%/aplexer/state) no longer
+        # anchors the closure, navigation starts at APLEXER_CONFIG (<root>/endpoint/aplexer.toml);
+        # two levels up is the closure root that carries releases/.
         # the backend environment the generated SetEnv must deliver into the session (diagnostic print;
         # the assertion follows)
         rc, out = exec_("set APLEXER & set XDG & set BASH_ENV & cd")
-        assert "APLEXER_STATE_DIR=" in out and "APLEXER_RUN_IN_PLACE=1" in out, "SetEnv did not reach the session"
+        assert "APLEXER_RUN_IN_PLACE=1" in out, "SetEnv did not reach the session"
+        lines = {l.split("=", 1)[0]: l.split("=", 1)[1] for l in out.splitlines() if "=" in l}
+        for var, tail in (("APLEXER_STATE_DIR", "/aplexer/state"), ("APLEXER_RUNTIME_DIR", "/aplexer/run")):
+            assert lines.get(var, "").endswith(tail) and "managed-runtime" not in lines.get(var, ""), \
+                f"SetEnv must deliver the shared per-user aplexer namespace, got {var}={lines.get(var)!r}"
         release = manifest["daemon"].replace("/", "\\").split("\\releases\\")[1].split("\\")[0]
-        to_rel = f'cd /d "%APLEXER_STATE_DIR%\\..\\..\\..\\releases\\{release}'
+        to_rel = f'cd /d "%APLEXER_CONFIG%\\..\\..\\releases\\{release}'
         bash_cmd = (f'{to_rel}\\endpoint\\shell\\usr\\bin" && bash.exe --noprofile --norc -c '
                     f'"echo bash-$((6*7)); uname -s; exit 5"')
         rc, out = exec_(bash_cmd)
