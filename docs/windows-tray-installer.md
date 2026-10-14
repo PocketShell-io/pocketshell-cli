@@ -4,7 +4,7 @@ The Windows x64 installer belongs to `pocketshell-cli`: the tray uses the CLI's
 gateway status, enrollment and owner-bound guardian instead of embedding a
 second gateway implementation in Desktop. It bundles Python, Pillow, pystray,
 the reviewed gateway helper, BOTH `a.exe` and `aplexer.exe`, the native aplexer
-client, the private OpenSSH endpoint and Git Bash. No Python, uv, Git or aplexer
+client (0.1.11, including `rpc --stdio`), the private OpenSSH endpoint and Git Bash. No Python, uv, Git or aplexer
 installation is required on the destination, including win35.
 The installer also includes the standalone PSC Windows x64 package (Node,
 client and security helper). It runs that package's per-user protected installer
@@ -74,10 +74,18 @@ $env:GOOS = 'windows'
 $env:GOARCH = 'amd64'
 $env:CGO_ENABLED = '0'
 go -C native/launcher build -trimpath -buildvcs=false '-ldflags=-s -w -buildid= -H=windowsgui -X main.module=pocketshell.tray_bundle' -o C:/BUILD/GatewayTray.exe .
-uv run --frozen python scripts/release/build_tray_installer.py --resources BASE --catalog-sha256 CATALOG_SHA256 --tray-launcher C:/BUILD/GatewayTray.exe --psc-zip C:/BUILD/psc-windows-x64-0.3.2.zip --psc-sha256 PSC_ZIP_SHA256 --ssh-zip C:/BUILD/OpenSSH-Win64.zip --ssh-sha256 SSH_ZIP_SHA256 --makensis C:/NSIS/makensis.exe --out FRESH_OUTPUT
+uv run --frozen python scripts/release/build_tray_installer.py --resources BASE --catalog-sha256 CATALOG_SHA256 --aplexer-cli-wheel C:/BUILD/aplexer-0.1.11-py3-none-win_amd64.whl --aplexer-client-wheel C:/BUILD/aplexer_client-0.1.11-cp311-abi3-win_amd64.whl --tray-launcher C:/BUILD/GatewayTray.exe --psc-zip C:/BUILD/psc-windows-x64-0.3.2.zip --psc-sha256 PSC_ZIP_SHA256 --ssh-zip C:/BUILD/OpenSSH-Win64.zip --ssh-sha256 SSH_ZIP_SHA256 --makensis C:/NSIS/makensis.exe --out FRESH_OUTPUT
 uv run --frozen --extra tray python -m pytest tests/tray tests/release/test_tray_installer.py tests/gateway/test_gateway_status.py
 uv run --frozen python scripts/release/smoke_tray_bundle.py --payload FRESH_OUTPUT/payload --install-check FRESH_TEST_USER_DATA
 ```
+
+Download both Windows wheels from the aplexer `v0.1.11` GitHub release before
+building. The builder verifies their pinned SHA256 values, replaces both managed
+executables and the native Python client, and records their hashes and version in
+`installer-receipt.json`. An older base closure cannot silently retain aplexer
+0.1.10. On Windows the builder checks the bundled `rpc --stdio` command before
+producing the installer. Managed endpoint PATH puts the release's Python tools
+first, then its CLI, Git Bash and System32; user-installed tools are excluded.
 
 The native smoke check registers a tray icon briefly, queries actual aplexer
 sessions and installs a fresh endpoint closure with generated keys. It does

@@ -38,6 +38,52 @@ def verify_inventory(root, rows):
         raise ValueError("The closure must contain the matching aplexer CLI and worker")
 
 
+APLEXER_VERSION = "0.1.11"
+APLEXER_WHEELS = {
+    "cli": ("aplexer-0.1.11-py3-none-win_amd64.whl", "911b4f5292be407d519be02de3fe5e70fd631bb63d853c4553b917f722c11ce5"),
+    "client": ("aplexer_client-0.1.11-cp311-abi3-win_amd64.whl", "fa7a8a9c20d8f24f71f095dcd4cf11f686bb3fc8a6890987903d68b17ec918cd"),
+}
+
+
+def stage_aplexer(cli_wheel, client_wheel, root):
+    """Replace the old closure pair with the pinned Windows RPC release.
+
+    Validate both archives completely before replacing any runtime files.
+    Inputs are obtained at build time; the installer remains offline.
+    """
+    packages = {}
+    for kind, path in (("cli", Path(cli_wheel)), ("client", Path(client_wheel))):
+        filename, expected = APLEXER_WHEELS[kind]
+        if path.name != filename or digest(path) != expected:
+            raise ValueError("Aplexer wheel differs from the pinned 0.1.11 Windows release")
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)):
+                raise ValueError("Duplicate aplexer wheel member")
+            for member in names:
+                rel = PurePosixPath(member)
+                if rel.is_absolute() or ".." in rel.parts or "\\" in member or ":" in member:
+                    raise ValueError("Unsafe aplexer wheel member")
+            packages[kind] = {n: archive.read(n) for n in names if not n.endswith("/")}
+    executable = packages["cli"]["aplexer_cli/bin/aplexer.exe"]
+    packages["client"]["aplexer/_native.pyd"]  # require the complete matching client
+    site = root / "python/site-native"
+    for pattern in ("aplexer", "aplexer_cli", "aplexer*.dist-info"):
+        for old in site.glob(pattern):
+            shutil.rmtree(old)
+    for files in packages.values():
+        for name, data in files.items():
+            target = site / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+    for name in ("a.exe", "aplexer.exe"):
+        (root / "python" / name).write_bytes(executable)
+    return {"version": APLEXER_VERSION, "cliWheelSHA256": digest(Path(cli_wheel)),
+            "clientWheelSHA256": digest(Path(client_wheel)),
+            "exeSHA256": hashlib.sha256(executable).hexdigest(),
+            "pydSHA256": digest(site / "aplexer/_native.pyd")}
+
+
 def write_zip(path, entries):
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         dirs = {name.rsplit("/", i)[0] + "/" for name in entries for i in range(1, name.count("/") + 1)}
@@ -208,6 +254,7 @@ def build(args):
             else:
                 entries[rel.as_posix()] = p.read_bytes()
         write_zip(root / "python/app.zip", entries)
+    aplexer_receipt = stage_aplexer(args.aplexer_cli_wheel, args.aplexer_client_wheel, root)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     catalog = copy.deepcopy(catalog)
     catalog["source"] = catalog["lineage"]["cliCommit"] = commit
@@ -224,6 +271,7 @@ def build(args):
         # Catch missing metadata / native wheels before producing a broken EXE.
         subprocess.run([str(root / "python/python.exe"), "-I", "-B", "-c",
                         "import PIL.Image, pystray, pocketshell.tray_bundle, aplexer; print('Bundled imports OK')"], check=True)
+        subprocess.run([str(root / "python/a.exe"), "rpc", "--stdio", "--help"], check=True)
     script = REPO / "scripts/release/tray-installer.nsi"
     exe = out / "PocketShellGateway-Setup-x64.exe"
     subprocess.run([args.makensis, f"/DPAYLOAD={out / 'payload'}", f"/DOUTPUT={exe}",
@@ -233,6 +281,7 @@ def build(args):
         "catalogSHA256": hashlib.sha256(data).hexdigest(), "installerSHA256": digest(exe),
         "installerBytes": exe.stat().st_size, "files": len(catalog["files"]),
         "aplexerSHA256": digest(root / "python/a.exe"), "launcherSHA256": digest(root / "GatewayTray.exe")}
+    receipt["aplexer"] = aplexer_receipt
     receipt["psc"] = psc_receipt
     receipt["privateEndpoint"] = backend_receipt
     (out / "installer-receipt.json").write_text(json.dumps(receipt, indent=2))
@@ -243,6 +292,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resources", required=True, help="Extracted resources.tar.gz")
     parser.add_argument("--catalog-sha256", required=True)
+    parser.add_argument("--aplexer-cli-wheel", required=True, help="Pinned aplexer 0.1.11 Windows CLI wheel")
+    parser.add_argument("--aplexer-client-wheel", required=True, help="Pinned aplexer-client 0.1.11 Windows wheel")
     parser.add_argument("--tray-launcher", required=True, help="native/launcher built with -X main.module=pocketshell.tray_bundle")
     parser.add_argument("--psc-zip", required=True, help="Reviewed standalone psc-windows-x64 zip")
     parser.add_argument("--psc-sha256", required=True, help="Expected SHA256 of the PSC zip")

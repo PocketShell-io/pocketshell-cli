@@ -131,3 +131,40 @@ def test_psc_rejects_traversal_unknown_and_duplicate_members(tmp_path, extra):
     with pytest.raises(ValueError):
         builder.stage_psc(archive, builder.digest(archive), tmp_path / "payload")
     assert not (tmp_path / "payload").exists()
+
+
+def aplexer_wheels(tmp_path, monkeypatch):
+    import hashlib
+    paths = []
+    for kind, files in (("cli", {"aplexer_cli/bin/aplexer.exe": b"RPC CLI and worker"}),
+                        ("client", {"aplexer/_native.pyd": b"native client", "aplexer/__init__.py": b"new client"})):
+        path = tmp_path / builder.APLEXER_WHEELS[kind][0]
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, data in files.items():
+                archive.writestr(name, data)
+        monkeypatch.setitem(builder.APLEXER_WHEELS, kind, (path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
+        paths.append(path)
+    return paths
+
+
+def test_aplexer_replaces_both_executables_and_old_native_client(tmp_path, monkeypatch):
+    wheels = aplexer_wheels(tmp_path, monkeypatch)
+    root = tmp_path / "runtime"
+    old = root / "python/site-native/aplexer"
+    old.mkdir(parents=True)
+    (old / "client.pyc").write_bytes(b"obsolete sourceless client")
+    receipt = builder.stage_aplexer(*wheels, root)
+    assert receipt["version"] == "0.1.11"
+    assert (root / "python/a.exe").read_bytes() == (root / "python/aplexer.exe").read_bytes() == b"RPC CLI and worker"
+    assert not (old / "client.pyc").exists()
+    assert (old / "_native.pyd").read_bytes() == b"native client"
+    assert receipt["exeSHA256"] == builder.digest(root / "python/a.exe")
+
+
+def test_aplexer_rejects_changed_wheel_before_touching_runtime(tmp_path, monkeypatch):
+    wheels = aplexer_wheels(tmp_path, monkeypatch)
+    wheels[1].write_bytes(b"changed")
+    root = tmp_path / "runtime"
+    with pytest.raises(ValueError, match="pinned"):
+        builder.stage_aplexer(*wheels, root)
+    assert not root.exists()
