@@ -175,6 +175,10 @@ def build(args):
     psc_receipt["installVariant"] = "gateway-ssh10"
     psc_receipt["adaptedInstallerSHA256"] = digest(out / "payload" / "psc-package/install.ps1")
     shutil.copytree(source / "runtime", root)
+    # Readiness and gateway ssh must work before PSC is installed, with no
+    # optional inbox OpenSSH feature. Keep the signed client in the measured
+    # closure as well as PSC's separate per-user package.
+    shutil.copytree(out / "payload" / "psc-ssh", root / "psc-ssh")
     backend_receipt = stage_private_backend(args.endpoint_backend, args.endpoint_backend_receipt_sha256, root, catalog)
     shutil.copyfile(Path(args.endpoint_backend) / "receipt.json", out / "payload/private-endpoint-build-receipt.json")
     shutil.copyfile(args.tray_launcher, root / "GatewayTray.exe")
