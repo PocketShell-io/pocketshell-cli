@@ -18,6 +18,8 @@ def endpoint_home(tmp_path, monkeypatch):
     monkeypatch.setattr(private_endpoint.sys, "platform", "linux")
     original = Path.is_file
     monkeypatch.setattr(Path, "is_file", lambda p: True if str(p) == "/usr/sbin/sshd" else original(p))
+    # Deterministic policy: the session environment depends on the machine.
+    monkeypatch.setattr(private_endpoint, "session_env_lines", lambda: [])
     return tmp_path
 
 
@@ -161,3 +163,33 @@ def test_keygen_never_reads_enrollment_stdin(endpoint_home, monkeypatch):
     monkeypatch.setattr(private_endpoint.subprocess, "run", run)
     private_endpoint.init()
     assert calls == [private_endpoint.subprocess.DEVNULL]
+
+
+def test_session_env_gives_sessions_the_user_runtime_dir(tmp_path, monkeypatch):
+    if not hasattr(os, "getuid"):
+        pytest.skip("Unix only")
+    monkeypatch.setattr(private_endpoint.sys, "platform", "linux")
+    runtime = tmp_path / str(os.getuid())
+    assert private_endpoint.session_env_lines(tmp_path, (9, 6)) == []  # no runtime dir: nothing
+    runtime.mkdir()
+    assert private_endpoint.session_env_lines(tmp_path, (9, 6)) == [f"SetEnv XDG_RUNTIME_DIR={runtime}"]
+    (runtime / "bus").touch()
+    assert private_endpoint.session_env_lines(tmp_path, (9, 6)) == [
+        f"SetEnv XDG_RUNTIME_DIR={runtime} DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus"]
+    assert private_endpoint.session_env_lines(tmp_path, (8, 6)) == []  # SetEnv needs OpenSSH 8.7+
+    monkeypatch.setattr(private_endpoint.sys, "platform", "darwin")
+    assert private_endpoint.session_env_lines(tmp_path, (9, 6)) == []
+
+
+def test_init_adds_session_env_to_an_untouched_generated_config(endpoint_home, monkeypatch):
+    argv = private_endpoint.init()
+    config = Path(argv[3])
+    without_env = config.read_text()
+    line = "SetEnv XDG_RUNTIME_DIR=/run/user/1000"
+    monkeypatch.setattr(private_endpoint, "session_env_lines", lambda: [line])
+    assert private_endpoint.init() == argv
+    assert config.read_text() == without_env + line + "\n"
+    custom = without_env + "# operator customization\n"
+    config.write_text(custom)
+    private_endpoint.init()
+    assert config.read_text() == custom
