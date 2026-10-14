@@ -1,11 +1,21 @@
 """Exercise the packaged Windows runtime without logging in or starting a gateway."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+
+
+def tray_builder():
+    """Load the sibling tray builder for its rpc availability check."""
+    path = Path(__file__).with_name("build_tray_installer.py")
+    spec = importlib.util.spec_from_file_location("tray_installer_build", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def main():
@@ -26,6 +36,12 @@ def main():
     assert helper["protocol"] == "pocketshell-tunnel-v1"
     list_help = run([str(root / "python/a.exe"), "list", "--help"])
     assert "--json" in list_help
+    rpc_help = run([str(root / "python/a.exe"), "rpc", "--help"])
+    assert "--stdio" in rpc_help
+    # A --help stub is not proof: drive one framed ping so a tray whose
+    # bundled aplexer cannot serve `rpc --stdio --protocol 1` fails here.
+    generation = tray_builder().rpc_stdio_ping(str(root / "python/a.exe"))
+    assert generation, "rpc helper reported no generation"
     sessions = json.loads(run([str(root / "python/a.exe"), "--json", "list"]))
     assert isinstance(sessions, list)
     code = """
