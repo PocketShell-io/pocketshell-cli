@@ -1,0 +1,153 @@
+# Full Windows gateway tray installer build for GitHub releases.
+#
+# Manual dispatch only. Every input is pinned and verified by
+# scripts/release/build_tray_installer.py before staging; no integrity check
+# is weakened here. The reviewed catalog-v3 BASE (resources.tar.gz, which
+# exists only as a v0.5.8 draft-release asset) is fetched from that draft
+# release; the owned OpenSSH backend is rebuilt from public pinned inputs;
+# the PSC zip and GatewayTray.exe are built from pinned source; the aplexer
+# wheels and portable OpenSSH come from their pinned upstream releases.
+name: Windows tray release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 300
+    env:
+      BASE_TARBALL_SHA256: af979f138dd899de564662bca83da085770777b6ce7d8fa12586016d9000e8a6
+      CATALOG_SHA256: cbe680073cf06302338d8396d513e812b37f2e1b81105d3ecebc195c6b43a4ce
+      SSH_URL: https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip
+      SSH_ZIP_SHA256: 23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5
+      CLIENT_REF: 6e0d072cd6954ddecca2a090f368fac08e535cc8
+      CORE_REF: 07174896ce7041370bcbf4f791ec513870b9535f
+    steps:
+      - name: Checkout tray branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/checkout@v6
+        with:
+          repository: PocketShell-io/pocketshell-tui-client
+          ref: ${{ env.CLIENT_REF }}
+          path: client
+      - uses: actions/checkout@v6
+        with:
+          repository: PocketShell-io/pocketshell-core
+          ref: ${{ env.CORE_REF }}
+          path: pocketshell-core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.1'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.8'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.10.11'
+      - name: Fetch reviewed catalog-v3 BASE from the v0.5.8 draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inputDir = "$env:RUNNER_TEMP\input"
+          New-Item -ItemType Directory $inputDir -Force | Out-Null
+          gh release download v0.5.8 --repo PocketShell-io/pocketshell-cli --pattern 'resources.tar.gz' --dir $inputDir
+          if ($LASTEXITCODE -ne 0) { throw 'BASE download failed' }
+          $got = (Get-FileHash "$inputDir\resources.tar.gz" -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:BASE_TARBALL_SHA256) { throw "BASE tarball SHA256 $got is not the pinned $env:BASE_TARBALL_SHA256" }
+          New-Item -ItemType Directory "$env:RUNNER_TEMP\base" -Force | Out-Null
+          tar -xzf "$inputDir\resources.tar.gz" -C "$env:RUNNER_TEMP\base"
+          if ($LASTEXITCODE -ne 0) { throw 'BASE extraction failed' }
+      - name: Fetch pinned aplexer wheels and portable OpenSSH
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip download --no-deps --dest "$env:RUNNER_TEMP\input" aplexer==0.1.11 aplexer_client==0.1.11
+          if ($LASTEXITCODE -ne 0) { throw 'aplexer wheel download failed' }
+          Invoke-WebRequest $env:SSH_URL -OutFile "$env:RUNNER_TEMP\input\OpenSSH-Win64.zip"
+          $got = (Get-FileHash "$env:RUNNER_TEMP\input\OpenSSH-Win64.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:SSH_ZIP_SHA256) { throw "OpenSSH zip SHA256 $got is not the pinned input" }
+      - name: Tray unit tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv run --frozen --extra tray python -m pytest tests/tray tests/release/test_tray_installer.py tests/gateway/test_gateway_status.py -q
+          if ($LASTEXITCODE -ne 0) { throw 'Tray tests failed' }
+      - name: Rebuild owned OpenSSH backend from pinned public inputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/release/build_backend_windows.py --part openssh --work C:\bw --out "$env:RUNNER_TEMP\backend-out"
+          if ($LASTEXITCODE -ne 0) { throw 'Backend rebuild failed' }
+          $receipt = "$env:RUNNER_TEMP\backend-out\openssh\receipt.json"
+          if (!(Test-Path $receipt)) { throw 'Backend staging receipt missing' }
+          $sha = (Get-FileHash $receipt -Algorithm SHA256).Hash.ToLower()
+          Add-Content $env:GITHUB_ENV "BACKEND_RECEIPT_SHA256=$sha"
+      - name: Build pinned PSC package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location pocketshell-core
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'core npm ci failed' }
+          node node_modules/typescript/bin/tsc -p tsconfig.json
+          if ($LASTEXITCODE -ne 0) { throw 'core tsc failed' }
+          node scripts/fix-esm-extensions.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'core ESM fix failed' }
+          Set-Location ../client
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'client npm ci failed' }
+          python scripts/build-windows-package.py
+          if ($LASTEXITCODE -ne 0) { throw 'PSC build failed' }
+          $zip = Get-ChildItem out/windows/*.zip | Select-Object -First 1
+          if (!$zip) { throw 'PSC zip not produced' }
+          $sha = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+          Add-Content $env:GITHUB_ENV "PSC_ZIP=$($zip.FullName)"
+          Add-Content $env:GITHUB_ENV "PSC_SHA256=$sha"
+      - name: Build tray launcher GUI entry
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:GOTOOLCHAIN = 'go1.26.8'
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          $env:CGO_ENABLED = '0'
+          $out = "$env:RUNNER_TEMP\build\GatewayTray.exe"
+          New-Item -ItemType Directory "$env:RUNNER_TEMP\build" -Force | Out-Null
+          go -C native/launcher build -trimpath -buildvcs=false '-ldflags=-s -w -buildid= -H=windowsgui -X main.module=pocketshell.tray_bundle' -o $out .
+          if ($LASTEXITCODE -ne 0) { throw 'GatewayTray build failed' }
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install nsis --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS setup failed' }
+      - name: Assemble installer from verified inputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inputDir = "$env:RUNNER_TEMP\input"
+          uv run --frozen python scripts/release/build_tray_installer.py --resources "$env:RUNNER_TEMP\base" --catalog-sha256 $env:CATALOG_SHA256 --aplexer-cli-wheel "$inputDir\aplexer-0.1.11-py3-none-win_amd64.whl" --aplexer-client-wheel "$inputDir\aplexer_client-0.1.11-cp311-abi3-win_amd64.whl" --tray-launcher "$env:RUNNER_TEMP\build\GatewayTray.exe" --psc-zip $env:PSC_ZIP --psc-sha256 $env:PSC_SHA256 --ssh-zip "$inputDir\OpenSSH-Win64.zip" --ssh-sha256 $env:SSH_ZIP_SHA256 --endpoint-backend "$env:RUNNER_TEMP\backend-out\openssh" --endpoint-backend-receipt-sha256 $env:BACKEND_RECEIPT_SHA256 --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" --out "$env:RUNNER_TEMP\tray-out"
+          if ($LASTEXITCODE -ne 0) { throw 'Installer assembly failed' }
+          $head = (git rev-parse HEAD).Trim()
+          $receipt = Get-Content "$env:RUNNER_TEMP\tray-out\installer-receipt.json" -Raw | ConvertFrom-Json
+          if ($receipt.source -ne $head) { throw "receipt source $($receipt.source) is not the branch tip $head" }
+          if ($receipt.sourceDirty) { throw 'release build ran on a dirty checkout' }
+          Set-Location "$env:RUNNER_TEMP\tray-out"
+          python -c "import hashlib,pathlib; pathlib.Path('SHA256SUMS').write_text(''.join(f'{hashlib.sha256(pathlib.Path(n).read_bytes()).hexdigest()}  {n}' + chr(10) for n in ('PocketShellGateway-Setup-x64.exe','installer-receipt.json')))"
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: tray-release-installer
+          path: |
+            ${{ runner.temp }}\tray-out\PocketShellGateway-Setup-x64.exe
+            ${{ runner.temp }}\tray-out\installer-receipt.json
+            ${{ runner.temp }}\tray-out\SHA256SUMS
+          if-no-files-found: error
