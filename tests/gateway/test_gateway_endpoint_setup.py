@@ -209,6 +209,8 @@ def test_install_generates_the_manifest_and_anchors_it_in_authority_v3():
     shared = host.folders["LOCALAPPDATA"].replace("\\", "/") + "/aplexer"
     assert env["APLEXER_STATE_DIR"] == shared + "/state"
     assert env["APLEXER_RUNTIME_DIR"] == shared + "/run"
+    assert paths.exists(shared.replace("/", "\\") + "\\run")
+    assert paths.exists(shared.replace("/", "\\") + "\\state")
     assert sorted(json.loads(paths.files[paths.key(root + "\\authority.json")][1])) == sorted(receipt)
 
 

@@ -461,6 +461,16 @@ def install_endpoint_runtime(*, user_data: str, catalog_path: str, staged: str, 
     if dry_run:
         return receipt
 
+    # Fresh machines do not yet have aplexer's standard namespace. Existing
+    # user sessions keep their directories and ACLs; new directories are made
+    # owner-private before the manifest can be bound.
+    shared_aplexer = ntpath.join(folders["LOCALAPPDATA"], "aplexer")
+    for folder in (shared_aplexer, ntpath.join(shared_aplexer, "run"), ntpath.join(shared_aplexer, "state")):
+        if paths.exists(folder):
+            if not _same(paths.directory_anchored(folder, owner_sid, root=folder), folder):
+                raise InstallError("install-failed", "the existing aplexer directory is not its canonical path")
+        else:
+            paths.mkdir(folder)
     for folder in (lay["endpoint"], lay["state"], lay["stateTmp"], lay["backend"],
                    *(ntpath.join(lay["backend"], v) for v in BACKEND_DIRS.values())):
         paths.mkdir(folder)
