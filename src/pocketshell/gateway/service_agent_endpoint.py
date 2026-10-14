@@ -186,6 +186,12 @@ def generate(*, lay: dict, catalog: dict, owner_sid: str, account: str, port: in
         return ntpath.join(rel, *role_file(catalog, name)["path"].split("/"))
 
     backend_dirs = {k: _fw(ntpath.join(lay["backend"], v)) for k, v in BACKEND_DIRS.items()}
+    # A gateway is another client of this user's durable sessions, not a
+    # separate aplexer installation. Match native aplexer's Windows defaults;
+    # keep the generated shell configuration and unrelated XDG data isolated.
+    local_aplexer = ntpath.join(folders["LOCALAPPDATA"], "aplexer")
+    backend_dirs.update(APLEXER_RUNTIME_DIR=_fw(ntpath.join(local_aplexer, "run")),
+                        APLEXER_STATE_DIR=_fw(ntpath.join(local_aplexer, "state")))
     set_env = {"APLEXER_CONFIG": _fw(lay["backendConfig"]), "APLEXER_RUN_IN_PLACE": "1", "APLEXER_SHELL": "",
                "BASH_ENV": "", "ENV": "", "ZDOTDIR": "", **backend_dirs}
     bindings = {"hostKey": _fw(inputs["hostKey"]), "authorizedKeys": _fw(inputs["authorizedKeys"]),

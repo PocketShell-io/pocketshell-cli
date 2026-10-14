@@ -205,6 +205,10 @@ def test_install_generates_the_manifest_and_anchors_it_in_authority_v3():
     assert m.guardian.casefold().endswith("\\releases\\r2026-10-10-3\\guardian\\guardian.py")
     assert m.daemon.casefold().endswith("\\releases\\r2026-10-10-3\\endpoint\\bin\\sshd.exe")
     ep.config_guard(paths.files[paths.key(e["config"])][1].decode(), m)
+    env = m.raw_bindings["setEnv"]
+    shared = host.folders["LOCALAPPDATA"].replace("\\", "/") + "/aplexer"
+    assert env["APLEXER_STATE_DIR"] == shared + "/state"
+    assert env["APLEXER_RUNTIME_DIR"] == shared + "/run"
     assert sorted(json.loads(paths.files[paths.key(root + "\\authority.json")][1])) == sorted(receipt)
 
 

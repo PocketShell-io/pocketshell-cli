@@ -238,15 +238,13 @@ def observe_agent():
 
 def managed_status():
     from pocketshell.gateway import status
-    from pocketshell.gateway.service_agent_endpoint import BACKEND_DIRS
     from pocketshell.runtime import sessions
 
     receipt = json.loads((home() / "managed-runtime/authority.json").read_text())
     installed_root(receipt)
     local = observe_agent()
-    endpoint = Path(receipt["endpoint"]["state"]).parent
-    env = dict(os.environ, APLEXER_CONFIG=str(endpoint / "aplexer.toml"))
-    env.update({k: str(endpoint / "backend" / v) for k, v in BACKEND_DIRS.items()})
+    manifest = json.loads(Path(receipt["endpoint"]["manifest"]).read_text())
+    env = dict(os.environ, **manifest["configBindings"]["setEnv"])
     def enumerate_sessions():
         managed, errors = sessions.enumerate_live_sessions(env=env)
         existing, other_errors = sessions.enumerate_live_sessions()

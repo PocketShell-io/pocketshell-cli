@@ -106,8 +106,12 @@ def test_status_uses_this_gateways_enrollment_not_global_defaults(tmp_path, monk
     monkeypatch.setenv("SystemRoot", str(tmp_path / "Windows"))  # managed_status names the Windows PowerShell path
     root = tmp_path / "managed-runtime"
     root.mkdir()
+    manifest = root / "manifest.json"
+    manifest.write_text(json.dumps({"configBindings": {"setEnv": {
+        "APLEXER_STATE_DIR": "C:/Users/test/AppData/Local/aplexer/state",
+        "APLEXER_RUNTIME_DIR": "C:/Users/test/AppData/Local/aplexer/run"}}}))
     (root / "authority.json").write_text(json.dumps({"location": {"root": str(root)}, "release": "tray-test",
-        "endpoint": {"state": str(root / "endpoint/state")}, "keys": {"authorizedKeys": str(root / "keys")}}))
+        "endpoint": {"state": str(root / "endpoint/state"), "manifest": str(manifest)}, "keys": {"authorizedKeys": str(root / "keys")}}))
     enrollment = str(root / "enrollment")
     monkeypatch.setattr(bundle, "observe_agent", lambda: {"binding": {"configDir": enrollment},
         "outbound": {"state": "running", "pid": 123}})
