@@ -93,7 +93,9 @@ def stage_ssh_client(archive_path, expected_sha256, destination):
                 raise ValueError("Missing or duplicate portable SSH client member")
             (destination / name).write_bytes(archive.read(member))
     if sys.platform == "win32":
-        command = ("param([string]$Client)\n$s=Get-AuthenticodeSignature -LiteralPath $Client; "
+        command = ('param([string]$Client)\nImport-Module '
+                   '"$PSHOME\\Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1" -Force\n'
+                   "$s=Get-AuthenticodeSignature -LiteralPath $Client; "
                    "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch "
                    "'O=Microsoft Corporation(?:,|$)') {exit 1}")
         with tempfile.TemporaryDirectory() as scratch:
@@ -118,6 +120,9 @@ def configure_offline_psc(destination):
     # object and can require SeSecurityPrivilege. The .NET object method writes
     # only the owner/DACL sections changed above, with identical private ACEs.
     text = text.replace('Set-Acl -LiteralPath $Path -AclObject $acl', '$item.SetAccessControl($acl)')
+    env_write = "[Environment]::SetEnvironmentVariable('Path', (($oldPath.TrimEnd(';') + ';' + $bin).TrimStart(';')), 'User')"
+    text = text.replace(env_write, "try { " + env_write + " } catch [System.Security.SecurityException] { "
+                        "Write-Warning 'User PATH is read-only. Launch PSC Terminal from the Start menu.' }")
     script.write_text(text.replace(old, new).replace(prefix,
                       '$dest = "$base\\$($manifest.version)-$InstallVariant"'), encoding="utf-8")
     manifest_path = destination / "package-manifest.json"

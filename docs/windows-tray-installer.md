@@ -8,7 +8,9 @@ client, the private OpenSSH endpoint and Git Bash. No Python, uv, Git or aplexer
 installation is required on the destination, including win35.
 The installer also includes the standalone PSC Windows x64 package (Node,
 client and security helper). It runs that package's per-user protected installer
-and adds `psc` to the user PATH, plus a **PSC Terminal** Start-menu shortcut.
+and adds `psc` to the user PATH when writable, plus a **PSC Terminal** Start-menu
+shortcut. A read-only user environment registry does not prevent installation;
+use that shortcut or the absolute per-user `psc.cmd` shim.
 Microsoft's signed portable OpenSSH client is bundled for PSC; no Windows
 OpenSSH feature is required. Profile paths with spaces currently refuse.
 The gateway's private SSH endpoint remains separate from PSC's inbox client.
