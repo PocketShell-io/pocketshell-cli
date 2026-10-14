@@ -219,7 +219,7 @@ def gateway_group() -> None:
     "--ssh-host",
     default=None,
     metavar="HOST:PORT",
-    help="Local SSH endpoint, loopback only (default: 127.0.0.1:22).",
+    help="Private loopback SSH endpoint (port 22 forbidden); defaults to per-user exec endpoint.",
 )
 @click.option(
     "--expect-host-key",
@@ -305,6 +305,16 @@ def enroll(
     _preflight_dev_broker_issuer(dev_broker_issuer, insecure_dev, server)
     if not token_stdin:
         _preflight_auto_mint(dev_broker_issuer, insecure_dev, server, trust_gateway)
+    binary = _verified_helper(ctx)
+    from pocketshell.gateway import private_endpoint
+    ssh_exec = None
+    try:
+        if ssh_host is None:
+            ssh_exec = private_endpoint.init()
+        elif ssh_host.rsplit(":", 1)[-1] == "22":
+            raise private_endpoint.EndpointError("system SSH port 22 is forbidden")
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from None
     argv = gateway_helper.build_helper_argv(
         "enroll",
         server=server,
@@ -316,17 +326,17 @@ def enroll(
         token_stdin=True,
         device_id=device_id,
         ssh_host=ssh_host,
+        ssh_exec=ssh_exec,
         expect_host_key=expect_host_key,
         dev_broker_issuer=dev_broker_issuer,
         re_enroll=re_enroll,
     )
     if token_stdin:
-        _run_helper(argv, ctx)
+        gateway_helper.exec_helper(binary, argv)
         return
     # Logged-in path. Order matters: the helper is resolved and
     # protocol-verified BEFORE a token exists, the token is minted last,
     # then handed over on a pipe as the helper's whole stdin.
-    binary = _verified_helper(ctx)
     try:
         token = gateway_tokens.obtain_token(_enroll_token_provider)
     except gateway_tokens.NotLoggedInError as exc:
@@ -776,3 +786,45 @@ def agent_verify_paths(operation_id, owner_sid, private_roots, resources_roots, 
 
 
 gateway_group.add_command(agent_group)
+
+
+@click.group("endpoint")
+def endpoint_group():
+    """Initialize or migrate the private per-user SSH endpoint."""
+
+
+@endpoint_group.command("init")
+def endpoint_init():
+    from pocketshell.gateway import private_endpoint
+    import json
+    try:
+        argv = private_endpoint.init()
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from None
+    click.echo(json.dumps({"kind": "exec", "ssh_exec": argv}))
+
+
+@endpoint_group.command("migrate")
+@click.option("--config-dir", default=None)
+@click.option("--token-stdin", is_flag=True)
+@click.pass_context
+def endpoint_migrate(ctx, config_dir, token_stdin):
+    """Publish the private host key and replace the endpoint after successful enrollment."""
+    import json
+    from pathlib import Path
+    from pocketshell.gateway import private_endpoint, service_common as common
+    directory = config_dir or common.default_config_dir()
+    try:
+        config = json.loads((Path(directory) / "config.json").read_text())
+        argv = private_endpoint.init()
+        public = (Path(argv[3]).parent / "ssh_host_ed25519_key.pub").read_text().strip()
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from None
+    click.echo("New private SSH host key (clients must re-pin after migration): " + public)
+    ctx.invoke(enroll, config_dir=directory, server=config["server"], device_id=config["device_id"],
+               token_stdin=token_stdin, re_enroll=True, expect_host_key=public,
+               ssh_host=None, insecure_dev=False, dev_broker_issuer=None, verbose=False,
+               trust_gateway=None)
+
+
+gateway_group.add_command(endpoint_group)

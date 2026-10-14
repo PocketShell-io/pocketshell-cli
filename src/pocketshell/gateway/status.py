@@ -33,7 +33,7 @@ from pocketshell.gateway import tokens as gateway_tokens
 from pocketshell.runtime import sessions as runtime_sessions
 
 CONTRACT_VERSION = 1
-DEFAULT_SSHD_PORT = 22
+DEFAULT_SSHD_PORT = 0
 PRESENCE_CACHE_TTL_SECONDS = 10.0
 SSHD_CONNECT_TIMEOUT_SECONDS = 1.0
 BROKER_TIMEOUT_SECONDS = 2.0
@@ -735,7 +735,21 @@ def collect_gateway_status(
     all_errors.extend(agent_errors)
 
     # 3. SSHD Reachability
-    reachable = check_sshd_reachable(sshd_port, connect_fn=connect_fn)
+    endpoint = {"kind": "loopback"}
+    try:
+        with open(os.path.join(config_dir or common.default_config_dir(), common.CONFIG_FILE)) as f:
+            config = json.load(f)
+        if config.get("ssh_exec"):
+            endpoint = {"kind": "exec"}
+    except (OSError, ValueError, TypeError):
+        pass
+    if endpoint["kind"] == "loopback" and sshd_port:
+        endpoint["port"] = sshd_port
+    # An inetd endpoint starts on demand; it has no listener to probe.
+    if endpoint["kind"] == "loopback" and sshd_port == 22:
+        all_errors.append("System SSH port 22 is forbidden; run gateway endpoint migrate")
+    reachable = (bool(agent_dict.get("running")) if endpoint["kind"] == "exec"
+                 else sshd_port not in (0, 22) and check_sshd_reachable(sshd_port, connect_fn=connect_fn))
     sshd_dict = {
         "running": reachable,
         "port": sshd_port,
@@ -743,7 +757,7 @@ def collect_gateway_status(
     }
 
     # 4. Clients
-    clients_list, client_errors = collect_clients_status(
+    clients_list, client_errors = ([], []) if endpoint["kind"] == "exec" or sshd_port in (0, 22) else collect_clients_status(
         sshd_port,
         runner=runner,
         established_ports=established_ports,
@@ -767,6 +781,7 @@ def collect_gateway_status(
         "summary": summary,
         "agent": agent_dict,
         "sshd": sshd_dict,
+        "endpoint": endpoint,
         "clients": clients_list,
         "sessions": sessions_list,
         "errors": all_errors,
@@ -802,7 +817,10 @@ def format_human_status(doc: Mapping[str, Any]) -> str:
 
     sshd = doc.get("sshd", {})
     sshd_status = "reachable" if sshd.get("reachable") else "not reachable"
-    lines.append(f"SSHD:           {sshd_status} on 127.0.0.1:{sshd.get('port', DEFAULT_SSHD_PORT)}")
+    if doc.get("endpoint", {}).get("kind") == "exec":
+        lines.append("SSHD:           private exec endpoint (starts on demand)")
+    else:
+        lines.append(f"SSHD:           {sshd_status} on 127.0.0.1:{sshd.get('port', DEFAULT_SSHD_PORT)}")
 
     clients = doc.get("clients", [])
     lines.append(f"Clients:        {len(clients)} connected")

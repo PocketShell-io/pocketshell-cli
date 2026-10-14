@@ -149,7 +149,7 @@ def test_builder_forwards_dev_broker_issuer_and_re_enroll():
     [
         {"token_stdin": True},
         {"device_id": "d"},
-        {"ssh_host": "127.0.0.1:22"},
+        {"ssh_host": "127.0.0.1:2222"},
         {"expect_host_key": "SHA256:x"},
         {"dev_broker_issuer": "https://lab-broker.example"},
         {"re_enroll": True},

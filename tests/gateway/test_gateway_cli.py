@@ -62,7 +62,7 @@ def test_legacy_link_and_relay_commands_are_preserved():
 
 
 def test_enroll_help_documents_stdin_only_token():
-    result = CliRunner().invoke(cli, ["gateway", "enroll", "--help"])
+    result = CliRunner().invoke(cli, ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--help"])
     assert result.exit_code == 0, result.output
     assert "--token-stdin" in result.output
     # The C2 scoped-credential correction: stdin carries a short-lived
@@ -90,7 +90,7 @@ def test_enroll_forwards_flags_verbatim_including_values_with_spaces(
     result = CliRunner().invoke(
         cli,
         [
-            "gateway", "enroll",
+            "gateway", "enroll", "--ssh-host", "127.0.0.1:2222",
             "--token-stdin",
             "--server", "wss://gateway.example",
             "--config-dir", "/tmp/dir with spaces",
@@ -114,13 +114,13 @@ def test_enroll_forwards_flags_verbatim_including_values_with_spaces(
     ]
 
 
-def test_enroll_with_no_options_forwards_only_token_stdin(pin_helper, exec_calls):
+def test_enroll_with_explicit_private_loopback(pin_helper, exec_calls):
     pin_helper("#!/bin/sh\nexit 0\n")
-    result = CliRunner().invoke(cli, ["gateway", "enroll", "--token-stdin"])
+    result = CliRunner().invoke(cli, ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--token-stdin"])
     # Defaults are delegated: the wrapper neither knows nor forwards a
     # default --server/--config-dir/--ssh-host; the Go helper applies its
     # own. --insecure-dev is never defaulted on.
-    assert _argv(exec_calls, result) == ["enroll", "--token-stdin"]
+    assert _argv(exec_calls, result) == ["enroll", "--token-stdin", "--ssh-host", "127.0.0.1:2222"]
 
 
 def test_run_forwards_only_passed_flags(pin_helper, exec_calls):
@@ -286,7 +286,7 @@ def test_dev_broker_issuer_forwarded_when_guarded(pin_helper, exec_calls):
     result = CliRunner().invoke(
         cli,
         [
-            "gateway", "enroll",
+            "gateway", "enroll", "--ssh-host", "127.0.0.1:2222",
             "--token-stdin",
             "--server", "ws://[::1]:8080",
             "--insecure-dev",
@@ -300,7 +300,7 @@ def test_dev_broker_issuer_forwarded_when_guarded(pin_helper, exec_calls):
         "enroll",
         "--token-stdin",
         "--server", "ws://[::1]:8080",
-        "--dev-broker-issuer", "https://lab-broker.example",
+        "--ssh-host", "127.0.0.1:2222", "--dev-broker-issuer", "https://lab-broker.example",
         "--insecure-dev",
     ]
 
@@ -323,7 +323,7 @@ def test_dev_broker_issuer_forwards_lab_servers_verbatim(
     result = CliRunner().invoke(
         cli,
         [
-            "gateway", "enroll",
+            "gateway", "enroll", "--ssh-host", "127.0.0.1:2222",
             "--token-stdin",
             "--server", server,
             "--insecure-dev",
@@ -334,7 +334,7 @@ def test_dev_broker_issuer_forwards_lab_servers_verbatim(
         "enroll",
         "--token-stdin",
         "--server", server,
-        "--dev-broker-issuer", "https://lab-broker.example",
+        "--ssh-host", "127.0.0.1:2222", "--dev-broker-issuer", "https://lab-broker.example",
         "--insecure-dev",
     ]
 
@@ -345,7 +345,7 @@ def test_dev_broker_issuer_without_insecure_dev_is_refused_before_exec(
     result = CliRunner().invoke(
         cli,
         [
-            "gateway", "enroll",
+            "gateway", "enroll", "--ssh-host", "127.0.0.1:2222",
             "--token-stdin",
             "--dev-broker-issuer", "https://lab-broker.example",
         ],
@@ -365,7 +365,7 @@ def test_dev_broker_issuer_without_explicit_server_is_refused(exec_calls):
     result = CliRunner().invoke(
         cli,
         [
-            "gateway", "enroll",
+            "gateway", "enroll", "--ssh-host", "127.0.0.1:2222",
             "--token-stdin",
             "--insecure-dev",
             "--dev-broker-issuer", "https://lab-broker.example",
@@ -388,7 +388,7 @@ def test_dev_broker_issuer_with_blank_server_is_refused(
     result = CliRunner().invoke(
         cli,
         [
-            "gateway", "enroll",
+            "gateway", "enroll", "--ssh-host", "127.0.0.1:2222",
             "--token-stdin",
             "--server", server,
             "--insecure-dev",
@@ -417,7 +417,7 @@ def test_dev_broker_issuer_with_unparseable_server_is_a_clear_usage_error(
     result = CliRunner().invoke(
         cli,
         [
-            "gateway", "enroll",
+            "gateway", "enroll", "--ssh-host", "127.0.0.1:2222",
             "--token-stdin",
             "--server", server,
             "--insecure-dev",
@@ -464,7 +464,7 @@ def test_dev_broker_issuer_never_targets_the_production_gateway(
     result = CliRunner().invoke(
         cli,
         [
-            "gateway", "enroll",
+            "gateway", "enroll", "--ssh-host", "127.0.0.1:2222",
             "--token-stdin",
             "--server", server,
             "--insecure-dev",
@@ -482,8 +482,8 @@ def test_dev_broker_issuer_never_targets_the_production_gateway(
 def test_enroll_without_dev_broker_issuer_is_unaffected(pin_helper, exec_calls):
     # The production contract is untouched: no dev flags, no dev guard.
     pin_helper("#!/bin/sh\nexit 0\n")
-    result = CliRunner().invoke(cli, ["gateway", "enroll", "--token-stdin"])
-    assert _argv(exec_calls, result) == ["enroll", "--token-stdin"]
+    result = CliRunner().invoke(cli, ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--token-stdin"])
+    assert _argv(exec_calls, result) == ["enroll", "--token-stdin", "--ssh-host", "127.0.0.1:2222"]
 
 
 # ---------------------------------------------------------------------------
@@ -493,13 +493,13 @@ def test_enroll_without_dev_broker_issuer_is_unaffected(pin_helper, exec_calls):
 
 def test_re_enroll_forwarded_only_when_passed(pin_helper, exec_calls):
     pin_helper("#!/bin/sh\nexit 0\n")
-    plain = CliRunner().invoke(cli, ["gateway", "enroll", "--token-stdin"])
-    assert _argv(exec_calls, plain) == ["enroll", "--token-stdin"]
+    plain = CliRunner().invoke(cli, ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--token-stdin"])
+    assert _argv(exec_calls, plain) == ["enroll", "--token-stdin", "--ssh-host", "127.0.0.1:2222"]
 
     again = CliRunner().invoke(
-        cli, ["gateway", "enroll", "--token-stdin", "--re-enroll"]
+        cli, ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--token-stdin", "--re-enroll"]
     )
-    assert _argv(exec_calls, again) == ["enroll", "--token-stdin", "--re-enroll"]
+    assert _argv(exec_calls, again) == ["enroll", "--token-stdin", "--ssh-host", "127.0.0.1:2222", "--re-enroll"]
 
 
 def test_re_enroll_and_dev_broker_issuer_are_enroll_only(pin_helper, exec_calls):
@@ -514,7 +514,7 @@ def test_re_enroll_and_dev_broker_issuer_are_enroll_only(pin_helper, exec_calls)
 
 
 def test_enroll_help_documents_the_dev_issuer_guard():
-    result = CliRunner().invoke(cli, ["gateway", "enroll", "--help"])
+    result = CliRunner().invoke(cli, ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--help"])
     assert result.exit_code == 0, result.output
     assert "--re-enroll" in result.output
     assert "--dev-broker-issuer" in result.output
