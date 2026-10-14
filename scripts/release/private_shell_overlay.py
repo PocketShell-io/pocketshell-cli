@@ -57,4 +57,10 @@ def patch_session(text):
     end = text.index("\n}", begin)
     if 'L"Environment", L"PATH"' not in text[begin:end]:
         raise ValueError("Unexpected upstream session PATH implementation")
-    return text[:begin] + PATH + text[end:]
+    patched = text[:begin] + PATH + text[end:]
+    # Win32 environment names are case-insensitive; registry exports usually
+    # spell this one 'Path'. It must not overwrite the private PATH above.
+    old = 'strncmp(env_name, "PATH=", strlen("PATH="))'
+    if patched.count(old) != 1:
+        raise ValueError("Unexpected upstream environment PATH filter")
+    return patched.replace(old, '_strnicmp(env_name, "PATH=", strlen("PATH="))')
