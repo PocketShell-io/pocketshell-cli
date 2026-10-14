@@ -59,6 +59,9 @@ jobs:
           $env:PSC_TEST_PAYLOAD = $payload
           uv run --frozen python -c "import importlib.util, pathlib, os; s=importlib.util.spec_from_file_location('builder','scripts/release/build_tray_installer.py'); b=importlib.util.module_from_spec(s); s.loader.exec_module(b); p=next(pathlib.Path('../client/out/windows').glob('*.zip')); b.stage_psc(p,b.digest(p),pathlib.Path(os.environ['PSC_TEST_PAYLOAD'])/'psc-package')"
           if ($LASTEXITCODE -ne 0) { throw 'PSC staging failed' }
+          Invoke-WebRequest https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip -OutFile "$env:RUNNER_TEMP\OpenSSH-Win64.zip"
+          uv run --frozen python -c "import importlib.util,pathlib,os; s=importlib.util.spec_from_file_location('builder','scripts/release/build_tray_installer.py'); b=importlib.util.module_from_spec(s); s.loader.exec_module(b); p=pathlib.Path(os.environ['PSC_TEST_PAYLOAD']); b.stage_ssh_client(pathlib.Path(os.environ['RUNNER_TEMP'])/'OpenSSH-Win64.zip','23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5',p/'psc-ssh'); b.configure_offline_psc(p/'psc-package')"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable SSH staging failed' }
           # Only PSC installation is exercised here; a harmless signed fixture
           # occupies the tray launcher path and is never launched in silent mode.
           New-Item -ItemType Directory "$payload\runtime" -Force | Out-Null
@@ -78,7 +81,7 @@ jobs:
             throw "NSIS installation failed: $($p.ExitCode)"
           }
           $version = (Get-Content "$payload\psc-package\package-manifest.json" -Raw | ConvertFrom-Json).version
-          $prefix = "$env:LOCALAPPDATA\PocketShell\psc\$version"
+          $prefix = "$env:LOCALAPPDATA\PocketShell\psc\$version-gateway-ssh10"
           & "$prefix\psc.cmd" --version
           if ($LASTEXITCODE -ne 0) { throw 'Tray-installed PSC failed' }
           & "$prefix\node.exe" client/scripts/windows/smoke.mjs $prefix

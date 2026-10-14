@@ -24,7 +24,7 @@ Section "PocketShell Gateway"
   ${If} ${RunningX64}
     StrCpy $1 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
   ${EndIf}
-  nsExec::ExecToStack '$\"$1$\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $\"$INSTDIR\psc-package\install.ps1$\"'
+  nsExec::ExecToStack '$\"$1$\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $\"$INSTDIR\psc-package\install.ps1$\" -SshPath $\"$INSTDIR\psc-ssh\ssh.exe$\" -InstallVariant gateway-ssh10'
   Pop $2
   Pop $3
   FileOpen $4 "$INSTDIR\psc-install.log" w

@@ -1,4 +1,6 @@
 import importlib.util
+import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,34 @@ spec.loader.exec_module(builder)
 def inventory(root):
     return [{"path": p.relative_to(root).as_posix(), "sha256": builder.digest(p)}
             for p in root.rglob("*") if p.is_file()]
+
+
+def test_offline_client_is_pinned_and_does_not_ship_a_server(tmp_path, monkeypatch):
+    archive = tmp_path / "OpenSSH.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        for name in ("ssh.exe", "LICENSE.txt", "NOTICE.txt", "sshd.exe", "install-sshd.ps1"):
+            z.writestr("OpenSSH-Win64/" + name, name.encode())
+    monkeypatch.setattr(builder.sys, "platform", "linux")
+    with pytest.raises(ValueError, match="SHA256"):
+        builder.stage_ssh_client(archive, "0" * 64, tmp_path / "bad")
+    result = builder.stage_ssh_client(archive, builder.digest(archive), tmp_path / "client")
+    assert {p.name for p in (tmp_path / "client").iterdir()} == {"ssh.exe", "LICENSE.txt", "NOTICE.txt"}
+    assert result["sshSHA256"] == builder.digest(tmp_path / "client/ssh.exe")
+
+
+def test_offline_psc_preserves_previous_version_and_recatalogs_installer(tmp_path):
+    script = tmp_path / "install.ps1"
+    script.write_text('param([string]$SshPath = "$env:SystemRoot\\System32\\OpenSSH\\ssh.exe")\n'
+                      '$dest = "$base\\$($manifest.version)"\nSet-Acl -LiteralPath $Path -AclObject $acl\n')
+    manifest = tmp_path / "package-manifest.json"
+    manifest.write_text(json.dumps({"files": {"install.ps1": "before"}}))
+    builder.configure_offline_psc(tmp_path)
+    assert "$($manifest.version)-$InstallVariant" in script.read_text()
+    assert "System32\\OpenSSH" not in script.read_text()
+    assert '$item.SetAccessControl($acl)' in script.read_text()
+    assert json.loads(manifest.read_text())["files"]["install.ps1"] == builder.digest(script)
+    with pytest.raises(ValueError, match="review"):
+        builder.configure_offline_psc(tmp_path)
 
 
 def test_catalog_rejects_tampered_or_extra_payload(tmp_path):

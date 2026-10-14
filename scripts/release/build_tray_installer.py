@@ -80,6 +80,52 @@ def stage_psc(archive_path, expected_sha256, destination):
             "clientCommit": manifest["clientCommit"], "coreCommit": manifest["coreCommit"]}
 
 
+def stage_ssh_client(archive_path, expected_sha256, destination):
+    """Ship only Microsoft's portable client and notices, never its service installer."""
+    if digest(archive_path) != expected_sha256:
+        raise ValueError("OpenSSH zip SHA256 differs from the selected input")
+    names = ("ssh.exe", "LICENSE.txt", "NOTICE.txt")
+    destination.mkdir(parents=True)
+    with zipfile.ZipFile(archive_path) as archive:
+        for name in names:
+            member = "OpenSSH-Win64/" + name
+            if archive.namelist().count(member) != 1:
+                raise ValueError("Missing or duplicate portable SSH client member")
+            (destination / name).write_bytes(archive.read(member))
+    if sys.platform == "win32":
+        command = ("param([string]$Client)\n$s=Get-AuthenticodeSignature -LiteralPath $Client; "
+                   "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch "
+                   "'O=Microsoft Corporation(?:,|$)') {exit 1}")
+        with tempfile.TemporaryDirectory() as scratch:
+            gate = Path(scratch) / "signature.ps1"
+            gate.write_text(command)
+            subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                            "-File", str(gate), str(destination / "ssh.exe")], check=True)
+    return {"zipSHA256": expected_sha256, "sshSHA256": digest(destination / "ssh.exe")}
+
+
+def configure_offline_psc(destination):
+    """Use a separate version tree so a former inbox-SSH binding stays intact."""
+    script = destination / "install.ps1"
+    text = script.read_text(encoding="utf-8")
+    old = 'param([string]$SshPath = "$env:SystemRoot\\System32\\OpenSSH\\ssh.exe")'
+    new = ('param([string]$SshPath, [ValidatePattern("^gateway-ssh[0-9]+$")]'
+           '[string]$InstallVariant = "gateway-ssh10")')
+    prefix = '$dest = "$base\\$($manifest.version)"'
+    if text.count(old) != 1 or text.count(prefix) != 1:
+        raise ValueError("PSC installer changed; review the offline adaptation")
+    # PowerShell 5 Set-Acl tries to write auditing on an existing protected
+    # object and can require SeSecurityPrivilege. The .NET object method writes
+    # only the owner/DACL sections changed above, with identical private ACEs.
+    text = text.replace('Set-Acl -LiteralPath $Path -AclObject $acl', '$item.SetAccessControl($acl)')
+    script.write_text(text.replace(old, new).replace(prefix,
+                      '$dest = "$base\\$($manifest.version)-$InstallVariant"'), encoding="utf-8")
+    manifest_path = destination / "package-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["install.ps1"] = digest(script)
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
 def build(args):
     source = Path(args.resources).resolve()
     cat_path = source / "host-runtime-catalog.json"
@@ -96,6 +142,10 @@ def build(args):
         raise ValueError("Use a fresh output directory")
     root = out / "payload" / "runtime"
     psc_receipt = stage_psc(args.psc_zip, args.psc_sha256, out / "payload" / "psc-package")
+    psc_receipt["sshClient"] = stage_ssh_client(args.ssh_zip, args.ssh_sha256, out / "payload" / "psc-ssh")
+    configure_offline_psc(out / "payload" / "psc-package")
+    psc_receipt["installVariant"] = "gateway-ssh10"
+    psc_receipt["adaptedInstallerSHA256"] = digest(out / "payload" / "psc-package/install.ps1")
     shutil.copytree(source / "runtime", root)
     shutil.copyfile(args.tray_launcher, root / "GatewayTray.exe")
     with tempfile.TemporaryDirectory() as scratch:
@@ -165,6 +215,8 @@ if __name__ == "__main__":
     parser.add_argument("--tray-launcher", required=True, help="native/launcher built with -X main.module=pocketshell.tray_bundle")
     parser.add_argument("--psc-zip", required=True, help="Reviewed standalone psc-windows-x64 zip")
     parser.add_argument("--psc-sha256", required=True, help="Expected SHA256 of the PSC zip")
+    parser.add_argument("--ssh-zip", required=True, help="Microsoft's portable OpenSSH-Win64.zip")
+    parser.add_argument("--ssh-sha256", required=True, help="Expected SHA256 of the OpenSSH zip")
     parser.add_argument("--makensis", required=True)
     parser.add_argument("--out", required=True)
     build(parser.parse_args())

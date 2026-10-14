@@ -9,7 +9,8 @@ installation is required on the destination, including win35.
 The installer also includes the standalone PSC Windows x64 package (Node,
 client and security helper). It runs that package's per-user protected installer
 and adds `psc` to the user PATH, plus a **PSC Terminal** Start-menu shortcut.
-Windows OpenSSH Client is required for PSC; profile paths with spaces refuse.
+Microsoft's signed portable OpenSSH client is bundled for PSC; no Windows
+OpenSSH feature is required. Profile paths with spaces currently refuse.
 The gateway's private SSH endpoint remains separate from PSC's inbox client.
 PSC is optional: if its installation fails, gateway installation continues,
 the installer warns with the location of `psc-install.log`, and the PSC Terminal
@@ -61,7 +62,7 @@ $env:GOOS = 'windows'
 $env:GOARCH = 'amd64'
 $env:CGO_ENABLED = '0'
 go -C native/launcher build -trimpath -buildvcs=false '-ldflags=-s -w -buildid= -H=windowsgui -X main.module=pocketshell.tray_bundle' -o C:/BUILD/GatewayTray.exe .
-uv run --frozen python scripts/release/build_tray_installer.py --resources BASE --catalog-sha256 CATALOG_SHA256 --tray-launcher C:/BUILD/GatewayTray.exe --psc-zip C:/BUILD/psc-windows-x64-0.3.2.zip --psc-sha256 PSC_ZIP_SHA256 --makensis C:/NSIS/makensis.exe --out FRESH_OUTPUT
+uv run --frozen python scripts/release/build_tray_installer.py --resources BASE --catalog-sha256 CATALOG_SHA256 --tray-launcher C:/BUILD/GatewayTray.exe --psc-zip C:/BUILD/psc-windows-x64-0.3.2.zip --psc-sha256 PSC_ZIP_SHA256 --ssh-zip C:/BUILD/OpenSSH-Win64.zip --ssh-sha256 SSH_ZIP_SHA256 --makensis C:/NSIS/makensis.exe --out FRESH_OUTPUT
 uv run --frozen --extra tray python -m pytest tests/tray tests/release/test_tray_installer.py tests/gateway/test_gateway_status.py
 uv run --frozen python scripts/release/smoke_tray_bundle.py --payload FRESH_OUTPUT/payload --install-check FRESH_TEST_USER_DATA
 ```
@@ -80,7 +81,16 @@ hash, complete inventory, and individual payload hashes before staging it.
 The receipt records the PSC zip SHA256, version and client/Core commits.
 The standalone install procedure is documented in that repository's
 `docs/windows-package.md`. No dependencies download on the destination.
-PSC versions are installed in `%LOCALAPPDATA%\PocketShell\psc\<version>`;
+The portable client input is Microsoft's official Win32-OpenSSH release
+`10.0.0.0p2-Preview`, `OpenSSH-Win64.zip`, SHA256
+`23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5`.
+The builder copies only `ssh.exe` and license notices, validates Microsoft's
+signature, and records the archive and executable digests. PSC validates the
+signature again on the installed copy. Its installer is adapted and recatalogued
+to use the supplied client and a separate `gateway-ssh10` version directory;
+existing inbox-client bindings and account state are preserved.
+No system SSH service, feature, configuration or firewall rule is changed.
+PSC versions are installed in `%LOCALAPPDATA%\PocketShell\psc\<version>-gateway-ssh10`;
 reinstalling the identical package verifies and reuses that version. Changed
 bytes or executable bindings require a fresh version. Account, pins and hosts stay in separate state
 directories. Gateway uninstall retains the independent PSC install and PATH
