@@ -244,9 +244,11 @@ def find_windows_ssh(
     system_directory: Optional[str] = None,
     wow64: Optional[bool] = None,
     isfile: Callable[[str], bool] = os.path.isfile,
+    interpreter: Optional[str] = None,
 ) -> str:
     """The ssh.exe to run: ``%POCKETSHELL_SSH%`` (absolute, existing file)
-    or the inbox ``System32\\OpenSSH\\ssh.exe``. PATH is never searched,
+    then the installer's sibling ``psc-ssh/ssh.exe``, then the inbox
+    ``System32\\OpenSSH\\ssh.exe``. PATH is never searched,
     so Git-for-Windows / MSYS / Cygwin ssh (which run ProxyCommand via
     their /bin/sh and handle consoles differently) is never picked
     silently."""
@@ -260,6 +262,10 @@ def find_windows_ssh(
         if not isfile(override):
             raise WindowsSshError(f"{SSH_ENV_VAR}={ascii(override)[:120]} is not an existing file")
         return ntpath.normpath(override)
+    bundled = ntpath.normpath(ntpath.join(ntpath.dirname(interpreter or sys.executable),
+                                        "..", "psc-ssh", "ssh.exe"))
+    if ntpath.isabs(bundled) and isfile(bundled):
+        return bundled
     for candidate in native_ssh_candidates(system_directory, wow64=wow64):
         if isfile(candidate):
             return candidate

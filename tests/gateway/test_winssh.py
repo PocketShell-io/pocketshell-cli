@@ -34,6 +34,14 @@ WIN = "win32"
 SSH_EXE = r"C:\Windows\System32\OpenSSH\ssh.exe"
 
 
+def test_bundled_client_works_without_inbox_openssh():
+    bundled = r"C:\Users\dev\AppData\Local\Programs\PocketShellGateway\runtime\psc-ssh\ssh.exe"
+    python = r"C:\Users\dev\AppData\Local\Programs\PocketShellGateway\runtime\python\python.exe"
+    assert winssh.find_windows_ssh({}, interpreter=python, isfile=lambda p: p == bundled) == bundled
+    assert winssh.find_windows_ssh({"POCKETSHELL_SSH": SSH_EXE}, interpreter=python,
+                                  isfile=lambda p: p in (bundled, SSH_EXE)) == SSH_EXE
+
+
 # --------------------------------------------------------------------------
 # Independent oracles
 
