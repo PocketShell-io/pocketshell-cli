@@ -9,6 +9,17 @@ import pytest
 from pocketshell.gateway.service_windows import TargetJobError, WindowsApi
 
 
+@pytest.mark.parametrize("session,mode", [(0, "s4u-session0"), (1, "active-console")])
+def test_background_selects_only_the_measured_guardian_context(monkeypatch, session, mode):
+    from pocketshell import tray_supervisor
+    from pocketshell.gateway import service_user_agent
+    from types import SimpleNamespace
+    monkeypatch.setattr(tray_supervisor, "api", lambda: SimpleNamespace(current_session=lambda: session))
+    monkeypatch.setattr(service_user_agent, "MODE", "active-console")
+    tray_supervisor.configure_background()
+    assert service_user_agent.MODE == mode
+
+
 def test_normal_cli_still_refuses_inherited_jobs():
     with pytest.raises(TargetJobError):
         WindowsApi()._job_policy(None, caller_in_job=True, broke_away=False,

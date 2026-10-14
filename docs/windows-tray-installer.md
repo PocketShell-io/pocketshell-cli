@@ -48,6 +48,16 @@ Logs and the installed runtime are under
 gateway and closes the tray; it preserves private keys, logs and session data.
 This beta installer is unsigned and supports Windows x64 only.
 
+For already-enrolled remote installations, the installed `GatewayTray.exe
+--background` owns the gateway in the ordinary user's SSH session, without a
+service or scheduled task. In session 0 it uses the guardian's reviewed invisible
+station/private desktop contract and the same SID, key, hash and job checks.
+It does not show a tray in another user's desktop. When the owning user signs
+into Windows, the login tray requests that background owner's exit, releases
+its job and starts the endpoint in the user's interactive session. Deliberate
+Stop and uninstall also stop the background owner. Setup/enrollment must be
+completed first; background startup never signs in or adopts another binding.
+
 ## Build and check
 
 Start from a reviewed **catalog-v3 resources archive** produced by

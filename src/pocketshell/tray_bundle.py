@@ -393,18 +393,79 @@ def main():
             if root.resolve() != installed.resolve():
                 subprocess.Popen([str(installed / "GatewayTray.exe"), *sys.argv[1:]], creationflags=0x08000000)
                 return
+        if "--background" in sys.argv:
+            run_background()
+            return
         if "--setup" in sys.argv or not (home() / "managed-runtime" / "authority.json").exists():
             if not setup(root):
                 return
         (home() / "tray-exit").unlink(missing_ok=True)
+        handoff_background()
         run_tray(root)
     except Exception as exc:
         logging.exception("Gateway tray failed")
-        message(f"PocketShell Gateway needs attention: {exc}\n\nRun Gateway Setup again to resume. Logs: {home()}")
+        if "--background" in sys.argv:
+            print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+        else:
+            message(f"PocketShell Gateway needs attention: {exc}\n\nRun Gateway Setup again to resume. Logs: {home()}")
         raise SystemExit(1) from None
     finally:
         from pocketshell.tray_supervisor import close
         close()
+
+
+def run_background():
+    """SSH provisioning lifetime owner; no task, service, admin or visible UI."""
+    from pocketshell.tray_supervisor import configure_background
+    from pocketshell.tray.single_instance import SingleInstance
+    binding = own_binding()
+    if not binding.get("enrolled"):
+        raise RuntimeError("Enroll and bind the private endpoint before background startup")
+    configure_background()
+    instance = SingleInstance(name="pocketshell_gateway_background")
+    if not instance.acquire():
+        return
+    marker = home() / "background-exit"
+    marker.unlink(missing_ok=True)
+    stop = threading.Event()
+
+    def recover():
+        first = True
+        while not stop.is_set():
+            try:
+                if first or needs_recovery(observe_agent()):
+                    start_gateway()
+                first = False
+            except Exception:
+                logging.exception("Background gateway recovery failed")
+            stop.wait(30)
+
+    # Validation may take minutes. The lifetime owner remains responsive to
+    # login/uninstall while the daemon thread validates before any native spawn.
+    threading.Thread(target=recover, daemon=True).start()
+    try:
+        while enabled() and not marker.exists() and not (home() / "tray-exit").exists():
+            time.sleep(1)
+    finally:
+        stop.set()
+        instance.release()
+
+
+def handoff_background():
+    """Login tray asks the session-0 owner to release its own kill-on-close job."""
+    from pocketshell.gateway import service_user_agent, service_windows
+    marker = home() / "background-exit"
+    marker.touch()
+    meta = service_user_agent._guardian_launch()
+    if not isinstance(meta, dict) or meta.get("session") != 0 or not meta.get("creationFILETIME"):
+        return
+    api = service_windows.WindowsApi()
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if api.process_birth(meta["pid"]) != meta["creationFILETIME"]:
+            return
+        time.sleep(0.5)
+    raise RuntimeError("Background owner is still validating its runtime; retry tray startup shortly")
 
 
 if __name__ == "__main__":

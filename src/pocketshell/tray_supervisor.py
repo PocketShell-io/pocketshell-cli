@@ -81,6 +81,17 @@ def start():
     return doc
 
 
+def configure_background():
+    """The reviewed guardian also supports an invisible ordinary-user session 0.
+
+    Keep its SID, DACL, private desktop, host-key and job checks intact. The
+    ordinary interactive CLI's default readiness contract remains unchanged.
+    """
+    from pocketshell.gateway import service_endpoint, service_user_agent
+    service_user_agent.MODE = (service_endpoint.MODE_S4U if api().current_session() == 0
+                               else service_endpoint.MODE_ACTIVE_CONSOLE)
+
+
 def close():
     global _api
     if _api is not None:

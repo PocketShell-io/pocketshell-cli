@@ -11,6 +11,20 @@ def test_manual_stop_survives_restart(tmp_path, monkeypatch):
     assert bundle.enabled()
 
 
+def test_background_refuses_unenrolled_install(monkeypatch):
+    monkeypatch.setattr(bundle, "own_binding", lambda: {"enrolled": False})
+    with pytest.raises(RuntimeError, match="Enroll and bind"):
+        bundle.run_background()
+
+
+def test_login_handoff_does_not_wait_on_interactive_owner(tmp_path, monkeypatch):
+    from pocketshell.gateway import service_user_agent
+    monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    monkeypatch.setattr(service_user_agent, "_guardian_launch", lambda: {"session": 1})
+    bundle.handoff_background()
+    assert (tmp_path / "background-exit").exists()
+
+
 def test_remote_outage_does_not_restart_local_endpoint():
     assert not bundle.needs_recovery({"state": "degraded", "outbound": {"state": "running", "connected": False},
                                       "endpoint": {"guardianLaunch": {"running": True}}})
