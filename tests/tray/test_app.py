@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from unittest.mock import MagicMock
 
 from pocketshell.tray.app import TrayApp
@@ -114,7 +116,7 @@ def test_tray_app_actions():
 
 
 def test_tray_app_build_menu():
-    import pystray
+    pystray = pytest.importorskip("pystray")
 
     model = TrayModel(
         state="online",

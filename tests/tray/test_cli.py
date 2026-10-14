@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -56,6 +58,9 @@ def test_tray_missing_dependencies_error():
 
 
 def test_tray_linux_missing_display():
+    # The display check runs after the optional-dependency check.
+    pytest.importorskip("PIL")
+    pytest.importorskip("pystray")
     runner = CliRunner()
     with patch.dict("os.environ", {}, clear=True):
         with patch("sys.platform", "linux"):
