@@ -18,7 +18,7 @@ set_defaultshell()
         return -1;
     }
     pw_shellpath = utf16_to_utf8(path);
-    shell_command_option = _strdup("-c");
+    shell_command_option = _strdup("--noprofile --norc -c");
     shell_arguments = _strdup("--noprofile --norc -i");
     if (!pw_shellpath || !shell_command_option || !shell_arguments) {
         free(pw_shellpath); free(shell_command_option); free(shell_arguments);
@@ -64,4 +64,29 @@ def patch_session(text):
     old = 'strncmp(env_name, "PATH=", strlen("PATH="))'
     if patched.count(old) != 1:
         raise ValueError("Unexpected upstream environment PATH filter")
-    return patched.replace(old, '_strnicmp(env_name, "PATH=", strlen("PATH="))')
+    patched = patched.replace(old, '_strnicmp(env_name, "PATH=", strlen("PATH="))')
+    # Bash detects SSH stdin and reads .bashrc for noninteractive commands.
+    # shell_arguments is only used for an interactive PTY by upstream; it does
+    # not protect this exec branch. Pass separate argv elements for exec, and
+    # remove the explicit noninteractive startup-file environment hooks.
+    patched = patched.replace('char *spawn_argv[4] = { NULL, };', 'char *spawn_argv[6] = { NULL, };')
+    previous = '''\t\t\tif (exec_command) {
+\t\t\t\tspawn_argv[1] = shell_command_option_local;
+\t\t\t\tspawn_argv[2] = exec_command;
+\t\t\t}'''
+    replacement = '''\t\t\tif (shell_type == SH_BASH) {
+                SetEnvironmentVariableW(L"BASH_ENV", NULL);
+                SetEnvironmentVariableW(L"ENV", NULL);
+                spawn_argv[1] = "--noprofile";
+                spawn_argv[2] = "--norc";
+                if (exec_command) {
+                    spawn_argv[3] = "-c";
+                    spawn_argv[4] = exec_command;
+                }
+            } else if (exec_command) {
+                spawn_argv[1] = shell_command_option_local;
+                spawn_argv[2] = exec_command;
+            }'''
+    if previous not in patched:
+        raise ValueError("Unexpected upstream exec-shell argv implementation")
+    return patched.replace(previous, replacement)

@@ -87,9 +87,18 @@ def test_the_null_path_overlay_guards_every_path_value_use(bb):
 def test_managed_session_path_prefers_tools_and_excludes_user_path(bb):
     from private_shell_overlay import patch_session
     source = ('strncmp(env_name, "PATH=", strlen("PATH="));\n'
-              '\t/* PATH is a special case. */\n L"Environment", L"PATH";\n}\n')
+              '\t/* PATH is a special case. */\n L"Environment", L"PATH";\n}\n'
+              'char *spawn_argv[4] = { NULL, };\n'
+              '\t\t\tif (exec_command) {\n'
+              '\t\t\t\tspawn_argv[1] = shell_command_option_local;\n'
+              '\t\t\t\tspawn_argv[2] = exec_command;\n\t\t\t}\n')
     patched = patch_session(source)
     assert 'L"%s\\\\python;%s;%s\\\\endpoint\\\\shell\\\\usr\\\\bin;' in patched
     assert 'L"Environment", L"PATH"' not in patched
     assert 'GetSystemDirectoryW' in patched
     assert '_strnicmp(env_name, "PATH=", strlen("PATH="))' in patched
+    assert 'spawn_argv[6]' in patched
+    assert 'spawn_argv[1] = "--noprofile"' in patched
+    assert 'spawn_argv[2] = "--norc"' in patched
+    assert 'spawn_argv[4] = exec_command' in patched
+    assert 'SetEnvironmentVariableW(L"BASH_ENV", NULL)' in patched
