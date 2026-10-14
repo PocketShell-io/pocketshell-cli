@@ -137,11 +137,12 @@ def test_transient_5xx_is_retried_then_gives_up(fake_broker) -> None:
         _run(fake_broker)
 
 
-def test_output_tells_user_to_confirm_code_and_type_last_four(fake_broker) -> None:
+def test_output_tells_user_to_type_full_code(fake_broker) -> None:
     _, out, _, _ = _run(fake_broker)
     assert "To log in, open:  https://app.pocketshell.io/device?code=BCDF-GHJK\n" in out
-    assert "Confirm the code shown in the browser matches: BCDF-GHJK" in out
-    assert "last 4 characters" in out
+    assert "and type this code: BCDF-GHJK" in out
+    assert "Confirm the code shown in the browser matches:" not in out
+    assert "last 4 characters" not in out
 
 
 @pytest.mark.parametrize(
@@ -197,8 +198,8 @@ def test_complete_uri_not_tied_to_printed_code_is_not_used(fake_broker, complete
     assert opened == []
     assert "?" not in out
     assert "To log in, open:  https://app.pocketshell.io/device\n" in out
-    assert "and enter code:   BCDF-GHJK" in out
-    assert "Confirm the code shown in the browser matches: BCDF-GHJK" in out
+    assert "and type this code: BCDF-GHJK" in out
+    assert "Confirm the code shown in the browser matches:" not in out
     assert "ZZZZ" not in out
     assert store.exists()
 
