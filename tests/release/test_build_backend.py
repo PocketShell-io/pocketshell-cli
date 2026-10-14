@@ -88,6 +88,8 @@ def test_managed_session_path_prefers_tools_and_excludes_user_path(bb):
     from private_shell_overlay import patch_session
     source = ('strncmp(env_name, "PATH=", strlen("PATH="));\n'
               '\t/* PATH is a special case. */\n L"Environment", L"PATH";\n}\n'
+              'static int\nsetup_session_env(struct ssh *ssh, Session* s)\n{\n\tret = 0;\n}\n'
+              '\nint do_exec_windows\n'
               'char *spawn_argv[4] = { NULL, };\n'
               '\t\t\tif (exec_command) {\n'
               '\t\t\t\tspawn_argv[1] = shell_command_option_local;\n'
@@ -102,3 +104,7 @@ def test_managed_session_path_prefers_tools_and_excludes_user_path(bb):
     assert 'spawn_argv[2] = "--norc"' in patched
     assert 'spawn_argv[4] = exec_command' in patched
     assert 'SetEnvironmentVariableW(L"BASH_ENV", NULL)' in patched
+    assert 'BASH_FUNC_pocketshell%%' in patched
+    assert 'BASH_FUNC_a%%' in patched
+    assert 'BASH_FUNC_aplexer%%' in patched
+    assert 'set_managed_commands();\n\tret = 0;' in patched

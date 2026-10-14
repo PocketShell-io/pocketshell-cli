@@ -44,6 +44,30 @@ PATH = r'''    /* PocketShell private release: managed tools precede every other
         fatal("Cannot construct the PocketShell private runtime PATH");
 '''
 
+COMMANDS = r'''static void
+set_managed_commands(void)
+{
+    wchar_t candidate[PATH_MAX], root[PATH_MAX];
+    if (swprintf_s(candidate, _countof(candidate), L"%s\\..\\..", __wprogdir) < 0 ||
+        _wfullpath(root, candidate, _countof(root)) == NULL)
+        fatal("Cannot derive the PocketShell command root");
+    for (wchar_t *p = root; *p; ++p)
+        if (*p == L'\\') *p = L'/';
+    /* Older PSC clients deliberately prepend user bin directories inside
+     * /bin/sh -lc. Exported Bash functions keep the managed commands selected
+     * through that nested shell, without modifying the user's profile/PATH. */
+    if (!SetEnvironmentVariableW(L"POCKETSHELL_RUNTIME_ROOT", root) ||
+        !SetEnvironmentVariableW(L"BASH_FUNC_pocketshell%%",
+            L"() { command \"$POCKETSHELL_RUNTIME_ROOT/pocketshell.exe\" \"$@\"; }") ||
+        !SetEnvironmentVariableW(L"BASH_FUNC_a%%",
+            L"() { command \"$POCKETSHELL_RUNTIME_ROOT/python/a.exe\" \"$@\"; }") ||
+        !SetEnvironmentVariableW(L"BASH_FUNC_aplexer%%",
+            L"() { command \"$POCKETSHELL_RUNTIME_ROOT/python/aplexer.exe\" \"$@\"; }"))
+        fatal("Cannot export the PocketShell managed commands");
+}
+
+'''
+
 
 def patch_pwd(text):
     begin = text.index("static int\nset_defaultshell()\n{")
@@ -89,4 +113,14 @@ def patch_session(text):
             }'''
     if previous not in patched:
         raise ValueError("Unexpected upstream exec-shell argv implementation")
-    return patched.replace(previous, replacement)
+    patched = patched.replace(previous, replacement)
+    anchor = "static int\nsetup_session_env(struct ssh *ssh, Session* s)"
+    if anchor not in patched:
+        raise ValueError("Unexpected upstream session environment implementation")
+    patched = patched.replace(anchor, COMMANDS + anchor)
+    begin = patched.index(anchor)
+    end = patched.index("\nint do_exec_windows", begin)
+    section = patched[begin:end]
+    if section.count("\tret = 0;") != 1:
+        raise ValueError("Unexpected upstream session environment return")
+    return patched[:begin] + section.replace("\tret = 0;", "\tset_managed_commands();\n\tret = 0;") + patched[end:]
