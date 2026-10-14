@@ -11,6 +11,9 @@ client and security helper). It runs that package's per-user protected installer
 and adds `psc` to the user PATH, plus a **PSC Terminal** Start-menu shortcut.
 Windows OpenSSH Client is required for PSC; profile paths with spaces refuse.
 The gateway's private SSH endpoint remains separate from PSC's inbox client.
+PSC is optional: if its installation fails, gateway installation continues,
+the installer warns with the location of `psc-install.log`, and the PSC Terminal
+shortcut is omitted. The log remains in the gateway installation directory.
 After installation open a new terminal, run `psc login`, `psc hosts sync`, and
 `psc gateway pin DEVICE_ID 'ssh-ed25519 FULL_PUBLIC_KEY_BASE64'` using each
 host's independently obtained key. Then use `psc hetzner ls` or

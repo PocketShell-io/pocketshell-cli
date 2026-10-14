@@ -83,3 +83,30 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tray-installed PSC failed' }
           & "$prefix\node.exe" client/scripts/windows/smoke.mjs $prefix
           if ($LASTEXITCODE -ne 0) { throw 'Tray-installed offline smoke failed' }
+          $shortcuts = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway"
+          if (!(Test-Path "$shortcuts\PSC Terminal.lnk")) { throw 'Successful PSC install omitted its shortcut' }
+      - name: PSC failure preserves the log and completes gateway installation
+        shell: pwsh
+        run: |
+          $payload = "$env:RUNNER_TEMP\tray-payload"
+          # Deliberately fail the optional component in this fixture only.
+          Set-Content "$payload\psc-package\install.ps1" "Write-Output 'PSC failure fixture: exit 23'; exit 23" -Encoding ascii
+          $exe = "$env:RUNNER_TEMP\Tray-Psc-Failure-Smoke.exe"
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" "/DPAYLOAD=$payload" "/DOUTPUT=$exe" '/DVERSION=ci-psc-failure' cli/scripts/release/tray-installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS failure-fixture compilation failed' }
+          $install = "$env:RUNNER_TEMP\tray-psc-failure"
+          $p = Start-Process $exe -ArgumentList '/S', "/D=$install" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Optional PSC failure aborted the gateway installer: $($p.ExitCode)" }
+          if ((Get-Content "$install\psc-install.log" -Raw) -notmatch 'PSC failure fixture: exit 23') { throw 'PSC failure log was not retained' }
+          foreach ($file in @('runtime\GatewayTray.exe', 'Uninstall.exe')) {
+            if (!(Test-Path "$install\$file")) { throw "Gateway installation did not finish: $file" }
+          }
+          $shortcuts = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway"
+          if (Test-Path "$shortcuts\PSC Terminal.lnk") { throw 'Failed PSC install retained a PSC shortcut' }
+          foreach ($name in @('PocketShell Gateway', 'Gateway Setup', 'Uninstall')) {
+            if (!(Test-Path "$shortcuts\$name.lnk")) { throw "Gateway shortcut missing: $name" }
+          }
+          $startup = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run').PocketShellTray
+          if ($startup -ne "`"$install\runtime\GatewayTray.exe`"") { throw 'Gateway startup registration did not finish' }
+          $registration = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketShellGateway'
+          if ($registration.DisplayVersion -ne 'ci-psc-failure') { throw 'Gateway uninstall registration did not finish' }

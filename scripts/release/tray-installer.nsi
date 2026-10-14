@@ -30,11 +30,9 @@ Section "PocketShell Gateway"
   FileOpen $4 "$INSTDIR\psc-install.log" w
   FileWrite $4 "$3"
   FileClose $4
-  StrCmp $2 0 psc_installed
-  MessageBox MB_ICONSTOP "PSC installation failed. Check $INSTDIR\psc-install.log for details. Your profile path must have no spaces and Windows OpenSSH Client must be installed. Exit code: $2" /SD IDOK
-  SetErrorLevel 1
-  Abort
-  psc_installed:
+  StrCmp $2 0 psc_continue
+  MessageBox MB_ICONEXCLAMATION "PSC installation failed. Gateway installation will continue. Check $INSTDIR\psc-install.log for details. Exit code: $2" /SD IDOK
+  psc_continue:
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   ReadEnvStr $0 "APPDATA"
   StrCmp $0 "" 0 +2
@@ -42,7 +40,12 @@ Section "PocketShell Gateway"
   CreateDirectory "$0\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway"
   CreateShortcut "$0\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway\PocketShell Gateway.lnk" "$INSTDIR\runtime\GatewayTray.exe"
   CreateShortcut "$0\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway\Gateway Setup.lnk" "$INSTDIR\runtime\GatewayTray.exe" "--setup"
+  StrCmp $2 0 psc_shortcut
+  Delete "$0\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway\PSC Terminal.lnk"
+  Goto psc_shortcut_done
+  psc_shortcut:
   CreateShortcut "$0\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway\PSC Terminal.lnk" "$WINDIR\System32\cmd.exe" '/K $\"$LOCALAPPDATA\PocketShell\psc\bin\psc.cmd$\" --help'
+  psc_shortcut_done:
   CreateShortcut "$0\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
   ClearErrors
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "PocketShellTray" '$\"$INSTDIR\runtime\GatewayTray.exe$\"'
