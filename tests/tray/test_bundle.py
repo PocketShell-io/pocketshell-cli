@@ -23,7 +23,7 @@ def test_enrollment_config_is_protected_and_unsafe_existing_folder_is_refused(tm
     path = tmp_path / "enrollment"
     bundle.prepare_enrollment_directory(path)
     api = service_windows.WindowsApi()
-    service_agent_install.NativePaths(api).directory(str(path), api.current_sid())
+    service_agent_install.NativePaths(api).directory(str(path), api.current_sid(), root=str(path))
     unsafe = tmp_path / "existing"
     unsafe.mkdir()
     with pytest.raises(OSError):
