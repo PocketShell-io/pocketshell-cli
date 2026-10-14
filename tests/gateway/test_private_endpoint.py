@@ -1,5 +1,6 @@
 """Private inetd endpoint init and enrollment integration."""
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,8 @@ from pocketshell.gateway import helper, private_endpoint, status
 
 @pytest.fixture
 def endpoint_home(tmp_path, monkeypatch):
+    if not hasattr(os, "getuid"):
+        pytest.skip("Unix endpoint permission tests")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(private_endpoint.sys, "platform", "linux")
     original = Path.is_file
@@ -108,3 +111,19 @@ def test_legacy_port_22_status_refuses_system_probe(endpoint_home, monkeypatch):
     doc = status.collect_gateway_status(config_dir=str(cfg), enumerate_sessions_fn=lambda: ([], []))
     assert not doc["sshd"]["reachable"]
     assert any("migrate" in error for error in doc["errors"])
+
+
+def test_macos_endpoint_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(private_endpoint.sys, "platform", "darwin")
+    assert private_endpoint.default_dir() == tmp_path / "Library/Application Support/PocketShell/endpoint"
+
+
+def test_allowusers_refuses_pattern_names(endpoint_home, monkeypatch):
+    import pwd
+    from types import SimpleNamespace
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: SimpleNamespace(pw_name="user[other]"))
+    with pytest.raises(private_endpoint.EndpointError, match="unsupported account name"):
+        private_endpoint.init()
+    assert not (private_endpoint.default_dir() / "sshd_config").exists()

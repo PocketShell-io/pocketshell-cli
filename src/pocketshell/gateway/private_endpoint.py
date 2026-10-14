@@ -62,7 +62,7 @@ def init() -> list[str]:
     _private(authorized, 0o600)
     import pwd
     user = pwd.getpwuid(os.getuid()).pw_name
-    if not user or any(c.isspace() or c in '*?!\\"\r\n' for c in user):
+    if not user or any(c.isspace() or c in '*?![]@#\\"\r\n' for c in user):
         raise EndpointError("unsupported account name")
     config = directory / "sshd_config"
     content = "\n".join([
