@@ -73,7 +73,10 @@ jobs:
           & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" "/DPAYLOAD=$payload" "/DOUTPUT=$exe" '/DVERSION=ci-smoke' cli/scripts/release/tray-installer.nsi
           if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed' }
           $p = Start-Process $exe -ArgumentList '/S' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "NSIS installation failed: $($p.ExitCode)" }
+          if ($p.ExitCode -ne 0) {
+            Get-Content "$env:LOCALAPPDATA\Programs\PocketShellGateway\psc-install.log" -ErrorAction Continue
+            throw "NSIS installation failed: $($p.ExitCode)"
+          }
           $version = (Get-Content "$payload\psc-package\package-manifest.json" -Raw | ConvertFrom-Json).version
           $prefix = "$env:LOCALAPPDATA\PocketShell\psc\$version"
           & "$prefix\psc.cmd" --version

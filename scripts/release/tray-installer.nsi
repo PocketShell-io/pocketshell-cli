@@ -24,9 +24,14 @@ Section "PocketShell Gateway"
   ${If} ${RunningX64}
     StrCpy $1 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
   ${EndIf}
-  ExecWait '$\"$1$\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $\"$INSTDIR\psc-package\install.ps1$\"' $2
+  nsExec::ExecToStack '$\"$1$\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $\"$INSTDIR\psc-package\install.ps1$\"'
+  Pop $2
+  Pop $3
+  FileOpen $4 "$INSTDIR\psc-install.log" w
+  FileWrite $4 "$3"
+  FileClose $4
   StrCmp $2 0 psc_installed
-  MessageBox MB_ICONSTOP "PSC installation failed. Check that your profile path has no spaces and the Windows OpenSSH Client is installed. Exit code: $2" /SD IDOK
+  MessageBox MB_ICONSTOP "PSC installation failed. Check $INSTDIR\psc-install.log for details. Your profile path must have no spaces and Windows OpenSSH Client must be installed. Exit code: $2" /SD IDOK
   SetErrorLevel 1
   Abort
   psc_installed:
