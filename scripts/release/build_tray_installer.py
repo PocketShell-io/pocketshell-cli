@@ -275,7 +275,10 @@ def build(args):
         # Catch missing metadata / native wheels before producing a broken EXE.
         subprocess.run([str(root / "python/python.exe"), "-I", "-B", "-c",
                         "import PIL.Image, pystray, pocketshell.tray_bundle, aplexer; print('Bundled imports OK')"], check=True)
-        subprocess.run([str(root / "python/a.exe"), "rpc", "--stdio", "--help"], check=True)
+        version = subprocess.check_output([str(root / "python/a.exe"), "--version"], text=True).strip()
+        if version != "a " + APLEXER_VERSION:
+            raise ValueError("Bundled aplexer executable version differs")
+        subprocess.run([str(root / "python/a.exe"), "list", "--help"], check=True)
     script = REPO / "scripts/release/tray-installer.nsi"
     exe = out / "PocketShellGateway-Setup-x64.exe"
     subprocess.run([args.makensis, f"/DPAYLOAD={out / 'payload'}", f"/DOUTPUT={exe}",

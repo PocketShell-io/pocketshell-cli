@@ -24,8 +24,8 @@ def main():
     version = run([str(root / "pocketshell.exe"), "--version"]).strip()
     helper = json.loads(run([str(root / "bin/pocketshell-link.exe"), "version", "--json"]))
     assert helper["protocol"] == "pocketshell-tunnel-v1"
-    rpc_help = run([str(root / "python/a.exe"), "rpc", "--stdio", "--help"])
-    assert "--stdio" in rpc_help
+    list_help = run([str(root / "python/a.exe"), "list", "--help"])
+    assert "--json" in list_help
     sessions = json.loads(run([str(root / "python/a.exe"), "--json", "list"]))
     assert isinstance(sessions, list)
     code = """

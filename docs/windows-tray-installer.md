@@ -4,7 +4,7 @@ The Windows x64 installer belongs to `pocketshell-cli`: the tray uses the CLI's
 gateway status, enrollment and owner-bound guardian instead of embedding a
 second gateway implementation in Desktop. It bundles Python, Pillow, pystray,
 the reviewed gateway helper, BOTH `a.exe` and `aplexer.exe`, the native aplexer
-client (0.1.11, including `rpc --stdio`), the private OpenSSH endpoint and Git Bash. No Python, uv, Git or aplexer
+client (0.1.11), the private OpenSSH endpoint and Git Bash. No Python, uv, Git or aplexer
 installation is required on the destination, including win35.
 The installer also includes the standalone PSC Windows x64 package (Node,
 client and security helper). It runs that package's per-user protected installer
@@ -83,8 +83,10 @@ Download both Windows wheels from the aplexer `v0.1.11` GitHub release before
 building. The builder verifies their pinned SHA256 values, replaces both managed
 executables and the native Python client, and records their hashes and version in
 `installer-receipt.json`. An older base closure cannot silently retain aplexer
-0.1.10. On Windows the builder checks the bundled `rpc --stdio` command before
-producing the installer. Managed endpoint PATH puts the release's Python tools
+0.1.10. On Windows the builder checks the bundled version and session-list command
+before producing the installer. The pinned official Windows 0.1.11 wheel does
+not expose an `a rpc` subcommand; session commands remain available through the
+PocketShell CLI. Managed endpoint PATH puts the release's Python tools
 first, then its CLI, Git Bash and System32; user-installed tools are excluded.
 
 The native smoke check registers a tray icon briefly, queries actual aplexer
