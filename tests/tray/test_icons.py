@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from PIL import Image
+
+# Pillow ships only with the optional `tray` extra; CI installs `link` only.
+Image = pytest.importorskip("PIL.Image")
 
 from pocketshell.tray.icons import _STATE_COLORS, generate_tray_icon
 

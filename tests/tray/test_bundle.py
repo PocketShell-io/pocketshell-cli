@@ -75,6 +75,7 @@ def test_status_uses_this_gateways_enrollment_not_global_defaults(tmp_path, monk
     from types import SimpleNamespace
     from pocketshell.gateway import status
     monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    monkeypatch.setenv("SystemRoot", str(tmp_path / "Windows"))  # managed_status names the Windows PowerShell path
     root = tmp_path / "managed-runtime"
     root.mkdir()
     (root / "authority.json").write_text(json.dumps({"location": {"root": str(root)}, "release": "tray-test",
