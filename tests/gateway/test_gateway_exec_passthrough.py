@@ -92,6 +92,8 @@ time.sleep(30)
 
 
 def _run_gateway(args: list[str], helper: Path, **env_extra) -> subprocess.CompletedProcess:
+    if args[0] == "enroll" and "--ssh-host" not in args:
+        args = [*args, "--ssh-host", "127.0.0.1:2222"]
     env = {
         **os.environ,
         "POCKETSHELL_GATEWAY_HELPER": str(helper),
@@ -158,7 +160,7 @@ def test_enroll_flags_reach_the_helper_as_exact_argv_elements(tmp_path):
         b"--token-stdin",
         b"--config-dir", str(tmp_path / "state dir").encode(),
         b"--device-id", b"device `id` $(whoami) 42",
-        b"--expect-host-key", host_key.encode(),
+        b"--ssh-host", b"127.0.0.1:2222", b"--expect-host-key", host_key.encode(),
     ]
 
 
@@ -537,7 +539,7 @@ def test_guarded_dev_flags_reach_the_helper_as_exact_argv(tmp_path):
         b"enroll",
         b"--token-stdin",
         b"--server", b"ws://[::1]:8080",
-        b"--re-enroll",
+        b"--ssh-host", b"127.0.0.1:2222", b"--re-enroll",
         b"--dev-broker-issuer", b"https://lab-broker.example",
         b"--insecure-dev",
     ]
@@ -674,7 +676,7 @@ def test_docker_lab_server_reaches_the_helper_in_subprocess(tmp_path):
         b"enroll",
         b"--token-stdin",
         b"--server", b"ws://gateway:8080",
-        b"--dev-broker-issuer", b"https://lab-broker.example",
+        b"--ssh-host", b"127.0.0.1:2222", b"--dev-broker-issuer", b"https://lab-broker.example",
         b"--insecure-dev",
     ]
 

@@ -26,16 +26,16 @@ feature, not a shortcut:
   lines, paths) stay single elements; nothing is ever interpolated through a
   shell.
 
-Options you omit are not forwarded at all, so the helper's own defaults
-apply — this CLI does not carry a second copy of them:
+Server and identity options use the helper defaults. Enrollment initializes
+the private endpoint and forwards its argv:
 
 | Option | Forwarded only when passed | Helper default |
 | --- | --- | --- |
 | `--server` | yes | `wss://gateway.pocketshell.io` |
 | `--config-dir` | yes | `${XDG_CONFIG_HOME:-$HOME/.config}/pocketshell-link` |
-| `--ssh-host` | yes (`enroll`) | `127.0.0.1:22`, loopback only |
+| `--ssh-host` | yes (`enroll`) | private exec endpoint; port 22 refused |
 | `--device-id` | yes (`enroll`) | auto-generated from the hostname |
-| `--expect-host-key` | yes (`enroll`) | none (the probed key is pinned unverified) |
+| `--expect-host-key` | yes (`enroll`) | private host public key pinned locally |
 | `--re-enroll` | yes (`enroll`) | off — re-enrollment is refused without it |
 | `--dev-broker-issuer` | yes (`enroll`, dev-guarded) | production broker issuer |
 | `--insecure-dev` | yes, never defaulted | off |
@@ -100,183 +100,69 @@ bounds. (The helper's other subcommands, e.g. `pocketshell-link version`,
 are reachable by calling the helper directly; this CLI wraps exactly
 `enroll`, `run`, and `show`.)
 
-## 2. Prerequisites on the host
+## 2. Private per-user SSH endpoint
 
-The tunnel carries **real SSH, end to end**. It is not a shell-execution
-protocol: the SSH session terminates at your host's own sshd, with standard
-SSH cryptography between the client and sshd. That makes the prerequisites
-the ordinary ones for SSH-ing into this machine:
-
-- **A running local sshd** reachable on loopback (default `127.0.0.1:22`).
-  The helper only ever bridges to a loopback address — a non-loopback
-  `--ssh-host` is rejected.
-- **Key-based access configured.** Put the client device's SSH public key in
-  your `~/.ssh/authorized_keys` for the user who will connect. This pairing
-  is entirely between you and your host: the gateway never issues, stores, or
-  brokers your SSH user keys. Installing a key *enables* key login; by
-  itself it does not disable password, keyboard-interactive, empty-password
-  or root login — see §2.1 for the required key-only policy.
-- **Your sshd host key fingerprint**, if you want to pin it explicitly at
-  enroll time (recommended):
-
-  ```bash
-  ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-  # 256 SHA256:AbCd…/Fp= (ED25519)
-  ```
-
-There are four distinct credential relationships, and keeping them separate
-is the point of the design:
-
-- **Host key (sshd → client):** your sshd's real public host key. `enroll`
-  probes it over loopback and pins it in the local state; the tunnel-side
-  client expects exactly that key. Pass `--expect-host-key` with the
-  authorized_keys line or the `SHA256:…` fingerprint to abort enrollment if
-  the probed key is not the one you expected (e.g. an unexpected listener on
-  port 22).
-- **User key (client → sshd):** regular `authorized_keys` authentication for
-  your user account. Unchanged by the gateway; you provision it yourself.
-- **Device key (host agent → gateway):** an Ed25519 keypair generated locally
-  at enroll time, used to prove device identity to the gateway via a signed
-  challenge. It authorizes a *tunnel to sshd*, never a *shell*: **with the
-  endpoint's key-only policy (§2.1) actually in effect**, a paired device
-  still needs a valid SSH user key to get past sshd — if the daemon also
-  accepts another authentication method, that method's own credentials work
-  over the tunnel too.
-- **Enrollment token (operator → gateway):** a short-lived (≤ 5 minutes)
-  RS256 JWT scoped to `pocketshell-gateway`, minted by the trusted PocketShell
-  token service (`https://a7sota2qic.execute-api.eu-west-1.amazonaws.com`,
-  `POST /gateway/token`) in exchange for your web-client sign-in. The
-  gateway verifies this broker token only — your raw account sign-in
-  credential never reaches the gateway. The token authorizes identity
-  management and routing during enrollment, nothing more, and expires within
-  five minutes (or with your upstream sign-in, whichever is sooner).
-
-### 2.1 Endpoint SSH policy — key-only required, operator-reviewed
-
-Installing a key (above) enables key login; it does not disable anything
-else. This matters because of what the transport is: **opaque SSH bytes
-routed to your local listener.** The gateway never parses them, so it
-cannot enforce how — or as whom — your sshd authenticates anyone. A
-compromised gateway can open SSH conversations with that listener under
-**arbitrary usernames**: the route does not bind an SSH username to your
-enrolled device, so key-only must hold for **every** username the listener
-admits, not merely a `Match User` block for the intended PocketShell
-account. Two enrollment properties are often over-read here: the pinned
-host key identifies the *server*, not which authentication methods the
-daemon allows, and the enroll-time host-key probe deliberately stops
-before user authentication — a successful `gateway enroll` is not an
-audit of your sshd policy.
-
-Suggested profile — the key-only lines are the **required** part;
-`AllowUsers` and `PermitRootLogin no` are the **recommended** account
-restrictions on top of it (replace the placeholder account; review the
-existing configuration rather than appending blindly — `Include`d files
-such as `/etc/ssh/sshd_config.d/*` and every `Match` block can override
-global directives):
-
-```text
-AllowUsers YOUR_NONROOT_ACCOUNT
-AuthenticationMethods publickey
-PubkeyAuthentication yes
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitEmptyPasswords no
-PermitRootLogin no
-```
-
-- [`AuthenticationMethods publickey`](https://man.openbsd.org/sshd_config#AuthenticationMethods)
-  is the line that makes the endpoint key-only; the default is `any`.
-  Password and keyboard-interactive login are
-  [separate switches](https://man.openbsd.org/sshd_config#PasswordAuthentication)
-  ([keyboard-interactive](https://man.openbsd.org/sshd_config#KbdInteractiveAuthentication)),
-  and OpenSSH documents a `none` method that authenticates password-less
-  accounts when
-  [`PermitEmptyPasswords`](https://man.openbsd.org/sshd_config#PermitEmptyPasswords)
-  allows it — hence both switches and both refusals.
-- [`AllowUsers`](https://man.openbsd.org/sshd_config#AllowUsers) and
-  [`PermitRootLogin no`](https://man.openbsd.org/sshd_config#PermitRootLogin)
-  (`prohibit-password` still permits some root authentication) are the
-  recommended account/root restrictions — recommended hardening **on top
-  of** the required key-only policy, and worth stating explicitly because
-  the opaque route admits any username. They are a selected baseline
-  choice, not a protocol or client-enforced universal requirement: this
-  CLI, the helper and the gateway enforce neither these directives nor
-  root denial of any kind, and a deliberately admitted root account would
-  still have to present a key — refusing root and excluded accounts (the
-  checks below) is acceptance evidence for *this chosen profile*, nothing
-  more universal. They exist only in your sshd configuration and apply to
-  every way the daemon is reached, ordinary direct SSH included — review
-  the change as you would any sshd change.
-
-Verify the **effective** policy, not the file you edited — `Match` and
-`Include` can change it per username, per source address and per local
-destination, and checks that skip the daemon's real configuration input
-can honestly validate a *different* configuration than the one it runs.
-First read the running daemon's actual arguments (`systemctl cat sshd`
-or `systemctl show -p ExecStart sshd` under systemd, `ps -o args= -p PID`
-with your init system's equivalent otherwise) and carry its configuration
-file and **every** `-o` override into both commands — command-line
-options override file values, so a bare `sshd -t`/`sshd -T` reports the
-file alone, not the file plus the overrides your daemon actually applies.
-(If the arguments name neither `-f` nor any `-o`, the daemon is reading
-the default `/etc/ssh/sshd_config`; pass `-f` anyway to pin that
-assumption.) Both commands read the host's private keys, so run them as
-root on a standard install:
+The gateway carries real end-to-end SSH to your private OpenSSH endpoint.
+Linux and macOS run one `sshd -i -f <private-config>` process per connection,
+as your ordinary account, over stdin/stdout. There is no TCP listener, system
+service, administrator installation, or firewall change. An existing system
+SSH server can continue using port 22 independently. The agent refuses port 22.
 
 ```bash
-# -f and each -o below must repeat the running daemon's arguments exactly
-sshd -t  -f DAEMON_CONFIG_FILE -o DAEMON_OVERRIDE …                # validity first
-sshd -T -f DAEMON_CONFIG_FILE -o DAEMON_OVERRIDE … \
-        -C user=YOUR_NONROOT_ACCOUNT,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22
+pocketshell gateway endpoint init
+# Enroll also runs endpoint init automatically.
+pocketshell gateway enroll
 ```
 
-([test mode](https://man.openbsd.org/sshd#T),
-[connection parameters](https://man.openbsd.org/sshd#C)) The `-C` fields
-describe two different ends of the connection and neither stands in for
-the other: `laddr`/`lport` are the **destination the agent dials** — the
-address and port your listener is bound to, i.e. the configured
-`--ssh-host` endpoint (`127.0.0.1:22` by default) — while `addr`/`host`
-are the **accepted client source** address and the host name that source
-resolves to, as sshd sees them on the accepted socket. A loopback dial
-usually presents a same-family loopback source, but that is an observed
-property, not an identity: confirm what your daemon actually accepted
-(its `Accepted … from` log lines, or `ss -tnp` while a tunnel stream is
-up) instead of equating it with the dialed destination. Run the `-T -C`
-variant for every username you intend to admit **and** for `root` and
-unintended accounts, and for **each loopback family the listener
-actually serves** — repeat with `addr=::1,laddr=::1` and the host name
-that source resolves to when IPv6 is reachable too, since the helper
-equally accepts literal `::1` or `localhost` as its endpoint. Supply the
-full context because `Match` blocks are evaluated against exactly these
-values: `LocalAddress`/`LocalPort`/`Host`/`Address` criteria are
-exercised only when the fields they test are supplied, and a `-T`
-printout without `-C` shows none of what your `Match` blocks do.
+Initialization finds `/usr/sbin/sshd` or `/usr/local/sbin/sshd` and uses only the
+binary. macOS ships `/usr/sbin/sshd`. If neither exists, setup fails clearly;
+bundling portable OpenSSH is a follow-up. It never edits `/etc/ssh/sshd_config`,
+starts a system daemon, or runs an administrator package installer.
 
-Applying the change is an ordinary, OS-specific operator procedure, and
-nothing here executes it for you: edit the file the daemon actually
-reads (the `-f` path above, `Include`d snippets and `Match` blocks
-included), pass `sshd -t` with the daemon's same `-f`/`-o` arguments,
-**keep your current SSH session open**, reload through your OS service
-manager (`systemctl reload sshd` under systemd, `service ssh reload` on
-sysv-style Debian/Ubuntu — unit and service names differ per OS), then
-re-run both checks with the same arguments to confirm the effective
-policy you just put live.
+Endpoint files live under `~/.local/state/pocketshell/endpoint/` on Linux or
+`~/Library/Application Support/PocketShell/endpoint/` on macOS. The directory
+is mode 0700. `ssh-keygen -t ed25519 -N ''` creates a dedicated host key, and
+the private key and config are mode 0600. Repeating init preserves the key
+and existing config. Enrollment and show read only its `.pub` for the pin.
 
-Honest limits of this policy: with the endpoint's verified key-only
-policy, the independently pinned host key, trusted client/host software
-and protected authorized private keys, gateway credentials alone do not
-authenticate an SSH session — the gateway can still initiate connections
-and deny service. Validation and reload commands never remove private
-keys that were already exposed; treat key rotation or removal as its own
-trusted procedure, and note it prevents *new* logins only — it does not
-terminate an established session. That is separate from gateway-side
-routing/device revocation — which tears the tunnel's streams down at an
-honest gateway only: a malicious or compromised gateway can ignore its
-own revocation registry and callbacks, so stopping an abuser immediately
-takes trusted endpoint action on your host. Endpoint-local SSH key
-revocation and session termination are exactly that trusted endpoint
-action — the only one of the two revocations still under your control
-when the gateway itself is the adversary.
+The generated config permits only the current user and public-key login:
+`PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
+`PubkeyAuthentication yes`, `PermitRootLogin no`, `UsePAM no`, `StrictModes yes`,
+`PidFile none`, `Subsystem sftp internal-sftp`, and `LogLevel ERROR`. It also
+uses `DisableForwarding yes`. Authorize your client public key in either your
+`~/.ssh/authorized_keys` or the endpoint's `authorized_keys` (mode 0600).
+The gateway never receives client SSH private keys. The separate device
+identity key authenticates the tunnel; the SSH host key authenticates your
+machine; the client's SSH key grants access to your account.
+
+Verify the private host fingerprint before pairing:
+
+```bash
+ssh-keygen -lf ~/.local/state/pocketshell/endpoint/ssh_host_ed25519_key.pub
+```
+
+Use the macOS endpoint path above on macOS. Root login is forbidden; run the
+host agent as the ordinary account whose shell you want to reach.
+
+Windows retains its owned private loopback endpoint, guardian and ordinary-user
+agent runtime (`gateway agent install|start|status`). Its port must be unused and between 1024 and 65535; enrollment
+passes `--ssh-host 127.0.0.1:<private-port>`. Use `gateway agent install` on
+Windows; Linux/macOS endpoint init does not change that runtime.
+
+### 2.1 Migrate an existing endpoint
+
+```bash
+pocketshell gateway endpoint migrate
+# Or: ... migrate --config-dir DIR --token-stdin < enrollment-token.txt
+```
+
+Migration creates the private endpoint, prints the new public host key for
+clients to re-pin, and explicitly re-enrolls the existing device against that
+key. The config changes only after the gateway accepts the replacement;
+re-enrollment must be enabled by the gateway operator. Clients must explicitly
+replace their existing pin using `gateway pin DEVICE_ID --replace` with the
+new independently verified key. Restart your own user-level link after the
+migration. The command does not stop or restart a running service.
 
 ## 3. Enroll the host
 
@@ -318,7 +204,6 @@ Useful flags:
 ```bash
 pocketshell gateway enroll --token-stdin \
     --device-id office-workstation \
-    --ssh-host 127.0.0.1:22 \
     --expect-host-key "SHA256:AbCd…/Fp=" \
     --re-enroll
 ```
@@ -350,6 +235,12 @@ state written by `enroll` from the config dir. `--server` overrides the
 enrolled URL; `--verbose` turns on debug logging (to stderr).
 
 ### 4.1 Durable start: `pocketshell gateway service`
+
+Linux uses a systemd user unit. On Windows, use the ordinary-user `gateway agent`
+runtime described in [Windows private runtime](windows-gateway-private-runtime.md),
+which needs no elevation, system service, or firewall rule. The S4U task path below
+is the older optional service mode; its elevated registration is not required by
+the ordinary-user endpoint.
 
 The supported way to keep an **enrolled** agent running across logouts
 and reboots, without a visible window:
@@ -531,7 +422,7 @@ before starting the task (`install --no-start` registers it disabled;
 pocketshell gateway show
 # server:            wss://gateway.pocketshell.io
 # device id:         …
-# local ssh:         127.0.0.1:22 (loopback only)
+# local ssh:         exec [/usr/sbin/sshd -i -f <private-config>]
 # device key:        SHA256:…
 # pinned ssh host key: …
 ```
@@ -601,9 +492,9 @@ pocketshell gateway run --server ws://gateway:8080 --insecure-dev
   routing-auth verifier at the lab broker's keys, as the Go repo's lab
   fixtures do.
 - **Loopback OpenSSH and independent pins hold in the lab too**: the agent
-  bridges only to the configured loopback sshd endpoint (default
-  `127.0.0.1:22`), and `--insecure-dev` never lifts that. Enrollment probes
-  and pins the lab host's real sshd host key independently of the enrollment
+  bridges to the private exec endpoint or an explicit non-22 loopback endpoint,
+  and `--insecure-dev` never lifts that. Enrollment reads the private public
+  key or probes the explicit lab endpoint independently of the enrollment
   token; the device key, the pinned host key, and the enrollment token
   remain the three separate credentials described in §2. Nothing in this
   section names real secrets — every issuer and URL above is a placeholder.

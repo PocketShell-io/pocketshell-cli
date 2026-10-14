@@ -626,6 +626,7 @@ def build_helper_argv(
     token_stdin: bool = False,
     device_id: Optional[str] = None,
     ssh_host: Optional[str] = None,
+    ssh_exec: Optional[list[str]] = None,
     expect_host_key: Optional[str] = None,
     dev_broker_issuer: Optional[str] = None,
     re_enroll: bool = False,
@@ -635,7 +636,7 @@ def build_helper_argv(
     Only options the caller actually received are forwarded: the Go helper
     owns the defaults (`--server` -> ``wss://gateway.pocketshell.io``,
     `--config-dir` -> ``${XDG_CONFIG_HOME:-$HOME/.config}/pocketshell-link``,
-    `--ssh-host` -> ``127.0.0.1:22``), so a wrapper-supplied default would
+    `--ssh-exec` -> per-user inetd endpoint), so a wrapper-supplied default would
     be a second source of truth that drifts. Boolean flags are forwarded
     only when set — `--insecure-dev` in particular is never defaulted on.
 
@@ -660,6 +661,7 @@ def build_helper_argv(
                 ("token_stdin", token_stdin),
                 ("device_id", device_id is not None),
                 ("ssh_host", ssh_host is not None),
+                ("ssh_exec", ssh_exec is not None),
                 ("expect_host_key", expect_host_key is not None),
                 ("dev_broker_issuer", dev_broker_issuer is not None),
                 ("re_enroll", re_enroll),
@@ -681,7 +683,14 @@ def build_helper_argv(
     if device_id is not None:
         argv.extend(["--device-id", device_id])
     if ssh_host is not None:
+        if ssh_exec is not None:
+            raise ValueError("choose ssh_host or ssh_exec")
+        if ssh_host.rsplit(":", 1)[-1] == "22":
+            raise ValueError("system SSH port 22 is forbidden; use a private endpoint")
         argv.extend(["--ssh-host", ssh_host])
+    if ssh_exec is not None:
+        import json
+        argv.extend(["--ssh-exec", json.dumps(ssh_exec)])
     if expect_host_key is not None:
         argv.extend(["--expect-host-key", expect_host_key])
     if re_enroll:

@@ -60,10 +60,10 @@ def _mints(broker) -> int:
 
 def test_logged_in_enroll_mints_and_pipes(pin_helper, logged_in, pipe_exec, exec_calls):
     helper = pin_helper("#!/bin/sh\nexit 0\n")
-    result = CliRunner().invoke(cli, ["gateway", "enroll", "--device-id", "home-lab"])
+    result = CliRunner().invoke(cli, ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--device-id", "home-lab"])
     assert result.exit_code == 0, result.output
     assert pipe_exec == [
-        (helper, ["enroll", "--token-stdin", "--device-id", "home-lab"], logged_in.gateway_jwt)
+        (helper, ["enroll", "--token-stdin", "--device-id", "home-lab", "--ssh-host", "127.0.0.1:2222"], logged_in.gateway_jwt)
     ]
     assert exec_calls == []
     [mint] = logged_in.requests_to(MINT_PATH)
@@ -74,9 +74,9 @@ def test_logged_in_enroll_mints_and_pipes(pin_helper, logged_in, pipe_exec, exec
 
 def test_token_stdin_path_is_unchanged(pin_helper, logged_in, pipe_exec, exec_calls):
     pin_helper("#!/bin/sh\nexit 0\n")
-    result = CliRunner().invoke(cli, ["gateway", "enroll", "--token-stdin"])
+    result = CliRunner().invoke(cli, ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--token-stdin"])
     assert result.exit_code == 0, result.output
-    assert exec_calls[-1][1] == ["enroll", "--token-stdin"]
+    assert exec_calls[-1][1] == ["enroll", "--token-stdin", "--ssh-host", "127.0.0.1:2222"]
     assert pipe_exec == []
     assert logged_in.requests == []
 
@@ -144,7 +144,7 @@ def test_incompatible_helper_refused_before_minting(pin_helper, logged_in, pipe_
 )
 def test_auto_mint_target_refusals(pin_helper, logged_in, pipe_exec, args):
     pin_helper("#!/bin/sh\nexit 0\n")
-    result = CliRunner().invoke(cli, ["gateway", "enroll", *args])
+    result = CliRunner().invoke(cli, ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", *args])
     assert result.exit_code == 2, result.output
     assert logged_in.requests == []
     assert pipe_exec == []
@@ -154,12 +154,12 @@ def test_trusted_lab_server_is_forwarded_verbatim(pin_helper, logged_in, pipe_ex
     pin_helper("#!/bin/sh\nexit 0\n")
     result = CliRunner().invoke(
         cli,
-        ["gateway", "enroll", "--server", "ws://127.0.0.1:8080", "--insecure-dev",
+        ["gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--server", "ws://127.0.0.1:8080", "--insecure-dev",
          "--trust-gateway", "127.0.0.1"],
     )
     assert result.exit_code == 0, result.output
     assert pipe_exec[0][1] == [
-        "enroll", "--token-stdin", "--server", "ws://127.0.0.1:8080", "--insecure-dev",
+        "enroll", "--token-stdin", "--server", "ws://127.0.0.1:8080", "--ssh-host", "127.0.0.1:2222", "--insecure-dev",
     ]
     # The gateway's --insecure-dev never redirects the session: it still
     # went only to the broker stored at login.
@@ -205,7 +205,7 @@ def test_token_reaches_helper_only_on_stdin(tmp_path, fake_broker):
 
     env.update({"POCKETSHELL_GATEWAY_HELPER": str(helper), "RECORD_FILE": str(record)})
     proc = _pocketshell(
-        env, "gateway", "enroll", "--device-id", "home-lab",
+        env, "gateway", "enroll", "--ssh-host", "127.0.0.1:2222", "--device-id", "home-lab",
         stdin=b"PARENT-STDIN-MUST-NOT-LEAK",
     )
     assert proc.returncode == 0, proc.stderr
@@ -214,7 +214,7 @@ def test_token_reaches_helper_only_on_stdin(tmp_path, fake_broker):
     assert mint["headers"]["Authorization"] == f"Bearer {SESSION_TOKEN}"
     rec = json.loads(Path(record).read_text())
     assert rec["stdin"] == token + "\n"
-    assert rec["argv"] == ["enroll", "--token-stdin", "--device-id", "home-lab"]
+    assert rec["argv"] == ["enroll", "--token-stdin", "--device-id", "home-lab", "--ssh-host", "127.0.0.1:2222"]
     for secret in (token, SESSION_TOKEN):
         assert all(secret not in v for v in rec["env"].values())
         assert all(secret not in a for a in rec["argv"])
