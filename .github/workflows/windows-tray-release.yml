@@ -69,7 +69,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pip download --no-deps --dest "$env:RUNNER_TEMP\input" aplexer==0.1.11 aplexer_client==0.1.11
+          python -m pip download --no-deps --dest "$env:RUNNER_TEMP\input" aplexer==0.1.12 aplexer_client==0.1.12
           if ($LASTEXITCODE -ne 0) { throw 'aplexer wheel download failed' }
           Invoke-WebRequest $env:SSH_URL -OutFile "$env:RUNNER_TEMP\input\OpenSSH-Win64.zip"
           $got = (Get-FileHash "$env:RUNNER_TEMP\input\OpenSSH-Win64.zip" -Algorithm SHA256).Hash.ToLower()
@@ -138,7 +138,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $inputDir = "$env:RUNNER_TEMP\input"
-          uv run --frozen python scripts/release/build_tray_installer.py --resources "$env:RUNNER_TEMP\base" --catalog-sha256 $env:CATALOG_SHA256 --aplexer-cli-wheel "$inputDir\aplexer-0.1.11-py3-none-win_amd64.whl" --aplexer-client-wheel "$inputDir\aplexer_client-0.1.11-cp311-abi3-win_amd64.whl" --tray-launcher "$env:RUNNER_TEMP\build\GatewayTray.exe" --psc-zip $env:PSC_ZIP --psc-sha256 $env:PSC_SHA256 --ssh-zip "$inputDir\OpenSSH-Win64.zip" --ssh-sha256 $env:SSH_ZIP_SHA256 --endpoint-backend "$env:RUNNER_TEMP\backend-out\openssh" --endpoint-backend-receipt-sha256 $env:BACKEND_RECEIPT_SHA256 --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" --out "$env:RUNNER_TEMP\tray-out"
+          uv run --frozen python scripts/release/build_tray_installer.py --resources "$env:RUNNER_TEMP\base" --catalog-sha256 $env:CATALOG_SHA256 --aplexer-cli-wheel "$inputDir\aplexer-0.1.12-py3-none-win_amd64.whl" --aplexer-client-wheel "$inputDir\aplexer_client-0.1.12-cp311-abi3-win_amd64.whl" --tray-launcher "$env:RUNNER_TEMP\build\GatewayTray.exe" --psc-zip $env:PSC_ZIP --psc-sha256 $env:PSC_SHA256 --ssh-zip "$inputDir\OpenSSH-Win64.zip" --ssh-sha256 $env:SSH_ZIP_SHA256 --endpoint-backend "$env:RUNNER_TEMP\backend-out\openssh" --endpoint-backend-receipt-sha256 $env:BACKEND_RECEIPT_SHA256 --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" --out "$env:RUNNER_TEMP\tray-out"
           if ($LASTEXITCODE -ne 0) { throw 'Installer assembly failed' }
           $head = (git rev-parse HEAD).Trim()
           $receipt = Get-Content "$env:RUNNER_TEMP\tray-out\installer-receipt.json" -Raw | ConvertFrom-Json

@@ -38,10 +38,10 @@ def verify_inventory(root, rows):
         raise ValueError("The closure must contain the matching aplexer CLI and worker")
 
 
-APLEXER_VERSION = "0.1.11"
+APLEXER_VERSION = "0.1.12"
 APLEXER_WHEELS = {
-    "cli": ("aplexer-0.1.11-py3-none-win_amd64.whl", "911b4f5292be407d519be02de3fe5e70fd631bb63d853c4553b917f722c11ce5"),
-    "client": ("aplexer_client-0.1.11-cp311-abi3-win_amd64.whl", "fa7a8a9c20d8f24f71f095dcd4cf11f686bb3fc8a6890987903d68b17ec918cd"),
+    "cli": ("aplexer-0.1.12-py3-none-win_amd64.whl", "6737f45d2698a9d09f046c2226191198b11f108b25077ea8092fa3da21bf4a44"),
+    "client": ("aplexer_client-0.1.12-cp311-abi3-win_amd64.whl", "4df8a27e7fe9c3536dc9f3b96642879282d809dd9fbff4d342db76c6ae7fd107"),
 }
 
 
@@ -55,7 +55,7 @@ def stage_aplexer(cli_wheel, client_wheel, root):
     for kind, path in (("cli", Path(cli_wheel)), ("client", Path(client_wheel))):
         filename, expected = APLEXER_WHEELS[kind]
         if path.name != filename or digest(path) != expected:
-            raise ValueError("Aplexer wheel differs from the pinned 0.1.11 Windows release")
+            raise ValueError("Aplexer wheel differs from the pinned 0.1.12 Windows release")
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
             if len(names) != len(set(names)):
@@ -292,8 +292,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resources", required=True, help="Extracted resources.tar.gz")
     parser.add_argument("--catalog-sha256", required=True)
-    parser.add_argument("--aplexer-cli-wheel", required=True, help="Pinned aplexer 0.1.11 Windows CLI wheel")
-    parser.add_argument("--aplexer-client-wheel", required=True, help="Pinned aplexer-client 0.1.11 Windows wheel")
+    parser.add_argument("--aplexer-cli-wheel", required=True, help="Pinned aplexer 0.1.12 Windows CLI wheel")
+    parser.add_argument("--aplexer-client-wheel", required=True, help="Pinned aplexer-client 0.1.12 Windows wheel")
     parser.add_argument("--tray-launcher", required=True, help="native/launcher built with -X main.module=pocketshell.tray_bundle")
     parser.add_argument("--psc-zip", required=True, help="Reviewed standalone psc-windows-x64 zip")
     parser.add_argument("--psc-sha256", required=True, help="Expected SHA256 of the PSC zip")
