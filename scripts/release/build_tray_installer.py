@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from pathlib import PurePosixPath
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -38,10 +39,10 @@ def verify_inventory(root, rows):
         raise ValueError("The closure must contain the matching aplexer CLI and worker")
 
 
-APLEXER_VERSION = "0.1.11"
+APLEXER_VERSION = "0.1.12"
 APLEXER_WHEELS = {
-    "cli": ("aplexer-0.1.11-py3-none-win_amd64.whl", "911b4f5292be407d519be02de3fe5e70fd631bb63d853c4553b917f722c11ce5"),
-    "client": ("aplexer_client-0.1.11-cp311-abi3-win_amd64.whl", "fa7a8a9c20d8f24f71f095dcd4cf11f686bb3fc8a6890987903d68b17ec918cd"),
+    "cli": ("aplexer-0.1.12-py3-none-win_amd64.whl", "1b73e0e25b9e4969917ab3ca7a62462726ff8491b1734599abaae7fe2cc755e0"),
+    "client": ("aplexer_client-0.1.12-cp311-abi3-win_amd64.whl", "fc9fd556d9da9169fb27e41adae918716f50850eccc24edc8630365c45fac7c3"),
 }
 
 
@@ -55,7 +56,7 @@ def stage_aplexer(cli_wheel, client_wheel, root):
     for kind, path in (("cli", Path(cli_wheel)), ("client", Path(client_wheel))):
         filename, expected = APLEXER_WHEELS[kind]
         if path.name != filename or digest(path) != expected:
-            raise ValueError("Aplexer wheel differs from the pinned 0.1.11 Windows release")
+            raise ValueError("Aplexer wheel differs from the pinned 0.1.12 Windows release")
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
             if len(names) != len(set(names)):
@@ -82,6 +83,56 @@ def stage_aplexer(cli_wheel, client_wheel, root):
             "clientWheelSHA256": digest(Path(client_wheel)),
             "exeSHA256": hashlib.sha256(executable).hexdigest(),
             "pydSHA256": digest(site / "aplexer/_native.pyd")}
+
+
+def rpc_stdio_ping(a_exe, timeout=60):
+    """Prove the bundled helper serves PSC-RPC-1 over framed stdio.
+
+    A `--help` stub could pass while the resident helper is missing (exactly
+    what the pinned 0.1.11 wheel did: no `rpc` subcommand at all), so drive
+    one real framed ping round trip: u32 big-endian length prefix plus UTF-8
+    JSON, requiring `{"protocol":1,"id":...,"result":{"ok":true}}` back.
+    Returns the helper generation string.
+    """
+    request = json.dumps({"protocol": 1, "id": "tray-rpc-check",
+                          "method": "ping", "params": {}}).encode()
+    frame = struct.pack(">I", len(request)) + request
+    popen = {"stdin": subprocess.PIPE, "stdout": subprocess.PIPE,
+             "stderr": subprocess.DEVNULL}
+    if sys.platform == "win32":
+        popen["creationflags"] = 0x08000000
+    try:
+        child = subprocess.Popen([str(a_exe), "rpc", "--stdio", "--protocol", "1"], **popen)
+    except OSError as exc:
+        raise ValueError(f"Cannot launch the bundled rpc helper: {exc}")
+    try:
+        # Closing stdin after the request makes the helper answer, see EOF and
+        # exit, so communicate() collects the single framed response.
+        try:
+            out = child.communicate(frame, timeout=timeout)[0]
+        except subprocess.TimeoutExpired:
+            child.kill()
+            raise ValueError("The bundled rpc helper did not answer the ping in time")
+        if child.returncode != 0:
+            raise ValueError("The bundled rpc helper exited without serving the ping")
+        if len(out) < 4:
+            raise ValueError("The bundled rpc helper produced no framed response")
+        (size,) = struct.unpack(">I", out[:4])
+        if size == 0 or size > 16 * 1024 * 1024 or len(out[4:]) != size:
+            raise ValueError("The bundled rpc helper produced an invalid frame")
+        try:
+            reply = json.loads(out[4:])
+        except ValueError:
+            raise ValueError("The bundled rpc helper did not answer JSON")
+        result = reply.get("result") if isinstance(reply, dict) else None
+        if (not isinstance(reply, dict) or reply.get("protocol") != 1
+                or reply.get("id") != "tray-rpc-check"
+                or not isinstance(result, dict) or not result.get("ok")):
+            raise ValueError(f"The bundled rpc helper ping failed: {out[4:204]!r}")
+        return result.get("generation")
+    finally:
+        if child.poll() is None:
+            child.kill()
 
 
 def write_zip(path, entries):
@@ -279,6 +330,8 @@ def build(args):
         if version != "a " + APLEXER_VERSION:
             raise ValueError("Bundled aplexer executable version differs")
         subprocess.run([str(root / "python/a.exe"), "list", "--help"], check=True)
+        subprocess.run([str(root / "python/a.exe"), "rpc", "--help"], check=True)
+        rpc_stdio_ping(root / "python/a.exe")
     script = REPO / "scripts/release/tray-installer.nsi"
     exe = out / "PocketShellGateway-Setup-x64.exe"
     subprocess.run([args.makensis, f"/DPAYLOAD={out / 'payload'}", f"/DOUTPUT={exe}",
@@ -299,8 +352,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resources", required=True, help="Extracted resources.tar.gz")
     parser.add_argument("--catalog-sha256", required=True)
-    parser.add_argument("--aplexer-cli-wheel", required=True, help="Pinned aplexer 0.1.11 Windows CLI wheel")
-    parser.add_argument("--aplexer-client-wheel", required=True, help="Pinned aplexer-client 0.1.11 Windows wheel")
+    parser.add_argument("--aplexer-cli-wheel", required=True, help="Pinned aplexer 0.1.12 Windows CLI wheel")
+    parser.add_argument("--aplexer-client-wheel", required=True, help="Pinned aplexer-client 0.1.12 Windows wheel")
     parser.add_argument("--tray-launcher", required=True, help="native/launcher built with -X main.module=pocketshell.tray_bundle")
     parser.add_argument("--psc-zip", required=True, help="Reviewed standalone psc-windows-x64 zip")
     parser.add_argument("--psc-sha256", required=True, help="Expected SHA256 of the PSC zip")

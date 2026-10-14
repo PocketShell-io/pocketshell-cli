@@ -1,5 +1,9 @@
 import importlib.util
 import json
+import os
+import stat
+import struct
+import sys
 import zipfile
 from pathlib import Path
 
@@ -154,7 +158,7 @@ def test_aplexer_replaces_both_executables_and_old_native_client(tmp_path, monke
     old.mkdir(parents=True)
     (old / "client.pyc").write_bytes(b"obsolete sourceless client")
     receipt = builder.stage_aplexer(*wheels, root)
-    assert receipt["version"] == "0.1.11"
+    assert receipt["version"] == "0.1.12"
     assert (root / "python/a.exe").read_bytes() == (root / "python/aplexer.exe").read_bytes() == b"RPC CLI and worker"
     assert not (old / "client.pyc").exists()
     assert (old / "_native.pyd").read_bytes() == b"native client"
@@ -168,3 +172,104 @@ def test_aplexer_rejects_changed_wheel_before_touching_runtime(tmp_path, monkeyp
     with pytest.raises(ValueError, match="pinned"):
         builder.stage_aplexer(*wheels, root)
     assert not root.exists()
+
+
+def frame(payload):
+    return struct.pack(">I", len(payload)) + payload
+
+
+class FakeHelper:
+    """Stand-in for subprocess.Popen capturing the request frame."""
+
+    def __init__(self, reply, returncode=0, timeout_error=False):
+        self.reply = reply
+        self.returncode = returncode
+        self.timeout_error = timeout_error
+        self.request = None
+        self.killed = False
+
+    def __call__(self, argv, **kwargs):
+        assert argv[1:] == ["rpc", "--stdio", "--protocol", "1"]
+        assert kwargs["stdin"] == builder.subprocess.PIPE
+        fake = self
+
+        class Process:
+            returncode = fake.returncode
+
+            def communicate(self, frame_bytes, timeout=None):
+                fake.request = frame_bytes
+                if fake.timeout_error:
+                    raise builder.subprocess.TimeoutExpired(argv, timeout)
+                return (fake.reply, b"")
+
+            def poll(self):
+                return fake.returncode
+
+            def kill(self):
+                fake.killed = True
+
+        return Process()
+
+
+def ping_reply(**result):
+    return frame(json.dumps({"protocol": 1, "id": "tray-rpc-check",
+                             "result": result}).encode())
+
+
+def test_rpc_stdio_ping_drives_a_framed_round_trip(monkeypatch):
+    fake = FakeHelper(ping_reply(ok=True, generation="gen-1"))
+    monkeypatch.setattr(builder.subprocess, "Popen", fake)
+    assert builder.rpc_stdio_ping("a.exe") == "gen-1"
+    size = struct.unpack(">I", fake.request[:4])[0]
+    assert len(fake.request) == 4 + size
+    assert json.loads(fake.request[4:]) == {"protocol": 1, "id": "tray-rpc-check",
+                                            "method": "ping", "params": {}}
+
+
+@pytest.mark.parametrize("reply,returncode", [
+    (b"", 0),  # no framed response
+    (frame(b"{"), 0),  # not JSON
+    (frame(b"\x00"), 0),  # invalid frame handling downstream
+    (ping_reply(ok=False, generation="gen-1"), 0),  # ping not ok
+    (frame(json.dumps({"protocol": 1, "id": "other",
+                       "result": {"ok": True}}).encode()), 0),  # wrong id
+    (ping_reply(ok=True, generation="gen-1"), 3),  # nonzero exit
+])
+def test_rpc_stdio_ping_rejects_broken_helpers(monkeypatch, reply, returncode):
+    monkeypatch.setattr(builder.subprocess, "Popen", FakeHelper(reply, returncode))
+    with pytest.raises(ValueError):
+        builder.rpc_stdio_ping("a.exe")
+
+
+def test_rpc_stdio_ping_rejects_a_hanging_helper(monkeypatch):
+    monkeypatch.setattr(builder.subprocess, "Popen",
+                        FakeHelper(b"", timeout_error=True))
+    with pytest.raises(ValueError, match="in time"):
+        builder.rpc_stdio_ping("a.exe")
+
+
+def test_rpc_stdio_ping_rejects_an_unlaunchable_helper(monkeypatch):
+    def missing(argv, **kwargs):
+        raise OSError("no such file")
+
+    monkeypatch.setattr(builder.subprocess, "Popen", missing)
+    with pytest.raises(ValueError, match="Cannot launch"):
+        builder.rpc_stdio_ping("a.exe")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang helpers are not directly executable on Windows")
+def test_rpc_stdio_ping_serves_a_real_helper_process(tmp_path):
+    script = tmp_path / "fake-a"
+    script.write_text("#!/usr/bin/env python3\n"
+                      "import json, struct, sys\n"
+                      "stdin, stdout = sys.stdin.buffer, sys.stdout.buffer\n"
+                      "header = stdin.read(4)\n"
+                      "(size,) = struct.unpack('>I', header)\n"
+                      "request = json.loads(stdin.read(size))\n"
+                      "reply = json.dumps({'protocol': 1, 'id': request['id'],\n"
+                      "                    'result': {'ok': True, 'generation': 'fake-gen'}}).encode()\n"
+                      "stdout.write(struct.pack('>I', len(reply)) + reply)\n"
+                      "stdout.flush()\n"
+                      "assert not stdin.read()\n")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    assert builder.rpc_stdio_ping(str(script)) == "fake-gen"
