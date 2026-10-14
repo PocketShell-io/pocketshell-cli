@@ -50,7 +50,7 @@ jobs:
       # suites import `websockets` at module level, so the default dev sync
       # alone fails `pytest` before a single test runs.
       - name: Install pocketshell + dev deps from the committed lock
-        run: uv sync --frozen --group dev --extra link --extra tray
+        run: uv sync --frozen --group dev --extra link
 
       # `-rs` prints the REASON for every skipped test. The kernel-level
       # session-cap proof (tests/test_session_cgroup_kernel_proof.py) can only
