@@ -11,6 +11,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+from pathlib import PurePosixPath
 import shutil
 import subprocess
 import sys
@@ -48,6 +49,37 @@ def write_zip(path, entries):
             archive.writestr(info, data)
 
 
+def stage_psc(archive_path, expected_sha256, destination):
+    """Accept only the complete, pinned standalone PSC package; no target downloads."""
+    archive_path = Path(archive_path)
+    if digest(archive_path) != expected_sha256:
+        raise ValueError("PSC zip SHA256 differs from the selected input")
+    with zipfile.ZipFile(archive_path) as archive:
+        names = archive.namelist()
+        if len(names) != len(set(names)):
+            raise ValueError("Duplicate PSC archive member")
+        for member in archive.infolist():
+            path = PurePosixPath(member.filename)
+            if (path.is_absolute() or ".." in path.parts or "\\" in member.filename
+                    or ":" in member.filename or member.is_dir()
+                    or (member.external_attr >> 16) & 0o170000 == 0o120000):
+                raise ValueError("Unsafe PSC archive member")
+        manifest = json.loads(archive.read("package-manifest.json"))
+        rows = manifest["files"]
+        required = {"node.exe", "psc-security.exe", "psc.cmd", "install.ps1", "psc/dist/cli.js"}
+        if not required.issubset(rows) or set(names) != set(rows) | {"package-manifest.json"}:
+            raise ValueError("Incomplete PSC package inventory")
+        for name, sha256 in rows.items():
+            if hashlib.sha256(archive.read(name)).hexdigest() != sha256:
+                raise ValueError("PSC package inventory digest differs")
+        for name in names:
+            target = destination / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(archive.read(name))
+    return {"version": manifest["version"], "zipSHA256": expected_sha256,
+            "clientCommit": manifest["clientCommit"], "coreCommit": manifest["coreCommit"]}
+
+
 def build(args):
     source = Path(args.resources).resolve()
     cat_path = source / "host-runtime-catalog.json"
@@ -63,6 +95,7 @@ def build(args):
     if out.exists():
         raise ValueError("Use a fresh output directory")
     root = out / "payload" / "runtime"
+    psc_receipt = stage_psc(args.psc_zip, args.psc_sha256, out / "payload" / "psc-package")
     shutil.copytree(source / "runtime", root)
     shutil.copyfile(args.tray_launcher, root / "GatewayTray.exe")
     with tempfile.TemporaryDirectory() as scratch:
@@ -120,6 +153,7 @@ def build(args):
         "catalogSHA256": hashlib.sha256(data).hexdigest(), "installerSHA256": digest(exe),
         "installerBytes": exe.stat().st_size, "files": len(catalog["files"]),
         "aplexerSHA256": digest(root / "python/a.exe"), "launcherSHA256": digest(root / "GatewayTray.exe")}
+    receipt["psc"] = psc_receipt
     (out / "installer-receipt.json").write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt, indent=2))
 
@@ -129,6 +163,8 @@ if __name__ == "__main__":
     parser.add_argument("--resources", required=True, help="Extracted resources.tar.gz")
     parser.add_argument("--catalog-sha256", required=True)
     parser.add_argument("--tray-launcher", required=True, help="native/launcher built with -X main.module=pocketshell.tray_bundle")
+    parser.add_argument("--psc-zip", required=True, help="Reviewed standalone psc-windows-x64 zip")
+    parser.add_argument("--psc-sha256", required=True, help="Expected SHA256 of the PSC zip")
     parser.add_argument("--makensis", required=True)
     parser.add_argument("--out", required=True)
     build(parser.parse_args())

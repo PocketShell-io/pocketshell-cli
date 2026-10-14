@@ -1,0 +1,81 @@
+name: Windows tray PSC integration
+on:
+  pull_request:
+    paths:
+      - scripts/release/build_tray_installer.py
+      - scripts/release/tray-installer.nsi
+      - tests/release/test_tray_installer.py
+      - .github/workflows/windows-tray-psc.yml
+  push:
+    branches: [feat/tray-bundles-psc]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: cli
+      - uses: actions/checkout@v4
+        with:
+          repository: PocketShell-io/pocketshell-tui-client
+          ref: 2908d22
+          path: client
+      - uses: actions/checkout@v4
+        with:
+          repository: PocketShell-io/pocketshell-core
+          ref: 07174896ce7041370bcbf4f791ec513870b9535f
+          path: pocketshell-core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.1'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: client/native/psc-security/go.mod
+          cache-dependency-path: client/native/psc-security/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.10.11'
+      - name: Build pinned PSC and validate tray package staging
+        shell: pwsh
+        run: |
+          Set-Location pocketshell-core
+          npm ci --ignore-scripts --no-audit --no-fund
+          node node_modules/typescript/bin/tsc -p tsconfig.json
+          node scripts/fix-esm-extensions.mjs
+          Set-Location ../client
+          npm ci --ignore-scripts --no-audit --no-fund
+          python scripts/build-windows-package.py
+          if ($LASTEXITCODE -ne 0) { throw 'PSC build failed' }
+          Set-Location ../cli
+          uv run --frozen --extra tray python -m pytest tests/release/test_tray_installer.py -q
+          if ($LASTEXITCODE -ne 0) { throw 'Tray package tests failed' }
+          $payload = "$env:RUNNER_TEMP\tray-payload"
+          $env:PSC_TEST_PAYLOAD = $payload
+          uv run --frozen python -c "import importlib.util, pathlib, os; s=importlib.util.spec_from_file_location('builder','scripts/release/build_tray_installer.py'); b=importlib.util.module_from_spec(s); s.loader.exec_module(b); p=next(pathlib.Path('../client/out/windows').glob('*.zip')); b.stage_psc(p,b.digest(p),pathlib.Path(os.environ['PSC_TEST_PAYLOAD'])/'psc-package')"
+          if ($LASTEXITCODE -ne 0) { throw 'PSC staging failed' }
+          # Only PSC installation is exercised here; a harmless signed fixture
+          # occupies the tray launcher path and is never launched in silent mode.
+          New-Item -ItemType Directory "$payload\runtime" -Force | Out-Null
+          Copy-Item "$env:WINDIR\System32\whoami.exe" "$payload\runtime\GatewayTray.exe"
+      - name: Compile NSIS and install PSC through the silent tray flow
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS setup failed' }
+          $payload = "$env:RUNNER_TEMP\tray-payload"
+          $exe = "$env:RUNNER_TEMP\Tray-Psc-Smoke.exe"
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" "/DPAYLOAD=$payload" "/DOUTPUT=$exe" '/DVERSION=ci-smoke' cli/scripts/release/tray-installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed' }
+          $p = Start-Process $exe -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "NSIS installation failed: $($p.ExitCode)" }
+          $prefix = "$env:LOCALAPPDATA\PocketShell\psc\0.3.1"
+          & "$prefix\psc.cmd" --version
+          if ($LASTEXITCODE -ne 0) { throw 'Tray-installed PSC failed' }
+          & "$prefix\node.exe" client/scripts/windows/smoke.mjs $prefix
+          if ($LASTEXITCODE -ne 0) { throw 'Tray-installed offline smoke failed' }
