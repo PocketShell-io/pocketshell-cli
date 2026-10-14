@@ -812,6 +812,11 @@ class WindowsApi:
         return job_verdict(caller_in_job=caller_in_job, broke_away=broke_away,
                            child_in_job=child_in_job, nearest_kill=nearest_kill)
 
+    def _spawn_desktop(self):
+        # Session 0 has the ordinary caller's invisible service station, not
+        # WinSta0. Let CreateProcess inherit that station; readiness measures it.
+        return None if self.current_session() == 0 else "WinSta0\\Default"
+
     def _spawn_measured(self, argv: list, cwd: str, env: Optional[dict], *, held_identity) -> dict:
         """Start ``argv`` directly (no shell, no window) in the caller's session,
         SUSPENDED, and MEASURE the child before resuming it (the native owner's
@@ -871,7 +876,7 @@ class WindowsApi:
         si.cb = c.sizeof(SI)
         si.dwFlags = 0x1  # STARTF_USESHOWWINDOW
         si.wShowWindow = 0
-        si.lpDesktop = "WinSta0\\Default"  # as the native 5844 launcher: the user's Default desktop
+        si.lpDesktop = self._spawn_desktop()
         pi = PI()
         broke_away = True
         ok = k.CreateProcessW(argv[0], command, None, None, False, base | 0x01000000,

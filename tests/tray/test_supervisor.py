@@ -26,6 +26,13 @@ def test_normal_cli_still_refuses_inherited_jobs():
                                 child_in_job=True, nearest_kill=True)
 
 
+@pytest.mark.parametrize("session,desktop", [(0, None), (1, "WinSta0\\Default")])
+def test_spawn_desktop_preserves_the_callers_session_context(monkeypatch, session, desktop):
+    api = WindowsApi()
+    monkeypatch.setattr(api, "current_session", lambda: session)
+    assert api._spawn_desktop() == desktop
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="native Windows job ownership")
 def test_tray_owns_and_reaps_a_verified_worker(tmp_path):
     from pocketshell.tray_supervisor import TrayWindowsApi
