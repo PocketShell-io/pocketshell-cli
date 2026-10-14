@@ -1,0 +1,112 @@
+name: Windows tray PSC integration
+on:
+  pull_request:
+    paths:
+      - scripts/release/build_tray_installer.py
+      - scripts/release/tray-installer.nsi
+      - tests/release/test_tray_installer.py
+      - .github/workflows/windows-tray-psc.yml
+  push:
+    branches: [feat/tray-bundles-psc]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: cli
+      - uses: actions/checkout@v4
+        with:
+          repository: PocketShell-io/pocketshell-tui-client
+          ref: 6e0d072cd6954ddecca2a090f368fac08e535cc8
+          path: client
+      - uses: actions/checkout@v4
+        with:
+          repository: PocketShell-io/pocketshell-core
+          ref: 07174896ce7041370bcbf4f791ec513870b9535f
+          path: pocketshell-core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.1'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: client/native/psc-security/go.mod
+          cache-dependency-path: client/native/psc-security/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.10.11'
+      - name: Build pinned PSC and validate tray package staging
+        shell: pwsh
+        run: |
+          Set-Location pocketshell-core
+          npm ci --ignore-scripts --no-audit --no-fund
+          node node_modules/typescript/bin/tsc -p tsconfig.json
+          node scripts/fix-esm-extensions.mjs
+          Set-Location ../client
+          npm ci --ignore-scripts --no-audit --no-fund
+          python scripts/build-windows-package.py
+          if ($LASTEXITCODE -ne 0) { throw 'PSC build failed' }
+          Set-Location ../cli
+          uv run --frozen --extra tray python -m pytest tests/release/test_tray_installer.py -q
+          if ($LASTEXITCODE -ne 0) { throw 'Tray package tests failed' }
+          $payload = "$env:RUNNER_TEMP\tray-payload"
+          $env:PSC_TEST_PAYLOAD = $payload
+          uv run --frozen python -c "import importlib.util, pathlib, os; s=importlib.util.spec_from_file_location('builder','scripts/release/build_tray_installer.py'); b=importlib.util.module_from_spec(s); s.loader.exec_module(b); p=next(pathlib.Path('../client/out/windows').glob('*.zip')); b.stage_psc(p,b.digest(p),pathlib.Path(os.environ['PSC_TEST_PAYLOAD'])/'psc-package')"
+          if ($LASTEXITCODE -ne 0) { throw 'PSC staging failed' }
+          # Only PSC installation is exercised here; a harmless signed fixture
+          # occupies the tray launcher path and is never launched in silent mode.
+          New-Item -ItemType Directory "$payload\runtime" -Force | Out-Null
+          Copy-Item "$env:WINDIR\System32\whoami.exe" "$payload\runtime\GatewayTray.exe"
+      - name: Compile NSIS and install PSC through the silent tray flow
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS setup failed' }
+          $payload = "$env:RUNNER_TEMP\tray-payload"
+          $exe = "$env:RUNNER_TEMP\Tray-Psc-Smoke.exe"
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" "/DPAYLOAD=$payload" "/DOUTPUT=$exe" '/DVERSION=ci-smoke' cli/scripts/release/tray-installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed' }
+          $p = Start-Process $exe -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            Get-Content "$env:LOCALAPPDATA\Programs\PocketShellGateway\psc-install.log" -ErrorAction Continue
+            throw "NSIS installation failed: $($p.ExitCode)"
+          }
+          $version = (Get-Content "$payload\psc-package\package-manifest.json" -Raw | ConvertFrom-Json).version
+          $prefix = "$env:LOCALAPPDATA\PocketShell\psc\$version"
+          & "$prefix\psc.cmd" --version
+          if ($LASTEXITCODE -ne 0) { throw 'Tray-installed PSC failed' }
+          & "$prefix\node.exe" client/scripts/windows/smoke.mjs $prefix
+          if ($LASTEXITCODE -ne 0) { throw 'Tray-installed offline smoke failed' }
+          $shortcuts = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway"
+          if (!(Test-Path "$shortcuts\PSC Terminal.lnk")) { throw 'Successful PSC install omitted its shortcut' }
+      - name: PSC failure preserves the log and completes gateway installation
+        shell: pwsh
+        run: |
+          $payload = "$env:RUNNER_TEMP\tray-payload"
+          # Deliberately fail the optional component in this fixture only.
+          Set-Content "$payload\psc-package\install.ps1" "Write-Output 'PSC failure fixture: exit 23'; exit 23" -Encoding ascii
+          $exe = "$env:RUNNER_TEMP\Tray-Psc-Failure-Smoke.exe"
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" "/DPAYLOAD=$payload" "/DOUTPUT=$exe" '/DVERSION=ci-psc-failure' cli/scripts/release/tray-installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS failure-fixture compilation failed' }
+          $install = "$env:RUNNER_TEMP\tray-psc-failure"
+          $p = Start-Process $exe -ArgumentList '/S', "/D=$install" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Optional PSC failure aborted the gateway installer: $($p.ExitCode)" }
+          if ((Get-Content "$install\psc-install.log" -Raw) -notmatch 'PSC failure fixture: exit 23') { throw 'PSC failure log was not retained' }
+          foreach ($file in @('runtime\GatewayTray.exe', 'Uninstall.exe')) {
+            if (!(Test-Path "$install\$file")) { throw "Gateway installation did not finish: $file" }
+          }
+          $shortcuts = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway"
+          if (Test-Path "$shortcuts\PSC Terminal.lnk") { throw 'Failed PSC install retained a PSC shortcut' }
+          foreach ($name in @('PocketShell Gateway', 'Gateway Setup', 'Uninstall')) {
+            if (!(Test-Path "$shortcuts\$name.lnk")) { throw "Gateway shortcut missing: $name" }
+          }
+          $startup = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run').PocketShellTray
+          if ($startup -ne "`"$install\runtime\GatewayTray.exe`"") { throw 'Gateway startup registration did not finish' }
+          $registration = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketShellGateway'
+          if ($registration.DisplayVersion -ne 'ci-psc-failure') { throw 'Gateway uninstall registration did not finish' }
