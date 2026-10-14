@@ -26,7 +26,7 @@ Section "PocketShell Gateway"
   ${EndIf}
   ExecWait '$\"$1$\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $\"$INSTDIR\psc-package\install.ps1$\"' $2
   StrCmp $2 0 psc_installed
-  MessageBox MB_ICONSTOP "PSC installation failed. Check that your profile path has no spaces and the Windows OpenSSH Client is installed. Exit code: $2"
+  MessageBox MB_ICONSTOP "PSC installation failed. Check that your profile path has no spaces and the Windows OpenSSH Client is installed. Exit code: $2" /SD IDOK
   SetErrorLevel 1
   Abort
   psc_installed:
