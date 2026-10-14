@@ -223,7 +223,13 @@ def write_private(path: Path, payload: bytes) -> None:
     path = _path(path)
     with _directory(path.parent, create=True):
         try:
-            read_private(path, max(len(payload), 1 << 20))  # refuse unsafe existing leaf
+            # Validate replacement authority, not the old payload's size. A
+            # catalog/manifest may legitimately shrink during an upgrade.
+            existing = _open(path, access=0x20080)  # READ_CONTROL | READ_ATTRIBUTES
+            try:
+                _check(existing, directory=False, private=True)
+            finally:
+                CloseHandle(existing)
         except FileNotFoundError:
             pass
         tmp = path.with_name(f".{path.name}.{secrets.token_hex(12)}.tmp")
