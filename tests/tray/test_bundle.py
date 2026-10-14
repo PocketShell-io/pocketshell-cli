@@ -17,18 +17,18 @@ def test_background_refuses_unenrolled_install(monkeypatch):
         bundle.run_background()
 
 
-def test_enrollment_config_uses_native_private_storage(monkeypatch, tmp_path):
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="native Windows ACL validation")
+def test_enrollment_config_is_protected_and_unsafe_existing_folder_is_refused(tmp_path):
     from pocketshell.gateway import service_agent_install, service_windows
-    from types import SimpleNamespace
-    made = []
-    sentinel = object()
-    monkeypatch.setattr(service_windows, "WindowsApi", lambda: sentinel)
-    def paths(api):
-        assert api is sentinel
-        return SimpleNamespace(mkdir=made.append)
-    monkeypatch.setattr(service_agent_install, "NativePaths", paths)
-    bundle.prepare_enrollment_directory(tmp_path / "enrollment")
-    assert made == [str(tmp_path / "enrollment")]
+    path = tmp_path / "enrollment"
+    bundle.prepare_enrollment_directory(path)
+    api = service_windows.WindowsApi()
+    service_agent_install.NativePaths(api).directory(str(path), api.current_sid())
+    unsafe = tmp_path / "existing"
+    unsafe.mkdir()
+    with pytest.raises(OSError):
+        bundle.prepare_enrollment_directory(unsafe)
+    assert unsafe.is_dir()
 
 
 def test_login_handoff_does_not_wait_on_interactive_owner(tmp_path, monkeypatch):
