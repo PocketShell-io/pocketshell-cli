@@ -32,12 +32,13 @@ set_defaultshell()
     return 0;
 }'''
 
-PATH = r'''    /* PocketShell private release: never import registry/PATH dependencies. */
+PATH = r'''    /* PocketShell private release: managed tools precede every other directory.
+     * Never import user or registry PATH dependencies. */
     wchar_t candidate[PATH_MAX], root[PATH_MAX], system[MAX_PATH], path[PATH_MAX * 5];
     if (swprintf_s(candidate, _countof(candidate), L"%s\\..\\..", __wprogdir) < 0 ||
         _wfullpath(root, candidate, _countof(root)) == NULL ||
         !GetSystemDirectoryW(system, _countof(system)) ||
-        swprintf_s(path, _countof(path), L"%s;%s\\python;%s\\endpoint\\shell\\usr\\bin;%s\\endpoint\\shell\\mingw64\\bin;%s",
+        swprintf_s(path, _countof(path), L"%s\\python;%s;%s\\endpoint\\shell\\usr\\bin;%s\\endpoint\\shell\\mingw64\\bin;%s",
                    root, root, root, root, system) < 0 ||
         _wputenv_s(L"PATH", path) != 0 || !SetEnvironmentVariableW(L"PATH", path))
         fatal("Cannot construct the PocketShell private runtime PATH");
