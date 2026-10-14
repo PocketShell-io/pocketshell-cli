@@ -86,8 +86,10 @@ def test_the_null_path_overlay_guards_every_path_value_use(bb):
 
 def test_managed_session_path_prefers_tools_and_excludes_user_path(bb):
     from private_shell_overlay import patch_session
-    source = '\t/* PATH is a special case. */\n L"Environment", L"PATH";\n}\n'
+    source = ('strncmp(env_name, "PATH=", strlen("PATH="));\n'
+              '\t/* PATH is a special case. */\n L"Environment", L"PATH";\n}\n')
     patched = patch_session(source)
     assert 'L"%s\\\\python;%s;%s\\\\endpoint\\\\shell\\\\usr\\\\bin;' in patched
     assert 'L"Environment", L"PATH"' not in patched
     assert 'GetSystemDirectoryW' in patched
+    assert '_strnicmp(env_name, "PATH=", strlen("PATH="))' in patched
