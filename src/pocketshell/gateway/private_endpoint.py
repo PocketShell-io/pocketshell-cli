@@ -6,6 +6,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import tempfile
 
 
 class EndpointError(ValueError):
@@ -47,7 +48,7 @@ def init() -> list[str]:
             raise EndpointError("host public key exists without its private key; refusing replacement")
         try:
             subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
-                           check=True, capture_output=True)
+                           check=True, capture_output=True, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError) as exc:
             raise EndpointError("Unable to generate private endpoint host key with ssh-keygen") from exc
     _private(key, 0o600)
@@ -71,12 +72,33 @@ def init() -> list[str]:
         "PasswordAuthentication no", "KbdInteractiveAuthentication no", "PubkeyAuthentication yes",
         "PermitRootLogin no", "UsePAM no", "StrictModes yes", "PidFile none",
         "Subsystem sftp internal-sftp", "LogLevel ERROR", f"AllowUsers {user}",
-        "DisableForwarding yes", "",
+        "AllowTcpForwarding local", "GatewayPorts no", "X11Forwarding no",
+        "AllowAgentForwarding no", "AllowStreamLocalForwarding no", "PermitTunnel no", "",
     ])
-    # Preserve an existing config: init is idempotent and never replaces operator policy.
+    # Upgrade only the byte-identical former generated policy. User edits stay intact.
+    legacy = content.replace(
+        "AllowTcpForwarding local\nGatewayPorts no\nX11Forwarding no\n"
+        "AllowAgentForwarding no\nAllowStreamLocalForwarding no\nPermitTunnel no\n",
+        "DisableForwarding yes\n",
+    )
     if not config.exists():
         fd = os.open(config, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(content)
     _private(config, 0o600)
+    if config.read_bytes() == legacy.encode("utf-8"):
+        # Atomic replacement retains the owner-private mode and never leaves a
+        # partially rewritten config visible to a new sshd process.
+        name = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
+                                             prefix=".sshd_config-", delete=False) as f:
+                name = f.name
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(name, config)
+        finally:
+            if name is not None and os.path.exists(name):
+                os.unlink(name)
     return [sshd, "-i", "-f", str(config)]

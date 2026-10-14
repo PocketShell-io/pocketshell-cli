@@ -34,9 +34,12 @@ def test_init_private_policy_and_idempotent_host_key(endpoint_home):
     text = config.read_text()
     for rule in ["PasswordAuthentication no", "KbdInteractiveAuthentication no", "PubkeyAuthentication yes",
                  "PermitRootLogin no", "UsePAM no", "StrictModes yes", "PidFile none",
-                 "Subsystem sftp internal-sftp", "LogLevel ERROR", "AllowUsers "]:
+                 "Subsystem sftp internal-sftp", "LogLevel ERROR", "AllowUsers ",
+                 "AllowTcpForwarding local", "GatewayPorts no", "X11Forwarding no",
+                 "AllowAgentForwarding no", "AllowStreamLocalForwarding no", "PermitTunnel no"]:
         assert rule in text
     assert 'Port ' not in text and 'ListenAddress ' not in text
+    assert 'DisableForwarding yes' not in text
     assert str(endpoint_home / ".ssh/authorized_keys") in text
     assert private_endpoint.init() == argv
     assert (directory / "ssh_host_ed25519_key.pub").read_text() == public
@@ -127,3 +130,34 @@ def test_allowusers_refuses_pattern_names(endpoint_home, monkeypatch):
     with pytest.raises(private_endpoint.EndpointError, match="unsupported account name"):
         private_endpoint.init()
     assert not (private_endpoint.default_dir() / "sshd_config").exists()
+
+
+def test_init_upgrades_only_exact_previous_generated_config(endpoint_home):
+    argv = private_endpoint.init()
+    config = Path(argv[3])
+    current = config.read_text()
+    forwarding = ("AllowTcpForwarding local\nGatewayPorts no\nX11Forwarding no\n"
+                  "AllowAgentForwarding no\nAllowStreamLocalForwarding no\nPermitTunnel no\n")
+    legacy = current.replace(forwarding, "DisableForwarding yes\n")
+    public_path = config.parent / "ssh_host_ed25519_key.pub"
+    public = public_path.read_text()
+    config.write_text(legacy)
+    assert private_endpoint.init() == argv
+    assert config.read_text() == current
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert public_path.read_text() == public
+    custom = legacy + "# operator customization\n"
+    config.write_text(custom)
+    private_endpoint.init()
+    assert config.read_text() == custom
+
+
+def test_keygen_never_reads_enrollment_stdin(endpoint_home, monkeypatch):
+    real_run = private_endpoint.subprocess.run
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(kwargs["stdin"])
+        return real_run(argv, **kwargs)
+    monkeypatch.setattr(private_endpoint.subprocess, "run", run)
+    private_endpoint.init()
+    assert calls == [private_endpoint.subprocess.DEVNULL]

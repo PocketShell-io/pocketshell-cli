@@ -123,13 +123,16 @@ Endpoint files live under `~/.local/state/pocketshell/endpoint/` on Linux or
 `~/Library/Application Support/PocketShell/endpoint/` on macOS. The directory
 is mode 0700. `ssh-keygen -t ed25519 -N ''` creates a dedicated host key, and
 the private key and config are mode 0600. Repeating init preserves the key
-and existing config. Enrollment and show read only its `.pub` for the pin.
+and custom config. An exact earlier generated config is atomically upgraded
+to permit local TCP forwarding. Enrollment and show read only its `.pub` for the pin.
 
 The generated config permits only the current user and public-key login:
 `PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
 `PubkeyAuthentication yes`, `PermitRootLogin no`, `UsePAM no`, `StrictModes yes`,
 `PidFile none`, `Subsystem sftp internal-sftp`, and `LogLevel ERROR`. It also
-uses `DisableForwarding yes`. Authorize your client public key in either your
+allows local TCP forwarding for browser port forwards (`AllowTcpForwarding local`),
+with `GatewayPorts no`, `X11Forwarding no`, `AllowAgentForwarding no`,
+`AllowStreamLocalForwarding no`, and `PermitTunnel no`. Authorize your client key in your
 `~/.ssh/authorized_keys` or the endpoint's `authorized_keys` (mode 0600).
 The gateway never receives client SSH private keys. The separate device
 identity key authenticates the tunnel; the SSH host key authenticates your
