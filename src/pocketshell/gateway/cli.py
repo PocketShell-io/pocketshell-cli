@@ -485,9 +485,102 @@ def show(ctx: click.Context, config_dir: Optional[str], host_key: bool) -> None:
     _run_helper(argv, ctx)
 
 
+GATEWAY_AUTH_POLICIES = ("host", "managed", "both")
+_CONFIG_DIR_HELP = "Agent state directory (default: ${XDG_CONFIG_HOME:-$HOME/.config}/pocketshell-link)."
+
+
+def build_gateway_auth_argv(
+    action: str,
+    *,
+    config_dir: Optional[str] = None,
+    policy: Optional[str] = None,
+    keys_stdin: bool = False,
+    as_json: bool = False,
+) -> list[str]:
+    """Helper argv for ``pocketshell-link gateway-auth show|set``.
+
+    Like :func:`gateway_helper.build_helper_argv`, only passed options are
+    forwarded and values stay single argv elements; the helper owns the
+    defaults and validates the policy and keys itself.
+    """
+    if action not in ("show", "set"):
+        raise ValueError(f"unsupported gateway-auth action: {action!r}")
+    if action == "show" and (policy is not None or keys_stdin):
+        raise ValueError("--policy/--keys-stdin are set-only")
+    argv = ["gateway-auth", action]
+    if policy is not None:
+        argv.extend(["--policy", policy])
+    if keys_stdin:
+        argv.append("--keys-stdin")
+    if as_json:
+        argv.append("--json")
+    if config_dir is not None:
+        argv.extend(["--config-dir", config_dir])
+    return argv
+
+
+@click.group(
+    "auth",
+    help=(
+        "Which authorized keys gateway SSH accepts on this host: `host` "
+        "(~/.ssh/authorized_keys), `managed` (PocketShell vault public keys) "
+        "or `both`. Without a policy the private endpoint config decides, "
+        "as before. Changes apply to the next connection. Run it on the host, "
+        "or over an SSH session you already have; the gateway never relays it."
+    ),
+)
+def gateway_auth_group() -> None:
+    """Per-host gateway auth policy (wraps `pocketshell-link gateway-auth`)."""
+
+
+@gateway_auth_group.command("show")
+@click.option("--json", "as_json", is_flag=True, help="One JSON line: policy, source, endpoint, managed key fingerprints.")
+@click.option("--config-dir", default=None, metavar="DIR", help=_CONFIG_DIR_HELP)
+@click.pass_context
+def gateway_auth_show(ctx: click.Context, as_json: bool, config_dir: Optional[str]) -> None:
+    """Print the policy and the managed key fingerprints (never key bytes)."""
+    _run_helper(build_gateway_auth_argv("show", config_dir=config_dir, as_json=as_json), ctx)
+
+
+@gateway_auth_group.command("set")
+@click.option("--policy", type=click.Choice(GATEWAY_AUTH_POLICIES), default=None, help="New policy (default: keep current).")
+@click.option(
+    "--keys-stdin",
+    is_flag=True,
+    help=(
+        "Replace the managed keys with authorized_keys PUBLIC key lines read "
+        "from stdin (empty input clears them). Options, certificates and "
+        "private keys are refused."
+    ),
+)
+@click.option("--json", "as_json", is_flag=True, help="Print the resulting state as one JSON line.")
+@click.option("--config-dir", default=None, metavar="DIR", help=_CONFIG_DIR_HELP)
+@click.pass_context
+def gateway_auth_set(
+    ctx: click.Context,
+    policy: Optional[str],
+    keys_stdin: bool,
+    as_json: bool,
+    config_dir: Optional[str],
+) -> None:
+    """Set the policy and/or the managed public keys.
+
+        pocketshell gateway auth set --policy managed --keys-stdin < vault-keys.pub
+    """
+    if policy is None and not keys_stdin:
+        raise click.UsageError("pass --policy and/or --keys-stdin")
+    _run_helper(
+        build_gateway_auth_argv(
+            "set", config_dir=config_dir, policy=policy, keys_stdin=keys_stdin, as_json=as_json
+        ),
+        ctx,
+    )
+
+
 gateway_group.add_command(enroll)
 gateway_group.add_command(run)
 gateway_group.add_command(show)
+gateway_group.add_command(gateway_auth_group)
 gateway_group.add_command(gateway_service.service_group)
 
 
