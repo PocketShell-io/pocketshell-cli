@@ -265,6 +265,8 @@ class GatewayAuthClient:
             return GatewayAuthState.unavailable(str(exc))
         except (OSError, subprocess.TimeoutExpired) as exc:
             return GatewayAuthState.unavailable(f"cannot run gateway auth: {type(exc).__name__}")
+        except Exception as exc:  # noqa: BLE001 - a status read must never take the tray down
+            return GatewayAuthState.unavailable(f"gateway auth failed: {type(exc).__name__}")
 
     def set_policy(self, current: GatewayAuthState, policy: str) -> GatewayAuthState:
         refusal = policy_refusal(current, policy)
@@ -273,6 +275,10 @@ class GatewayAuthClient:
         return self._set(["--policy", policy])
 
     def replace_managed_keys(self, current: GatewayAuthState, lines: Sequence[str]) -> GatewayAuthState:
+        # An unreadable state reports policy "host" by default; acting on it
+        # could empty the keys of a host that is really vault-only.
+        if not current.available:
+            raise GatewayAuthError(f"The current key policy could not be read: {current.error}")
         if current.host_only:
             raise GatewayAuthError(WINDOWS_HOST_ONLY)
         if current.policy == "managed" and not lines:

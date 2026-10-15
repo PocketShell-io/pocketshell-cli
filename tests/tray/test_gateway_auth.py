@@ -340,3 +340,28 @@ def test_policy_refresh_failure_never_breaks_status_polling():
     app.status_client.fetch_status.return_value = TrayModel(state="online", summary="ok")
     assert app.poll_once().state == "online"
     assert app.gateway_auth.error == "refresh failed"
+
+
+def test_show_survives_any_runner_exception(monkeypatch):
+    client = ga.GatewayAuthClient()
+    def boom(args, stdin=b""):
+        raise RuntimeError("Run Gateway Setup before starting this gateway")
+    monkeypatch.setattr(client, "_run", boom)
+    shown = client.show()
+    assert not shown.available and "RuntimeError" in shown.error
+
+
+def test_replace_refuses_when_state_is_unavailable(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ga.subprocess, "run", fake_run(calls=calls))
+    with pytest.raises(ga.GatewayAuthError, match="could not be read"):
+        ga.GatewayAuthClient().replace_managed_keys(ga.GatewayAuthState.unavailable("timeout"), [])
+    assert calls == []
+
+
+def test_clear_refuses_when_state_is_unavailable():
+    dialogs = FakeDialogs()
+    app, client = make_app(ga.GatewayAuthState.unavailable("timeout"), dialogs)
+    assert app.do_clear_managed_keys() is False
+    assert dialogs.questions == [] and "could not be read" in dialogs.infos[0]
+    client.replace_managed_keys.assert_not_called()

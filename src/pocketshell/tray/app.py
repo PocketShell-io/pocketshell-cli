@@ -265,6 +265,9 @@ class TrayApp:
 
     def do_clear_managed_keys(self) -> bool:
         current = self._current_gateway_auth()
+        if not current.available:
+            self.dialogs.info(f"The current key policy could not be read: {current.error}")
+            return False
         if not self.dialogs.confirm("Remove every vault public key from this host? "
                                     "Vault keys will no longer log in through the gateway."):
             return False
