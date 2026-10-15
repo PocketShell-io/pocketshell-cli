@@ -341,8 +341,11 @@ Refusals before anything is registered:
 
 - **Helper trust.** The task runs the exe directly, so its sha256 must be on
   the reviewed allow-list in `service_windows.ALLOWED_HELPER_SHA256` —
-  today exactly `f9582de6a3f635ec70e4daaf755479788f788d8d493c3ed1fd58812f555dabe1`
-  (private qualified build of pocketshell-gateway cd7c6f6). The historical
+  today `5672354b647d2ffddf7e69f753b90f1a031d9af7e57ca6d0c3ab002db28cedd8`
+  (reproducible build of pocketshell-gateway 70f5a4b, the first with
+  `gateway-auth`) and `f9582de6a3f635ec70e4daaf755479788f788d8d493c3ed1fd58812f555dabe1`
+  (private qualified build of cd7c6f6, kept so enrolled installs can be
+  repaired onto the newer build). The historical
   8cbeb8f (`57f3a86e…`) and 771c9e1 (`f6e357d8…`) builds are refused by
   name. Adding a build is a reviewed source change, never a flag or env var.
   It must also answer `version --json` with protocol `pocketshell-tunnel-v1`.

@@ -36,6 +36,7 @@ POSIX = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="systemd
 LINUX = POSIX
 
 QUALIFIED = "f9582de6a3f635ec70e4daaf755479788f788d8d493c3ed1fd58812f555dabe1"
+GATEWAY_AUTH_70F = "5672354b647d2ffddf7e69f753b90f1a031d9af7e57ca6d0c3ab002db28cedd8"
 HISTORICAL_8CB = "57f3a86e2166b079e99479a985fd8cbc56a91260cf3d8dee76c446e60189ac63"
 HISTORICAL_771 = "f6e357d8b43369b9f9de222fa9603ce523b37959b38cc4ca8bb04d68fa7c1c37"
 USER_SID = "S-1-5-21-1846869698-1433458354-420588588-1001"
@@ -502,9 +503,22 @@ def test_quote_arg_root_doubles_trailing_backslash():
 # --- Windows: digest allow-list ------------------------------------------------------
 
 
-def test_allow_list_is_exactly_the_qualified_cd7_build():
-    assert win.ALLOWED_HELPER_SHA256 == frozenset({QUALIFIED})
+def test_allow_list_is_exactly_the_cd7_and_70f5a4b_builds():
+    # cd7 stays so enrolled installs can be validated and repaired onto 70f5a4b.
+    assert win.ALLOWED_HELPER_SHA256 == frozenset({QUALIFIED, GATEWAY_AUTH_70F})
     win.check_digest(QUALIFIED)
+    win.check_digest(GATEWAY_AUTH_70F)
+
+
+def test_wrapper_pin_and_release_input_are_the_70f5a4b_build():
+    import hashlib
+    from pathlib import Path
+
+    from pocketshell.gateway import helper
+
+    assert helper.WINDOWS_HELPER_SHA256 == GATEWAY_AUTH_70F
+    exe = Path(__file__).resolve().parents[2] / "release/inputs/pocketshell-link-70f5a4b/pocketshell-link-windows-amd64.exe"
+    assert hashlib.sha256(exe.read_bytes()).hexdigest() == GATEWAY_AUTH_70F
 
 
 @pytest.mark.parametrize("digest, build", [(HISTORICAL_8CB, "8cbeb8f"), (HISTORICAL_771, "771c9e1")])

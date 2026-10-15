@@ -196,11 +196,10 @@ state, the helper's `version`/`show`) uses `CREATE_NO_WINDOW`. Verified on
 the windows-latest CI runner against the real Task Scheduler with a fake
 helper (`tests/gateway/test_windows_gateway_service_native.py`).
 
-The CLI's own `gateway run/show/enroll` wrappers still pin the historical
-helper digest in the fleet-owned `helper.py`; the service path has its own
-allow-list (`service_windows.ALLOWED_HELPER_SHA256`, today only the qualified
-cd7c6f6 build `f9582de6…dabe1`). Unifying the two is a pending change for
-that file's owner.
+The CLI's own `gateway run/show/enroll/auth` wrappers pin one digest in
+`helper.py` (the 70f5a4b build `5672354b…cedd8`); the service path has its own
+allow-list (`service_windows.ALLOWED_HELPER_SHA256`: that build plus the
+qualified cd7c6f6 build `f9582de6…dabe1`, kept for repairing enrolled installs).
 
 ## Pending change in a fleet-owned file
 

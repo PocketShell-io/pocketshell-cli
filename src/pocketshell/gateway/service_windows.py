@@ -76,6 +76,14 @@ START_CONFIRM_SECONDS = 15.0
 #   f9582de6…dabe1  pocketshell-link-windows-amd64.exe, private qualified
 #                   build of pocketshell-gateway cd7c6f6a0c7b (tree 08344a90),
 #                   Go 1.27.2, 8488960 bytes (fleet Revision 3, 2026-10-09).
+#                   Kept so enrolled installs can still be validated and
+#                   repaired onto the newer build.
+#   5672354b…cedd8  pocketshell-link-windows-amd64.exe, build of
+#                   pocketshell-gateway 70f5a4b9e8ee (per-host gateway-auth),
+#                   Go 1.27.2, 8645120 bytes, CGO_ENABLED=0 -trimpath
+#                   -ldflags "-s -w -X main.version=git-70f5a4b9e8ee -X
+#                   main.commit=70f5a4b9…"; reproduced byte for byte by two
+#                   independent builds (key vault W5/W8, 2026-10-15).
 #
 # Deliberately ABSENT (historical, must be refused): 8cbeb8f / 57f3a86e…,
 # 771c9e1 / f6e357d8…. A signed release manifest replaces this list once
@@ -84,6 +92,7 @@ START_CONFIRM_SECONDS = 15.0
 ALLOWED_HELPER_SHA256 = frozenset(
     {
         "f9582de6a3f635ec70e4daaf755479788f788d8d493c3ed1fd58812f555dabe1",
+        "5672354b647d2ffddf7e69f753b90f1a031d9af7e57ca6d0c3ab002db28cedd8",
     }
 )
 HISTORICAL_HELPER_SHA256 = {

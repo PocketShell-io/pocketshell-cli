@@ -14,7 +14,7 @@ are the same on every build host and at every install location:
     <release>/guardian/guardian.py       role guardian    (6cf7ae85…)
     <release>/guardian/native_api.py     role native-api  (cab601e2…)
     <release>/guardian/policy.py         role policy      (e92bbe02…)
-    <release>/bin/pocketshell-link.exe   role helper      (the reviewed helper; f9582de6… for cd7)
+    <release>/bin/pocketshell-link.exe   role helper      (the reviewed helper; 5672354b… for 70f5a4b)
 
 Usage:
     build_closure.py --out DIR --helper EXE --helper-sha256 HEX --helper-version V \

@@ -77,9 +77,11 @@ from typing import NoReturn, Optional
 
 HELPER_NAME = "pocketshell-link"
 HELPER_ENV_VAR = "POCKETSHELL_GATEWAY_HELPER"
-# Private Windows rollout: only the independently reviewed 8cbeb8f build.
-# This is an artifact trust gate, separate from the protocol compatibility gate.
-WINDOWS_HELPER_SHA256 = "57f3a86e2166b079e99479a985fd8cbc56a91260cf3d8dee76c446e60189ac63"
+# Private Windows rollout: the reproducible build of pocketshell-gateway
+# 70f5a4b (first with `gateway-auth`), also on service_windows'
+# ALLOWED_HELPER_SHA256. This is an artifact trust gate, separate from the
+# protocol compatibility gate.
+WINDOWS_HELPER_SHA256 = "5672354b647d2ffddf7e69f753b90f1a031d9af7e57ca6d0c3ab002db28cedd8"
 
 # The installed-wheel route: the delivery pipeline packages the built
 # helper as platform wheels carrying ONLY the binary at this in-package

@@ -2,8 +2,8 @@
 
 Account/gateway on Windows requires the explicitly pinned private native
 `pocketshell-link` build from gateway source
-8cbeb8f9593d37bab410e24edc1aa321397a4c3c, SHA256
-57f3a86e2166b079e99479a985fd8cbc56a91260cf3d8dee76c446e60189ac63.
+70f5a4b9e8ee7461a7eedd8ebcfa18aefab90b9e, SHA256
+5672354b647d2ffddf7e69f753b90f1a031d9af7e57ca6d0c3ab002db28cedd8.
 Set `POCKETSHELL_GATEWAY_HELPER` to its absolute .exe path in the protected
 private runtime. Windows does not discover a helper through PATH or public
 platform wheels. The digest gate establishes this reviewed artifact; the
