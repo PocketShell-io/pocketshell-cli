@@ -298,6 +298,7 @@ def run_tray(root):
             self.guard = threading.Lock()
             self.last_retry = 0.0
             self.first_fetch = True
+            self.recovery_error = None
 
         def fetch_status(self, timeout=120):
             if self.first_fetch:
@@ -315,8 +316,15 @@ def run_tray(root):
                                 agent("stop", timeout=90)
                             if enabled():
                                 start_gateway()
-                    except (RuntimeError, subprocess.TimeoutExpired):
+                        self.recovery_error = None
+                    except Exception as exc:
+                        self.recovery_error = str(exc)
                         logging.exception("Gateway recovery refused; will retry")
+                if self.recovery_error and enabled():
+                    from pocketshell.tray.model import TrayModel
+                    return TrayModel.from_error(
+                        f"Gateway could not start: {self.recovery_error[:250]}. "
+                        "Retrying every 30 seconds. Run Gateway Setup to repair; Open Logs for details.")
                 return super().fetch_status(timeout=timeout)
 
         def start_gateway(self, timeout=120):
@@ -396,8 +404,22 @@ def main():
         authority = home() / "managed-runtime/authority.json"
         if authority.exists():
             installed = installed_root(json.loads(authority.read_text()))
+            # The installer launcher must upgrade BEFORE redirecting into the
+            # previous release. Otherwise reinstalling can never repair it.
+            catalog = root.parent / "host-runtime-catalog.json"
+            if catalog.exists() and root.resolve() != installed.resolve():
+                staged = json.loads(catalog.read_text())
+                receipt = json.loads(authority.read_text())
+                from pocketshell.gateway import service_user_agent
+                pending = service_user_agent._read_private(service_user_agent._path("tray-upgrade.json"))
+                if receipt["release"] != staged["release"] or pending is not None:
+                    from pocketshell.tray_repair import repair
+                    (home() / "tray-exit").touch()
+                    wait_for_tray_exit()
+                    installed = installed_root(repair(root))
             if root.resolve() != installed.resolve():
-                subprocess.Popen([str(installed / "GatewayTray.exe"), *sys.argv[1:]], creationflags=0x08000000)
+                args = [a for a in sys.argv[1:] if a != "--repair"]
+                subprocess.Popen([str(installed / "GatewayTray.exe"), *args], creationflags=0x08000000)
                 return
         if "--background" in sys.argv:
             run_background()
@@ -418,6 +440,18 @@ def main():
     finally:
         from pocketshell.tray_supervisor import close
         close()
+
+
+def wait_for_tray_exit():
+    from pocketshell.tray.single_instance import SingleInstance
+    instance = SingleInstance()
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        if instance.acquire():
+            instance.release()
+            return
+        time.sleep(0.5)
+    raise RuntimeError("The previous tray is busy; wait for it to close and run Gateway Setup again")
 
 
 def run_background():

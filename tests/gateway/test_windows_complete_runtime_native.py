@@ -49,7 +49,7 @@ pytestmark = pytest.mark.skipif(
 HARNESS = Path(__file__).parent / "agent_harness.py"
 SSH_DIR = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "OpenSSH"
 CMD = str(Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "cmd.exe")  # CreateProcessAsUser: no search
-TRIO = ["e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
+TRIO = ["cb863ab6d47e0fd7d0342edb5bfac4349685c7b1452f3f53cc7130faca97ee62",
         "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
         "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce"]
 
@@ -117,6 +117,13 @@ def test_new_machine_complete_runtime(closure, tmp_path):
 
     # 2. pre-enrollment bind + endpoint-only start (the real guardian e862645d + owned sshd)
     authority = str(user_data / "managed-runtime" / "authority.json")
+    # Model setup-time measurements from before a Windows update. Do not
+    # mutate OS files: real bind/start must ignore these historical hashes.
+    historical = json.loads(Path(authority).read_text(encoding="utf-8"))
+    for ref in historical["endpoint"]["systemReferences"]:
+        ref["sha256"] = "0" * 64
+    from pocketshell.windows_security import write_private
+    write_private(Path(authority), json.dumps(historical).encode())
     code, data = agent("bind", "--manifest", endpoint["manifest"], "--authority", authority)
     assert code == 0, data
     # DIAGNOSTIC PHASE ONLY (never an assertion, NOT a root-cause analysis): the
@@ -124,6 +131,8 @@ def test_new_machine_complete_runtime(closure, tmp_path):
     # directory -- NOT the guardian's closed manifest environment/root/desktop
     manifest0 = json.loads(Path(endpoint["manifest"]).read_text(encoding="utf-8"))
     pins0 = {k.casefold(): v for k, v in manifest0["pins"].items()}
+    from pocketshell.gateway.service_endpoint import is_servicing_image
+    assert not any(is_servicing_image(p) for p in pins0), "Windows Update must not invalidate startup"
     # the guardian's exact daemon launch (guardian.py: start_owned(daemon, ['-D', '-f', config], private
     # desktop, owned job)): image, its pinned sha256 and argv are fixed by the manifest
     print("DAEMON LAUNCH SPEC:", json.dumps({"image": manifest0["daemon"],

@@ -91,6 +91,39 @@ def test_status_failure_returns_json_data_without_a_modal(monkeypatch):
     assert bundle.status_document()["errors"] == ["agent busy"]
 
 
+def test_login_start_failure_is_visible_and_recovers_on_retry(tmp_path, monkeypatch):
+    from pocketshell.tray.app import TrayApp
+    from pocketshell.tray.model import TrayModel
+    from pocketshell.tray.status_client import GatewayStatusClient
+    monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(bundle, "observe_agent", lambda: {"state": "stopped"})
+    monkeypatch.setattr(bundle, "agent", lambda *a, **kw: {})
+    clock = [100.0]
+    monkeypatch.setattr(bundle.time, "monotonic", lambda: clock[0])
+    starts = []
+    def start():
+        starts.append(True)
+        if len(starts) == 1:
+            raise RuntimeError("authority-invalid: bundled file changed")
+    monkeypatch.setattr(bundle, "start_gateway", start)
+    monkeypatch.setattr(GatewayStatusClient, "fetch_status", lambda *a, **kw: TrayModel(state="online"))
+    def run(app):
+        client = app.status_client
+        assert "Starting gateway" in client.fetch_status().summary
+        failed = client.fetch_status()
+        assert failed.state == "error" and "authority-invalid" in failed.summary
+        assert "Gateway Setup" in failed.summary
+        clock[0] += 5
+        assert client.fetch_status().state == "error"
+        assert len(starts) == 1
+        clock[0] += 30
+        assert client.fetch_status().state == "online"
+        assert len(starts) == 2
+    monkeypatch.setattr(TrayApp, "run", run)
+    bundle.run_tray(tmp_path)
+
+
 def test_tray_cannot_adopt_another_installations_binding(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, "home", lambda: tmp_path)
     with pytest.raises(RuntimeError, match="another installation"):

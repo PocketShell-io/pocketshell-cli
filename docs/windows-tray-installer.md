@@ -58,6 +58,37 @@ its job and starts the endpoint in the user's interactive session. Deliberate
 Stop and uninstall also stop the background owner. Setup/enrollment must be
 completed first; background startup never signs in or adopts another binding.
 
+## Repair an existing enrolled installation after Windows Update
+
+Install v0.5.9 or later as the **same Windows user**. Gateway Setup validates
+the previous bundled closure, stops its owned workers, and upgrades the runtime
+before redirecting the launcher. It keeps the device enrollment, host key,
+authorized client keys and session directories. No new browser approval or
+client host-key pin is needed. Interrupted repair resumes from its private
+`tray-upgrade.json` journal on the next Gateway Setup run.
+
+After extracting/installing the new EXE, the equivalent per-user command is:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\PocketShellGateway\runtime\python\python.exe" -I -B -m pocketshell.tray_bundle --repair
+```
+
+Use the **new staged runtime**, not an older `managed-runtime\releases` Python.
+The old v0.5.8 installation has no safe general-purpose re-anchor command:
+`agent bind` alone still checks the stale OS hashes. Do not edit receipt hashes
+by hand or delete the authority, binding, keys or enrollment. Reinstalling this
+release performs the validated repair instead.
+
+New manifests hash only the bundled closure and generated configuration.
+`cmd.exe` and `conhost.exe` use fixed `C:\Windows\System32` paths, checked
+against reparse points and user/foreign write authority, including system-owned
+file ACLs and the allowed Windows servicing hard links. Their old receipt
+hashes are historical measurements, not integrity pins. A Windows update can
+therefore replace these OS files without invalidating startup. Bundled-file
+changes still refuse startup. The tray shows the failure in its error icon,
+tooltip and notification, includes the Gateway Setup/Open Logs action, and
+retries enabled gateways every 30 seconds. A deliberate Stop remains stopped.
+
 ## Build and check
 
 Start from a reviewed **catalog-v3 resources archive** produced by

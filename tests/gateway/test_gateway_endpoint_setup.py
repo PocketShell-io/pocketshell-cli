@@ -176,7 +176,7 @@ def test_the_production_trio_is_compiled_generically():
     import importlib
 
     fresh = importlib.reload(importlib.import_module("pocketshell.gateway.service_endpoint"))
-    assert fresh.ALLOWED_GUARDIAN_SOURCES == frozenset({TRIO})
+    assert fresh.ALLOWED_GUARDIAN_SOURCES == frozenset({TRIO, (fresh.SERVICING_GUARDIAN_SHA256, *TRIO[1:])})
     assert fresh.ALLOWED_ENDPOINT_MANIFEST_SHA256 == frozenset()  # NO per-host compiled digest
 
 
@@ -448,17 +448,15 @@ def test_a_manifest_missing_any_startup_member_refuses(drop):
         ep.check_trust_authority(m, r, file_sha256=digest, closure=_closure(host))
 
 
-def test_a_wrong_system_role_hash_refuses():
+def test_windows_update_does_not_invalidate_legacy_authority():
     host = Host()
     _paths, receipt, e, data, digest = _installed(host)
-    conhost = ntpath.normcase("C:\\Windows\\System32\\conhost.exe")
-
     def changed(p):
-        return "e" * 64 if ntpath.normcase(p) == conhost else digest(p)
-
-    with pytest.raises(ep.ServiceError, match="does not match"):
-        ep.check_trust_authority(ep.parse_manifest(data, e["manifest"]), receipt, file_sha256=changed,
-                                 closure=_closure(host))
+        if ep.is_servicing_image(p):
+            pytest.fail("OS binaries must never be compared to setup-time digests")
+        return digest(p)
+    ep.check_trust_authority(ep.parse_manifest(data, e["manifest"]), receipt,
+                             file_sha256=changed, closure=_closure(host))
 
 
 def test_a_non_system_dir_conhost_refuses():
@@ -936,3 +934,16 @@ def test_an_interrupted_generated_install_leaves_no_authority_and_a_rerun_refuse
     with pytest.raises(inst.InstallError) as err:
         install_new(host, paths)  # the fresh key is never silently regenerated
     assert err.value.code == "install-exists" and _snapshot(paths) == before
+
+
+def test_servicing_guardian_manifest_pins_bundled_files_only(monkeypatch):
+    host = Host()
+    files = endpoint_files()
+    monkeypatch.setattr(ep, "SERVICING_GUARDIAN_SHA256", sha(files["guardian/guardian.py"][0]))
+    paths = staged(host, files)
+    receipt = install(host, paths)
+    m = ep.parse_manifest(paths.files[paths.key(receipt["endpoint"]["manifest"])][1], receipt["endpoint"]["manifest"])
+    assert not any(ep.is_servicing_image(p) for p in m.pins)
+    ep.check_trust_authority(m, receipt, file_sha256=lambda p: _disk(paths, p), closure=_closure(host))
+    system = [row for row in ep.authority_plan(m) if ep.is_servicing_image(row[0])]
+    assert len(system) == 2 and all(row[4] for row in system)

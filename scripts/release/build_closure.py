@@ -55,7 +55,7 @@ GUARDIAN_PINS = {  # the reviewed 6cf7ae85 guardian source triple
     "policy.py": "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
 }
 GUARDIAN3_PINS = {  # the e862645d successor (agreement §16.14): the generic catalog v3 trio
-    "guardian.py": "e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
+    "guardian.py": "cb863ab6d47e0fd7d0342edb5bfac4349685c7b1452f3f53cc7130faca97ee62",
     "native_api.py": "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
     "policy.py": "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
 }
@@ -445,7 +445,7 @@ def main() -> int:
     if args.v3 and not (args.backend_msys and args.aplexer_zip):
         raise SystemExit("catalog v3 needs --backend-openssh, --backend-msys and --aplexer-zip")
     args.guardian_dir = args.guardian_dir or str(REPO / "release" / "inputs" /
-                                                 ("guardian-e862645d" if args.v3 else "guardian-6cf7ae85"))
+                                                 ("guardian-servicing" if args.v3 else "guardian-6cf7ae85"))
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     if sha256(Path(args.helper)) != args.helper_sha256:

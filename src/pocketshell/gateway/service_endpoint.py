@@ -63,8 +63,14 @@ ALLOWED_ENDPOINT_MANIFEST_SHA256: frozenset = frozenset()
 # (check_trust_authority), never by a compiled per-manifest digest.
 # The trio is the e862645d successor of 6cf7ae85 (release/inputs/guardian-e862645d:
 # one line, the agreed 8 MiB manifest bound of §16.14; native_api/policy unchanged).
+SERVICING_GUARDIAN_SHA256 = "cb863ab6d47e0fd7d0342edb5bfac4349685c7b1452f3f53cc7130faca97ee62"
+
 ALLOWED_GUARDIAN_SOURCES: frozenset = frozenset({(
     "e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
+    "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
+    "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
+), (
+    SERVICING_GUARDIAN_SHA256,
     "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
     "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
 )})
@@ -392,9 +398,10 @@ def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable
     (service_agent_endpoint.catalog_closure: casefolded installed path ->
     sha256, and role -> path). The manifest pins EXACTLY: every catalog
     member at its catalog path and digest, the fixed generated sshd.conf and
-    aplexer.toml, and the two recorded system references; every role is at
-    its catalog path. Anything else refuses (no extra private pin, no role
-    redirect). Then every pin re-hashes on disk."""
+    aplexer.toml. Legacy manifests also carry two historical system-reference
+    measurements, which are not re-hashed. New servicing manifests omit them.
+    Every executable role remains at its catalog path; bundled pins re-hash
+    on disk. System references receive native path/ACL authority checks."""
     e = receipt.get("endpoint") if isinstance(receipt, dict) and receipt.get("version") == 3 else None
     if not isinstance(e, dict) or set(e) != {"root", "manifest", "manifestSHA256", "config", "state",
                                              "systemReferences"}:
@@ -448,15 +455,20 @@ def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable
             if pins[key] != digest:
                 raise ServiceError(f"pinned release file {sanitize(key)} does not match its catalog row")
         elif key in refs:
+            if m.pins[m.guardian] == SERVICING_GUARDIAN_SHA256:
+                raise ServiceError("OS servicing images must not be hash-pinned")
             if refs[key] != digest:
                 raise ServiceError(f"the system reference pin {sanitize(key)} is not the recorded measurement")
         elif key not in generated:
             raise ServiceError(f"pinned file {sanitize(key)} is outside the recorded closure (not a catalog member "
                                "at its path, a generated config, or a recorded system reference)")
-    missing = sorted(k for k in (*pins, *refs, *generated) if k not in have)
+    required_refs = () if m.pins[m.guardian] == SERVICING_GUARDIAN_SHA256 else refs
+    missing = sorted(k for k in (*pins, *required_refs, *generated) if k not in have)
     if missing:
         raise ServiceError(f"the manifest lacks {len(missing)} required pins (e.g. {sanitize(missing[0])})")
     for path, digest in m.pins.items():
+        if ntpath.normcase(path) in refs:
+            continue  # Historical OS measurements are not release integrity pins.
         if file_sha256(path) != digest:
             raise ServiceError(f"pinned endpoint file {sanitize(path)} does not match the manifest")
 
@@ -503,6 +515,8 @@ def authority_plan(m: GuardianManifest) -> list:
         if p.casefold() in {s.casefold() for s in (m.guardian, m.native_api, m.policy, m.config)}:
             continue
         plan.append((p, "file", False, False, is_servicing_image(p)))
+    for p in SERVICING_IMAGES:
+        plan.append((p, "file", False, False, True))
     b = m.config_bindings
     for key in ("hostKey", "authorizedKeys", "backendConfig"):
         plan.append((b[key], "private", False, False, False))

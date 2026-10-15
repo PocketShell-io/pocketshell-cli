@@ -251,6 +251,20 @@ def stage_private_backend(source, receipt_sha256, root, catalog):
     return {"receiptSHA256": receipt_sha256, "files": doc["files"], "source": doc["source"]}
 
 
+def stage_guardian(root, catalog):
+    from pocketshell.gateway import service_endpoint as ep
+    source = REPO / "release/inputs/guardian-servicing"
+    expected = (ep.SERVICING_GUARDIAN_SHA256,
+                "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
+                "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce")
+    for name, sha in zip(ep.SOURCE_NAMES, expected):
+        if digest(source / name) != sha:
+            raise ValueError("Servicing guardian differs from its reviewed source")
+    for name in ep.SOURCE_NAMES:
+        shutil.copyfile(source / name, root / "guardian" / name)
+    catalog["lineage"]["guardian"]["sourceSHA256"] = expected[0]
+
+
 def build(args):
     source = Path(args.resources).resolve()
     cat_path = source / "host-runtime-catalog.json"
@@ -309,10 +323,13 @@ def build(args):
             else:
                 entries[rel.as_posix()] = p.read_bytes()
         write_zip(root / "python/app.zip", entries)
+    stage_guardian(root, catalog)
     aplexer_receipt = stage_aplexer(args.aplexer_cli_wheel, args.aplexer_client_wheel, root)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     catalog = copy.deepcopy(catalog)
     catalog["source"] = catalog["lineage"]["cliCommit"] = commit
+    from pocketshell import __version__
+    catalog["lineage"]["cliVersion"] = __version__
     catalog["lineage"]["lockSHA256"] = digest(REPO / "uv.lock")
     catalog["release"] = "tray-" + commit[:12]
     roles = {row["path"]: row["role"] for row in catalog["files"]}
