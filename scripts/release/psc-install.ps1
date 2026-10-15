@@ -196,7 +196,7 @@ function Set-Shim([string]$Tree) {
     $next = "$bin\.psc.cmd.$([guid]::NewGuid().ToString('N'))"
     [IO.File]::WriteAllText($next, $text, [Text.UTF8Encoding]::new($false))
     Protect-Item $next
-    if (Test-Path -LiteralPath $shim) { [IO.File]::Replace($next, $shim, $null) }
+    if (Test-Path -LiteralPath $shim) { [IO.File]::Replace($next, $shim, [NullString]::Value) }
     else { [IO.File]::Move($next, $shim) }
 }
 

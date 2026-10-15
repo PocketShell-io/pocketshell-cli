@@ -87,7 +87,7 @@ def test_psc_installer_template_keeps_the_upgrade_contract():
     assert text.isascii()  # PowerShell 5 reads BOM-less scripts as ANSI
     # content-addressed tree, staged then published by rename, shim switched last
     assert '$name = "$($manifest.version)-$InstallVariant-$ContentId"' in text
-    assert "Rename-Item -LiteralPath $stage" in text and "[IO.File]::Replace($next, $shim, $null)" in text
+    assert "Rename-Item -LiteralPath $stage" in text and "[IO.File]::Replace($next, $shim, [NullString]::Value)" in text
     assert text.index("Set-Shim $tree") > text.index('cli.js" hosts')
     # recoverable: the previous PSC stays active -> exit 3, never a failure
     assert "exit 3" in text and "Existing PSC version differs" not in text
