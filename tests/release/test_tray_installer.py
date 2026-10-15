@@ -60,13 +60,51 @@ def test_offline_psc_preserves_previous_version_and_recatalogs_installer(tmp_pat
                       '$dest = "$base\\$($manifest.version)"\nSet-Acl -LiteralPath $Path -AclObject $acl\n')
     manifest = tmp_path / "package-manifest.json"
     manifest.write_text(json.dumps({"files": {"install.ps1": "before"}}))
-    builder.configure_offline_psc(tmp_path)
-    assert "$($manifest.version)-$InstallVariant" in script.read_text()
+    content_id = builder.configure_offline_psc(tmp_path, "ab" * 32)
+    assert f"$($manifest.version)-$InstallVariant-{content_id}" in script.read_text()
     assert "System32\\OpenSSH" not in script.read_text()
     assert '$item.SetAccessControl($acl)' in script.read_text()
     assert json.loads(manifest.read_text())["files"]["install.ps1"] == builder.digest(script)
     with pytest.raises(ValueError, match="review"):
-        builder.configure_offline_psc(tmp_path)
+        builder.configure_offline_psc(tmp_path, "ab" * 32)
+
+
+UPSTREAM_PSC_INSTALL = ('param([string]$SshPath = "$env:SystemRoot\\System32\\OpenSSH\\ssh.exe")\n'
+                        '$dest = "$base\\$($manifest.version)"\nSet-Acl -LiteralPath $Path -AclObject $acl\n')
+
+
+def adapted_tree(tmp_path, name, files, ssh="ab" * 32):
+    root = tmp_path / name
+    root.mkdir()
+    (root / "install.ps1").write_text(UPSTREAM_PSC_INSTALL)
+    (root / "package-manifest.json").write_text(json.dumps({"version": "0.6.2", "files": files}))
+    builder.configure_offline_psc(root, ssh)
+    text = (root / "install.ps1").read_text()
+    return text[text.index("$dest = "):].splitlines()[0]
+
+
+def test_psc_same_version_with_different_content_gets_a_fresh_version_tree(tmp_path):
+    # Regression: v0.5.10 over v0.5.9 on a laptop. Both shipped PSC 0.6.2 with
+    # a rebuilt previewStyle.js, the shared `<version>-gateway-ssh10` tree
+    # failed install.ps1's identical-reinstall check, and PSC was not upgraded.
+    old = {"install.ps1": "x", "psc/dist/cli.js": "1" * 64,
+           "psc/node_modules/@pocketshell/core/dist/esm/preview/previewStyle.js": "2" * 64}
+    rebuilt = dict(old, **{"psc/node_modules/@pocketshell/core/dist/esm/preview/previewStyle.js": "3" * 64})
+    first, second = adapted_tree(tmp_path, "a", old), adapted_tree(tmp_path, "b", rebuilt)
+    assert first != second
+    assert first.startswith('$dest = "$base\\$($manifest.version)-$InstallVariant-')
+
+
+def test_psc_identical_package_reinstalls_into_its_existing_tree(tmp_path):
+    files = {"install.ps1": "x", "psc/dist/cli.js": "1" * 64}
+    # A changed adapter script alone does not move the tree: install.ps1 is never installed.
+    assert adapted_tree(tmp_path, "a", files) == adapted_tree(tmp_path, "b", dict(files, **{"install.ps1": "y"}))
+
+
+def test_psc_changed_ssh_client_gets_a_fresh_version_tree(tmp_path):
+    # ssh.exe is copied into the tree and its digest is bound, so it must move the tree too.
+    files = {"install.ps1": "x", "psc/dist/cli.js": "1" * 64}
+    assert adapted_tree(tmp_path, "a", files, "ab" * 32) != adapted_tree(tmp_path, "b", files, "cd" * 32)
 
 
 def test_catalog_rejects_tampered_or_extra_payload(tmp_path):

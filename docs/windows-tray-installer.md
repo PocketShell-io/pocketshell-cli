@@ -155,8 +155,12 @@ signature again on the installed copy. Its installer is adapted and recatalogued
 to use the supplied client and a separate `gateway-ssh10` version directory;
 existing inbox-client bindings and account state are preserved.
 No system SSH service, feature, configuration or firewall rule is changed.
-PSC versions are installed in `%LOCALAPPDATA%\PocketShell\psc\<version>-gateway-ssh10`;
-reinstalling the identical package verifies and reuses that version. Changed
-bytes or executable bindings require a fresh version. Account, pins and hosts stay in separate state
+PSC versions are installed in
+`%LOCALAPPDATA%\PocketShell\psc\<version>-gateway-ssh10-<content id>`, where the
+content id is a digest of every installed file and the bundled `ssh.exe`
+(`installer-receipt.json` records it as `psc.contentId`). Reinstalling the
+identical package verifies and reuses that tree. A rebuilt package with the same
+PSC version installs side by side into a new tree, and the `psc.cmd` shim
+switches to it. Older trees are left in place. Account, pins and hosts stay in separate state
 directories. Gateway uninstall retains the independent PSC install and PATH
 shim, just as it retains gateway private state.

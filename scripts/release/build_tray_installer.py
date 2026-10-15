@@ -203,8 +203,25 @@ def stage_ssh_client(archive_path, expected_sha256, destination):
     return {"zipSHA256": expected_sha256, "sshSHA256": digest(destination / "ssh.exe")}
 
 
-def configure_offline_psc(destination):
-    """Use a separate version tree so a former inbox-SSH binding stays intact."""
+def psc_content_id(manifest, ssh_sha256):
+    """Short identity of what install.ps1 writes into a version tree.
+
+    The upstream installer treats an existing `<version>` tree as the same
+    package and refuses any byte difference ("Existing PSC version differs;
+    use a fresh version"). Rebuilt packages keep their version string, so
+    the tree name carries this digest of every installed file plus the
+    bundled ssh.exe: changed content installs side by side into a fresh
+    tree and the bin shim switches to it, while an identical reinstall
+    still maps onto its existing tree.
+    """
+    rows = sorted((name, sha) for name, sha in manifest["files"].items() if name != "install.ps1")
+    material = json.dumps({"files": rows, "ssh": ssh_sha256}, separators=(",", ":")).encode()
+    return hashlib.sha256(material).hexdigest()[:12]
+
+
+def configure_offline_psc(destination, ssh_sha256):
+    """Use a separate, content-addressed version tree, so a former inbox-SSH
+    binding stays intact and an upgrade never collides with an older build."""
     script = destination / "install.ps1"
     text = script.read_text(encoding="utf-8")
     old = 'param([string]$SshPath = "$env:SystemRoot\\System32\\OpenSSH\\ssh.exe")'
@@ -220,12 +237,14 @@ def configure_offline_psc(destination):
     env_write = "[Environment]::SetEnvironmentVariable('Path', (($oldPath.TrimEnd(';') + ';' + $bin).TrimStart(';')), 'User')"
     text = text.replace(env_write, "try { " + env_write + " } catch [System.Security.SecurityException] { "
                         "Write-Warning 'User PATH is read-only. Launch PSC Terminal from the Start menu.' }")
-    script.write_text(text.replace(old, new).replace(prefix,
-                      '$dest = "$base\\$($manifest.version)-$InstallVariant"'), encoding="utf-8")
     manifest_path = destination / "package-manifest.json"
     manifest = json.loads(manifest_path.read_text())
+    content_id = psc_content_id(manifest, ssh_sha256)
+    script.write_text(text.replace(old, new).replace(prefix,
+                      f'$dest = "$base\\$($manifest.version)-$InstallVariant-{content_id}"'), encoding="utf-8")
     manifest["files"]["install.ps1"] = digest(script)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return content_id
 
 
 def stage_private_backend(source, receipt_sha256, root, catalog):
@@ -320,7 +339,8 @@ def build(args):
     root = out / "payload" / "runtime"
     psc_receipt = stage_psc(args.psc_zip, args.psc_sha256, out / "payload" / "psc-package")
     psc_receipt["sshClient"] = stage_ssh_client(args.ssh_zip, args.ssh_sha256, out / "payload" / "psc-ssh")
-    configure_offline_psc(out / "payload" / "psc-package")
+    psc_receipt["contentId"] = configure_offline_psc(out / "payload" / "psc-package",
+                                                     psc_receipt["sshClient"]["sshSHA256"])
     psc_receipt["installVariant"] = "gateway-ssh10"
     psc_receipt["adaptedInstallerSHA256"] = digest(out / "payload" / "psc-package/install.ps1")
     shutil.copytree(source / "runtime", root)
