@@ -14,6 +14,7 @@ jobs:
       SSH_ZIP_SHA256: 23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5
       CLIENT_REF: 6e0d072cd6954ddecca2a090f368fac08e535cc8
       CORE_REF: 07174896ce7041370bcbf4f791ec513870b9535f
+      HELPER_SHA256: 5672354b647d2ffddf7e69f753b90f1a031d9af7e57ca6d0c3ab002db28cedd8
     steps:
       - name: Checkout tray branch
         uses: actions/checkout@v6
@@ -145,7 +146,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $inputDir = "$env:RUNNER_TEMP\input"
-          uv run --frozen python scripts/release/build_tray_installer.py --resources "$env:RUNNER_TEMP\base" --catalog-sha256 $env:CATALOG_SHA256 --aplexer-cli-wheel "$inputDir\aplexer-0.1.13-py3-none-win_amd64.whl" --aplexer-client-wheel "$inputDir\aplexer_client-0.1.13-cp311-abi3-win_amd64.whl" --tray-launcher "$env:RUNNER_TEMP\build\GatewayTray.exe" --psc-zip $env:PSC_ZIP --psc-sha256 $env:PSC_SHA256 --ssh-zip "$inputDir\OpenSSH-Win64.zip" --ssh-sha256 $env:SSH_ZIP_SHA256 --endpoint-backend "$env:RUNNER_TEMP\backend-out\openssh" --endpoint-backend-receipt-sha256 $env:BACKEND_RECEIPT_SHA256 --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" --out "$env:RUNNER_TEMP\tray-out"
+          uv run --frozen python scripts/release/build_tray_installer.py --resources "$env:RUNNER_TEMP\base" --catalog-sha256 $env:CATALOG_SHA256 --aplexer-cli-wheel "$inputDir\aplexer-0.1.13-py3-none-win_amd64.whl" --aplexer-client-wheel "$inputDir\aplexer_client-0.1.13-cp311-abi3-win_amd64.whl" --tray-launcher "$env:RUNNER_TEMP\build\GatewayTray.exe" --psc-zip $env:PSC_ZIP --psc-sha256 $env:PSC_SHA256 --ssh-zip "$inputDir\OpenSSH-Win64.zip" --ssh-sha256 $env:SSH_ZIP_SHA256 --endpoint-backend "$env:RUNNER_TEMP\backend-out\openssh" --endpoint-backend-receipt-sha256 $env:BACKEND_RECEIPT_SHA256 --helper release\inputs\pocketshell-link-70f5a4b\pocketshell-link-windows-amd64.exe --helper-sha256 $env:HELPER_SHA256 --helper-version git-70f5a4b9e8ee --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" --out "$env:RUNNER_TEMP\tray-out"
           if ($LASTEXITCODE -ne 0) { throw 'Installer assembly failed' }
           $head = (git rev-parse HEAD).Trim()
           $receipt = Get-Content "$env:RUNNER_TEMP\tray-out\installer-receipt.json" -Raw | ConvertFrom-Json

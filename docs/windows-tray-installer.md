@@ -3,7 +3,8 @@
 The Windows x64 installer belongs to `pocketshell-cli`: the tray uses the CLI's
 gateway status, enrollment and owner-bound guardian instead of embedding a
 second gateway implementation in Desktop. It bundles Python, Pillow, pystray,
-the reviewed gateway helper, BOTH `a.exe` and `aplexer.exe`, the native aplexer
+the reviewed gateway helper (pocketshell-gateway 70f5a4b, with `gateway-auth`;
+`build_tray_installer.py --helper` swaps it into the BASE closure), BOTH `a.exe` and `aplexer.exe`, the native aplexer
 client (0.1.13, including `rpc --stdio` protocols 1 and 2), the private OpenSSH endpoint and Git Bash. No Python, uv, Git or aplexer
 installation is required on the destination, including win35.
 The installer also includes the standalone PSC Windows x64 package (Node,

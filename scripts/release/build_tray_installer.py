@@ -251,6 +251,44 @@ def stage_private_backend(source, receipt_sha256, root, catalog):
     return {"receiptSHA256": receipt_sha256, "files": doc["files"], "source": doc["source"]}
 
 
+def stage_helper(helper, expected_sha256, version, root, catalog):
+    """Replace the BASE closure's pocketshell-link with a reviewed newer build.
+
+    The digest must be on the Windows allow-list, so the installed guardian
+    and wrapper will accept what this installer ships.
+    """
+    from pocketshell.gateway.helper import WINDOWS_HELPER_SHA256
+    from pocketshell.gateway.service_windows import ALLOWED_HELPER_SHA256
+
+    helper = Path(helper)
+    if digest(helper) != expected_sha256:
+        raise ValueError("The helper differs from its expected SHA256")
+    if expected_sha256 not in ALLOWED_HELPER_SHA256 or expected_sha256 != WINDOWS_HELPER_SHA256:
+        raise ValueError("The helper is not the reviewed Windows build pinned by this CLI")
+    rows = [row for row in catalog["files"] if row["role"] == "helper"]
+    if len(rows) != 1:
+        raise ValueError("The base catalog has no single helper")
+    target = root / rows[0]["path"]
+    if not target.is_file():
+        raise ValueError("The base closure has no helper file")
+    shutil.copyfile(helper, target)
+    catalog["lineage"]["helper"] = {"version": version, "sha256": expected_sha256}
+    return {"path": rows[0]["path"], "sha256": expected_sha256, "version": version}
+
+
+def gateway_auth_probe(helper, timeout=30):
+    """Prove the bundled helper answers `gateway-auth show --json`."""
+    with tempfile.TemporaryDirectory() as scratch:
+        proc = subprocess.run([str(helper), "gateway-auth", "show", "--json", "--config-dir", scratch],
+                              capture_output=True, timeout=timeout)
+    if proc.returncode != 0:
+        raise ValueError("The bundled helper does not support gateway-auth")
+    doc = json.loads(proc.stdout)
+    if doc.get("policy") != "host" or doc.get("source") != "default":
+        raise ValueError("The bundled helper reported an unexpected gateway-auth default")
+    return doc
+
+
 def stage_guardian(root, catalog):
     from pocketshell.gateway import service_endpoint as ep
     source = REPO / "release/inputs/guardian-servicing"
@@ -324,6 +362,9 @@ def build(args):
                 entries[rel.as_posix()] = p.read_bytes()
         write_zip(root / "python/app.zip", entries)
     stage_guardian(root, catalog)
+    helper_receipt = stage_helper(args.helper, args.helper_sha256, args.helper_version, root, catalog)
+    if sys.platform == "win32":
+        gateway_auth_probe(root / helper_receipt["path"])
     aplexer_receipt = stage_aplexer(args.aplexer_cli_wheel, args.aplexer_client_wheel, root)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     catalog = copy.deepcopy(catalog)
@@ -359,6 +400,7 @@ def build(args):
         "installerBytes": exe.stat().st_size, "files": len(catalog["files"]),
         "aplexerSHA256": digest(root / "python/a.exe"), "launcherSHA256": digest(root / "GatewayTray.exe")}
     receipt["aplexer"] = aplexer_receipt
+    receipt["helper"] = helper_receipt
     receipt["psc"] = psc_receipt
     receipt["privateEndpoint"] = backend_receipt
     (out / "installer-receipt.json").write_text(json.dumps(receipt, indent=2))
@@ -378,6 +420,9 @@ if __name__ == "__main__":
     parser.add_argument("--ssh-sha256", required=True, help="Expected SHA256 of the OpenSSH zip")
     parser.add_argument("--endpoint-backend", required=True, help="Complete owned private-shell OpenSSH rebuild")
     parser.add_argument("--endpoint-backend-receipt-sha256", required=True)
+    parser.add_argument("--helper", required=True, help="Reviewed pocketshell-link Windows build (release/inputs)")
+    parser.add_argument("--helper-sha256", required=True, help="Expected SHA256 of the helper")
+    parser.add_argument("--helper-version", required=True, help="Helper version for the catalog lineage")
     parser.add_argument("--makensis", required=True)
     parser.add_argument("--out", required=True)
     build(parser.parse_args())

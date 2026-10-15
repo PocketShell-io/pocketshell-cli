@@ -273,3 +273,51 @@ def test_rpc_stdio_ping_serves_a_real_helper_process(tmp_path):
                       "assert not stdin.read()\n")
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     assert builder.rpc_stdio_ping(str(script)) == "fake-gen"
+
+
+HELPER_INPUT = Path(__file__).parents[2] / "release/inputs/pocketshell-link-70f5a4b/pocketshell-link-windows-amd64.exe"
+HELPER_SHA = "5672354b647d2ffddf7e69f753b90f1a031d9af7e57ca6d0c3ab002db28cedd8"
+
+
+def helper_catalog(root):
+    (root / "bin").mkdir(parents=True)
+    (root / "bin/pocketshell-link.exe").write_bytes(b"old cd7 helper")
+    return {"files": [{"path": "bin/pocketshell-link.exe", "sha256": "0" * 64, "role": "helper"}],
+            "lineage": {"helper": {"version": "cd7c6f6a0c7b", "sha256": "0" * 64}}}
+
+
+def test_helper_replaces_base_helper_and_lineage(tmp_path):
+    root = tmp_path / "runtime"
+    catalog = helper_catalog(root)
+    receipt = builder.stage_helper(HELPER_INPUT, HELPER_SHA, "git-70f5a4b9e8ee", root, catalog)
+    assert builder.digest(root / "bin/pocketshell-link.exe") == HELPER_SHA
+    assert catalog["lineage"]["helper"] == {"version": "git-70f5a4b9e8ee", "sha256": HELPER_SHA}
+    assert receipt["path"] == "bin/pocketshell-link.exe"
+
+
+def test_helper_refuses_wrong_digest_or_unpinned_build(tmp_path):
+    root = tmp_path / "runtime"
+    catalog = helper_catalog(root)
+    with pytest.raises(ValueError, match="expected SHA256"):
+        builder.stage_helper(HELPER_INPUT, "1" * 64, "v", root, catalog)
+    other = tmp_path / "other.exe"
+    other.write_bytes(b"unreviewed")
+    with pytest.raises(ValueError, match="reviewed Windows build"):
+        builder.stage_helper(other, builder.digest(other), "v", root, catalog)
+    assert (root / "bin/pocketshell-link.exe").read_bytes() == b"old cd7 helper"
+
+
+@pytest.mark.skipif(not os.environ.get("POCKETSHELL_TEST_GATEWAY_AUTH_HELPER"),
+                    reason="set POCKETSHELL_TEST_GATEWAY_AUTH_HELPER to a host pocketshell-link build")
+def test_gateway_auth_probe_against_real_helper():
+    assert builder.gateway_auth_probe(os.environ["POCKETSHELL_TEST_GATEWAY_AUTH_HELPER"])["endpoint"] == ""
+
+
+def test_gateway_auth_probe_refuses_helper_without_command(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("POSIX shell stub")
+    stub = tmp_path / "old-link"
+    stub.write_text("#!/bin/sh\necho 'unknown command' >&2\nexit 2\n")
+    stub.chmod(0o755)
+    with pytest.raises(ValueError, match="gateway-auth"):
+        builder.gateway_auth_probe(stub)
