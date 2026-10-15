@@ -379,12 +379,27 @@ def enroll(
         raise click.ClickException(str(exc)) from None
 
 
+_ON_WINDOWS = sys.platform == "win32"
+
+
+def _reverify_windows_helper(binary: str) -> None:
+    """Re-check the pinned Windows digest right before each child run, as
+    exec_helper does, so a helper swapped after resolution never runs."""
+    if not _ON_WINDOWS:
+        return
+    try:
+        gateway_helper._verify_windows_helper(binary)
+    except gateway_helper.HelperNotFoundError as exc:
+        raise click.ClickException(str(exc)) from None
+
+
 def _gateway_auth_child(binary: str, argv: list[str]) -> dict:
     """Run one `gateway-auth --json` call as a bounded child; refusals raise."""
     import json
     import subprocess
 
     flags = 0x08000000 if sys.platform == "win32" else 0
+    _reverify_windows_helper(binary)
     try:
         proc = subprocess.run([binary, *argv], stdin=subprocess.DEVNULL, capture_output=True,
                               timeout=60, creationflags=flags)
@@ -422,6 +437,7 @@ def _enroll_then_set_gateway_auth(ctx: click.Context, binary: str, argv: list[st
 
     flags = 0x08000000 if sys.platform == "win32" else 0
     stdin_data = None if token is None else token.encode("ascii") + b"\n"
+    _reverify_windows_helper(binary)
     try:
         proc = subprocess.run([binary, *argv], input=stdin_data, creationflags=flags)
     except OSError:

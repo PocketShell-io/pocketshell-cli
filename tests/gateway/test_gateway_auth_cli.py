@@ -185,3 +185,26 @@ def test_enroll_reports_helper_refusal_after_enrolling(auth_stub, exec_calls, mo
     assert result.exit_code == 1
     assert "enrolled, but" in result.output and "AuthorizedKeysFile" in result.output
     assert "pocketshell gateway auth set --policy both" in result.output
+
+
+def test_windows_helper_is_reverified_before_each_child(auth_stub, exec_calls, monkeypatch):
+    from pocketshell.gateway import cli as gateway_cli
+    from pocketshell.gateway import helper as gateway_helper
+    checked = []
+    monkeypatch.setattr(gateway_cli, "_ON_WINDOWS", True)
+    monkeypatch.setattr(gateway_helper, "_verify_windows_helper", lambda b: checked.append(b))
+    result = _enroll("--gateway-auth-policy", "both")
+    assert result.exit_code == 0, result.output
+    assert len(checked) == 2  # the enroll child, then the gateway-auth set child
+
+
+def test_swapped_windows_helper_is_refused_before_running(auth_stub, exec_calls, monkeypatch):
+    from pocketshell.gateway import cli as gateway_cli
+    from pocketshell.gateway import helper as gateway_helper
+    monkeypatch.setattr(gateway_cli, "_ON_WINDOWS", True)
+    def refuse(binary):
+        raise gateway_helper.HelperNotFoundError("The pinned Windows helper digest is not the reviewed build")
+    monkeypatch.setattr(gateway_helper, "_verify_windows_helper", refuse)
+    result = _enroll("--gateway-auth-policy", "both")
+    assert result.exit_code == 1 and "reviewed build" in result.output
+    assert not auth_stub.exists() or "enroll" not in auth_stub.read_text()
