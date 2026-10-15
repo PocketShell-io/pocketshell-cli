@@ -96,6 +96,42 @@ Right-clicking (or left-clicking on Windows) the tray icon opens the context men
 9. **`Start at login`**: Checkbox toggling autostart at user logon.
 10. **`Quit tray`**: Closes the tray application (does **not** stop the background gateway service).
 
+After **Sessions**, a **`Key policy: <policy>`** submenu shows which authorized
+keys gateway SSH accepts on this host (key vault). See
+[Gateway key policy](#gateway-key-policy).
+
+### Gateway key policy
+
+The submenu runs `pocketshell gateway auth show|set --json`, which wraps
+`pocketshell-link gateway-auth` (pocketshell-gateway `70f5a4b` or later):
+
+- **Host keys only**: `~/.ssh/authorized_keys`. This is the default, and an
+  enrollment without a policy keeps it.
+- **Vault keys only (managed)**: only the vault public keys installed on this host.
+- **Host keys and vault keys**: both.
+
+**Vault keys on this host** lists each managed key as type, `SHA256:`
+fingerprint and comment, never key bytes. Vault public keys normally reach the
+host from the web keys page or a client ("Apply to host"). The tray can also
+import them from the clipboard or a file as authorized_keys lines. An import
+replaces the whole managed set after confirmation. Private keys (anything
+containing `PRIVATE KEY`), key options and certificates are refused before
+anything runs. The host never sees a private key or the vault passphrase.
+
+Refusals happen before the change and are explained:
+
+- **Windows** gateways use a loopback SSH endpoint, which can only accept the
+  host's own keys. The tray shows the policy as `host` and refuses vault-only,
+  combined and managed-key imports. Enforcing them needs the private exec
+  endpoint (Linux and macOS hosts).
+- **Vault keys only** with no managed keys installed would refuse every login,
+  so import keys first, or choose **Host keys and vault keys**.
+- Removing every key while the policy is vault-only is refused for the same reason.
+
+The helper validates everything again and fails closed. A change applies to the
+next connection. The gateway never relays this setting, so an account token
+alone cannot add a login key.
+
 ---
 
 ## 6. Notifications
