@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -54,54 +55,78 @@ def test_offline_client_is_pinned_and_does_not_ship_a_server(tmp_path, monkeypat
     assert result["sshSHA256"] == builder.digest(tmp_path / "client/ssh.exe")
 
 
-def test_offline_psc_preserves_previous_version_and_recatalogs_installer(tmp_path):
+UPSTREAM_PSC_INSTALL = b"# stand-in for the reviewed upstream install.ps1\n"
+
+
+@pytest.fixture
+def upstream_pin(monkeypatch):
+    monkeypatch.setattr(builder, "UPSTREAM_PSC_INSTALL_SHA256", hashlib.sha256(UPSTREAM_PSC_INSTALL).hexdigest())
+
+
+def test_offline_psc_installs_the_tray_installer_and_recatalogs_it(tmp_path, upstream_pin):
     script = tmp_path / "install.ps1"
-    script.write_text('param([string]$SshPath = "$env:SystemRoot\\System32\\OpenSSH\\ssh.exe")\n'
-                      '$dest = "$base\\$($manifest.version)"\nSet-Acl -LiteralPath $Path -AclObject $acl\n')
+    script.write_bytes(UPSTREAM_PSC_INSTALL)
     manifest = tmp_path / "package-manifest.json"
     manifest.write_text(json.dumps({"files": {"install.ps1": "before"}}))
     content_id = builder.configure_offline_psc(tmp_path, "ab" * 32)
-    assert f"$($manifest.version)-$InstallVariant-{content_id}" in script.read_text()
-    assert "System32\\OpenSSH" not in script.read_text()
-    assert '$item.SetAccessControl($acl)' in script.read_text()
+    text = script.read_text()
+    assert f"$ContentId = '{content_id}'" in text and "@CONTENT_ID@" not in text
+    assert text == builder.PSC_INSTALL_TEMPLATE.read_text().replace("@CONTENT_ID@", content_id)
     assert json.loads(manifest.read_text())["files"]["install.ps1"] == builder.digest(script)
+    # A second adaptation sees a changed upstream script and refuses.
     with pytest.raises(ValueError, match="review"):
         builder.configure_offline_psc(tmp_path, "ab" * 32)
 
 
-UPSTREAM_PSC_INSTALL = ('param([string]$SshPath = "$env:SystemRoot\\System32\\OpenSSH\\ssh.exe")\n'
-                        '$dest = "$base\\$($manifest.version)"\nSet-Acl -LiteralPath $Path -AclObject $acl\n')
+def test_upstream_psc_install_pin_is_the_reviewed_client_script():
+    assert builder.UPSTREAM_PSC_INSTALL_SHA256 == "f22200ddc623459c1a6bb522438ee241aa3367459020a774c8fd6b1abf8542e3"
+
+
+def test_psc_installer_template_keeps_the_upgrade_contract():
+    text = builder.PSC_INSTALL_TEMPLATE.read_text()
+    assert text.isascii()  # PowerShell 5 reads BOM-less scripts as ANSI
+    # content-addressed tree, staged then published by rename, shim switched last
+    assert '$name = "$($manifest.version)-$InstallVariant-$ContentId"' in text
+    assert "Rename-Item -LiteralPath $stage" in text and "[IO.File]::Replace($next, $shim, $null)" in text
+    assert text.index("Set-Shim $tree") > text.index('cli.js" hosts')
+    # recoverable: the previous PSC stays active -> exit 3, never a failure
+    assert "exit 3" in text and "Existing PSC version differs" not in text
+    # OS folders, not the caller's environment (SSH sessions lack SystemRoot)
+    assert "[Environment]::GetFolderPath('Windows')" in text and "$env:SystemRoot" not in text
+
+
+def test_nsis_treats_a_kept_previous_psc_as_a_warning():
+    nsi = (builder.REPO / "scripts/release/tray-installer.nsi").read_text()
+    assert "StrCmp $2 3 0 psc_failed" in nsi and "StrCmp $2 3 psc_shortcut" in nsi
+    warning = nsi[nsi.index("StrCmp $2 3 0 psc_failed"):nsi.index("psc_failed:")]
+    assert "MessageBox" not in warning
 
 
 def adapted_tree(tmp_path, name, files, ssh="ab" * 32):
     root = tmp_path / name
     root.mkdir()
-    (root / "install.ps1").write_text(UPSTREAM_PSC_INSTALL)
+    (root / "install.ps1").write_bytes(UPSTREAM_PSC_INSTALL)
     (root / "package-manifest.json").write_text(json.dumps({"version": "0.6.2", "files": files}))
-    builder.configure_offline_psc(root, ssh)
-    text = (root / "install.ps1").read_text()
-    return text[text.index("$dest = "):].splitlines()[0]
+    return builder.configure_offline_psc(root, ssh)
 
 
-def test_psc_same_version_with_different_content_gets_a_fresh_version_tree(tmp_path):
+def test_psc_same_version_with_different_content_gets_a_fresh_version_tree(tmp_path, upstream_pin):
     # Regression: v0.5.10 over v0.5.9 on a laptop. Both shipped PSC 0.6.2 with
     # a rebuilt previewStyle.js, the shared `<version>-gateway-ssh10` tree
     # failed install.ps1's identical-reinstall check, and PSC was not upgraded.
     old = {"install.ps1": "x", "psc/dist/cli.js": "1" * 64,
            "psc/node_modules/@pocketshell/core/dist/esm/preview/previewStyle.js": "2" * 64}
     rebuilt = dict(old, **{"psc/node_modules/@pocketshell/core/dist/esm/preview/previewStyle.js": "3" * 64})
-    first, second = adapted_tree(tmp_path, "a", old), adapted_tree(tmp_path, "b", rebuilt)
-    assert first != second
-    assert first.startswith('$dest = "$base\\$($manifest.version)-$InstallVariant-')
+    assert adapted_tree(tmp_path, "a", old) != adapted_tree(tmp_path, "b", rebuilt)
 
 
-def test_psc_identical_package_reinstalls_into_its_existing_tree(tmp_path):
+def test_psc_identical_package_reinstalls_into_its_existing_tree(tmp_path, upstream_pin):
     files = {"install.ps1": "x", "psc/dist/cli.js": "1" * 64}
     # A changed adapter script alone does not move the tree: install.ps1 is never installed.
     assert adapted_tree(tmp_path, "a", files) == adapted_tree(tmp_path, "b", dict(files, **{"install.ps1": "y"}))
 
 
-def test_psc_changed_ssh_client_gets_a_fresh_version_tree(tmp_path):
+def test_psc_changed_ssh_client_gets_a_fresh_version_tree(tmp_path, upstream_pin):
     # ssh.exe is copied into the tree and its digest is bound, so it must move the tree too.
     files = {"install.ps1": "x", "psc/dist/cli.js": "1" * 64}
     assert adapted_tree(tmp_path, "a", files, "ab" * 32) != adapted_tree(tmp_path, "b", files, "cd" * 32)

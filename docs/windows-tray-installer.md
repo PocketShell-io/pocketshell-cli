@@ -151,16 +151,38 @@ The portable client input is Microsoft's official Win32-OpenSSH release
 `23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5`.
 The builder copies only `ssh.exe` and license notices, validates Microsoft's
 signature, and records the archive and executable digests. PSC validates the
-signature again on the installed copy. Its installer is adapted and recatalogued
-to use the supplied client and a separate `gateway-ssh10` version directory;
-existing inbox-client bindings and account state are preserved.
+signature again on the installed copy. The package's own `install.ps1` is
+replaced by the tray's `scripts/release/psc-install.ps1` (the builder pins the
+reviewed upstream script and recatalogues the package). It uses the supplied
+client and keeps existing inbox-client bindings and account state.
 No system SSH service, feature, configuration or firewall rule is changed.
-PSC versions are installed in
-`%LOCALAPPDATA%\PocketShell\psc\<version>-gateway-ssh10-<content id>`, where the
-content id is a digest of every installed file and the bundled `ssh.exe`
-(`installer-receipt.json` records it as `psc.contentId`). Reinstalling the
-identical package verifies and reuses that tree. A rebuilt package with the same
-PSC version installs side by side into a new tree, and the `psc.cmd` shim
-switches to it. Older trees are left in place. Account, pins and hosts stay in separate state
+
+Re-running any installer over any existing PSC install succeeds, whether it is
+the same version, older, newer or partly broken:
+
+- PSC trees are content-addressed:
+  `%LOCALAPPDATA%\PocketShell\psc\<version>-gateway-ssh10-<content id>`. The
+  content id is a digest of every installed file and the bundled `ssh.exe`
+  (`installer-receipt.json` records it as `psc.contentId`).
+- A tree that verifies completely (inventory, digests, `ssh.exe`, bindings) is
+  reused read-only.
+- Anything else is built in a private staging directory and published with
+  one directory rename. A broken tree is moved aside first. If it is in use, the
+  new tree gets a unique sibling name.
+- The `bin\psc.cmd` shim is switched last, with an atomic file replace, after
+  the new tree passed the native security preflight, `--version` and `hosts`.
+- Bindings use the OS folder paths, not the caller's environment, so an
+  install from an SSH session without `SystemRoot` works.
+- Superseded trees from this installer are removed, except the active tree
+  and the previously active one. Locked leftovers only log a warning.
+
+If this package cannot be activated but the previous PSC still works, the
+installer exits 3: the previous PSC stays active and `psc-install.log` gets a
+warning, with no dialog. Only when no working PSC exists does the installer
+report a PSC failure (the gateway still installs). `psc-install.log` ends with
+`PSC installer exit code: N`. The release workflow runs real installers in this
+order: previous release, new, new again, new over a broken tree, previous over
+new, new again (`tests/release/test_windows_psc_upgrade_native.py`).
+Account, pins and hosts stay in separate state
 directories. Gateway uninstall retains the independent PSC install and PATH
 shim, just as it retains gateway private state.

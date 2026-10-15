@@ -219,29 +219,31 @@ def psc_content_id(manifest, ssh_sha256):
     return hashlib.sha256(material).hexdigest()[:12]
 
 
+# The standalone package's own install.ps1 (pocketshell-tui-client
+# scripts/windows/install.ps1 at the workflow's CLIENT_REF). It is replaced by
+# scripts/release/psc-install.ps1; a different upstream script must be reviewed
+# for changes the replacement has to carry over before this pin moves.
+UPSTREAM_PSC_INSTALL_SHA256 = "f22200ddc623459c1a6bb522438ee241aa3367459020a774c8fd6b1abf8542e3"
+PSC_INSTALL_TEMPLATE = REPO / "scripts/release/psc-install.ps1"
+
+
 def configure_offline_psc(destination, ssh_sha256):
-    """Use a separate, content-addressed version tree, so a former inbox-SSH
-    binding stays intact and an upgrade never collides with an older build."""
+    """Install PSC with the tray's own content-addressed, atomic installer.
+
+    Re-running any installer over any existing PSC install must succeed: the
+    tree is named by content, a verified tree is reused, anything else is
+    rebuilt in staging and published by rename, and the shim switches last.
+    """
     script = destination / "install.ps1"
-    text = script.read_text(encoding="utf-8")
-    old = 'param([string]$SshPath = "$env:SystemRoot\\System32\\OpenSSH\\ssh.exe")'
-    new = ('param([string]$SshPath, [ValidatePattern("^gateway-ssh[0-9]+$")]'
-           '[string]$InstallVariant = "gateway-ssh10")')
-    prefix = '$dest = "$base\\$($manifest.version)"'
-    if text.count(old) != 1 or text.count(prefix) != 1:
+    if digest(script) != UPSTREAM_PSC_INSTALL_SHA256:
         raise ValueError("PSC installer changed; review the offline adaptation")
-    # PowerShell 5 Set-Acl tries to write auditing on an existing protected
-    # object and can require SeSecurityPrivilege. The .NET object method writes
-    # only the owner/DACL sections changed above, with identical private ACEs.
-    text = text.replace('Set-Acl -LiteralPath $Path -AclObject $acl', '$item.SetAccessControl($acl)')
-    env_write = "[Environment]::SetEnvironmentVariable('Path', (($oldPath.TrimEnd(';') + ';' + $bin).TrimStart(';')), 'User')"
-    text = text.replace(env_write, "try { " + env_write + " } catch [System.Security.SecurityException] { "
-                        "Write-Warning 'User PATH is read-only. Launch PSC Terminal from the Start menu.' }")
     manifest_path = destination / "package-manifest.json"
     manifest = json.loads(manifest_path.read_text())
     content_id = psc_content_id(manifest, ssh_sha256)
-    script.write_text(text.replace(old, new).replace(prefix,
-                      f'$dest = "$base\\$($manifest.version)-$InstallVariant-{content_id}"'), encoding="utf-8")
+    template = PSC_INSTALL_TEMPLATE.read_text(encoding="utf-8")
+    if template.count("'@CONTENT_ID@'") != 1:
+        raise ValueError("PSC installer template has no content id placeholder")
+    script.write_bytes(template.replace("@CONTENT_ID@", content_id).encode("utf-8"))
     manifest["files"]["install.ps1"] = digest(script)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return content_id

@@ -42,8 +42,15 @@ Section "PocketShell Gateway"
   Pop $3
   FileOpen $4 "$INSTDIR\psc-install.log" w
   FileWrite $4 "$3"
+  FileWrite $4 "$\r$\nPSC installer exit code: $2$\r$\n"
   FileClose $4
+  ; 0: this PSC is active. 3: recoverable, the previous working PSC stays
+  ; active; a logged warning, never a failure dialog. Anything else: no PSC.
   StrCmp $2 0 psc_continue
+  StrCmp $2 3 0 psc_failed
+  DetailPrint "PSC was not upgraded; the previous PSC stays active. See $INSTDIR\psc-install.log"
+  Goto psc_continue
+  psc_failed:
   MessageBox MB_ICONEXCLAMATION "PSC installation failed. Gateway installation will continue. Check $INSTDIR\psc-install.log for details. Exit code: $2" /SD IDOK
   psc_continue:
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -54,6 +61,7 @@ Section "PocketShell Gateway"
   CreateShortcut "$0\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway\PocketShell Gateway.lnk" "$INSTDIR\runtime\GatewayTray.exe"
   CreateShortcut "$0\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway\Gateway Setup.lnk" "$INSTDIR\runtime\GatewayTray.exe" "--setup"
   StrCmp $2 0 psc_shortcut
+  StrCmp $2 3 psc_shortcut
   Delete "$0\Microsoft\Windows\Start Menu\Programs\PocketShell Gateway\PSC Terminal.lnk"
   Goto psc_shortcut_done
   psc_shortcut:
