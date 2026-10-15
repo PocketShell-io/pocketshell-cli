@@ -15,6 +15,8 @@ jobs:
       CLIENT_REF: 6e0d072cd6954ddecca2a090f368fac08e535cc8
       CORE_REF: 07174896ce7041370bcbf4f791ec513870b9535f
       HELPER_SHA256: 5672354b647d2ffddf7e69f753b90f1a031d9af7e57ca6d0c3ab002db28cedd8
+      PREVIOUS_RELEASE: v0.5.10
+      PREVIOUS_INSTALLER_SHA256: 887f986999d331f3efe2363412eda79499f7085d7b650c58965abd478fece0e3
     steps:
       - name: Checkout tray branch
         uses: actions/checkout@v6
@@ -154,6 +156,27 @@ jobs:
           if ($receipt.sourceDirty) { throw 'release build ran on a dirty checkout' }
           Set-Location "$env:RUNNER_TEMP\tray-out"
           python -c "import hashlib,pathlib; pathlib.Path('SHA256SUMS').write_text(''.join(f'{hashlib.sha256(pathlib.Path(n).read_bytes()).hexdigest()}  {n}' + chr(10) for n in ('PocketShellGateway-Setup-x64.exe','installer-receipt.json')))"
+      - name: Fetch the previous release installer (upgrade test input)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "$env:RUNNER_TEMP\previous"
+          gh release download $env:PREVIOUS_RELEASE --repo PocketShell-io/pocketshell-cli --pattern PocketShellGateway-Setup-x64.exe --dir $dir
+          if ($LASTEXITCODE -ne 0) { throw 'previous installer download failed' }
+          $got = (Get-FileHash "$dir\PocketShellGateway-Setup-x64.exe" -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:PREVIOUS_INSTALLER_SHA256) { throw "previous installer SHA256 $got is not the pinned $env:PREVIOUS_INSTALLER_SHA256" }
+      - name: Installer upgrade test (previous -> new, same version twice, broken tree, older over newer)
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+          POCKETSHELL_TEST_PREVIOUS_INSTALLER: ${{ runner.temp }}\previous\PocketShellGateway-Setup-x64.exe
+          POCKETSHELL_TEST_NEW_INSTALLER: ${{ runner.temp }}\tray-out\PocketShellGateway-Setup-x64.exe
+          POCKETSHELL_TEST_NEW_INSTALLER_RECEIPT: ${{ runner.temp }}\tray-out\installer-receipt.json
+        run: |
+          uv run --frozen python -m pytest -v -rs -s tests/release/test_windows_psc_upgrade_native.py
+          if ($LASTEXITCODE -ne 0) { throw 'Installer upgrade test failed' }
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v7
         with:
