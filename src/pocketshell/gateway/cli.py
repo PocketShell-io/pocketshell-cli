@@ -10,6 +10,7 @@ keep their own protocol and CLI untouched.
 
 from __future__ import annotations
 
+import sys
 from typing import Optional, Sequence
 
 import click
@@ -257,6 +258,17 @@ def gateway_group() -> None:
         "its relay.pocketshell.io alias, whatever the URL spelling)."
     ),
 )
+@click.option(
+    "--gateway-auth-policy",
+    type=click.Choice(("host", "managed", "both")),
+    default=None,
+    help=(
+        "Also set which authorized keys gateway SSH accepts (key vault): "
+        "`host`, `managed` (vault public keys installed with `gateway auth "
+        "set --keys-stdin`) or `both`. Default: unchanged (host). Loopback "
+        "--ssh-host endpoints support only `host`."
+    ),
+)
 @click.option("--verbose", is_flag=True, help="Log debug output.")
 @click.pass_context
 def enroll(
@@ -272,6 +284,7 @@ def enroll(
     dev_broker_issuer: Optional[str],
     verbose: bool,
     trust_gateway: Optional[str],
+    gateway_auth_policy: Optional[str],
 ) -> None:
     """Generate the device key, pin the local sshd host key, enroll.
 
@@ -303,6 +316,11 @@ def enroll(
     an explicit lab `--server`.
     """
     _preflight_dev_broker_issuer(dev_broker_issuer, insecure_dev, server)
+    if gateway_auth_policy not in (None, "host") and ssh_host is not None:
+        raise click.UsageError(
+            f"--gateway-auth-policy {gateway_auth_policy} needs the private exec endpoint; "
+            "loopback --ssh-host endpoints support only host"
+        )
     if not token_stdin:
         _preflight_auto_mint(dev_broker_issuer, insecure_dev, server, trust_gateway)
     binary = _verified_helper(ctx)
@@ -315,6 +333,8 @@ def enroll(
             raise private_endpoint.EndpointError("system SSH port 22 is forbidden")
     except (ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from None
+    if gateway_auth_policy == "managed":
+        _require_managed_keys(binary, config_dir)
     argv = gateway_helper.build_helper_argv(
         "enroll",
         server=server,
@@ -332,6 +352,10 @@ def enroll(
         re_enroll=re_enroll,
     )
     if token_stdin:
+        if gateway_auth_policy is not None:
+            # The token stays on the inherited stdin; this wrapper never reads it.
+            _enroll_then_set_gateway_auth(ctx, binary, argv, None, gateway_auth_policy, config_dir)
+            return
         gateway_helper.exec_helper(binary, argv)
         return
     # Logged-in path. Order matters: the helper is resolved and
@@ -346,10 +370,73 @@ def enroll(
         ) from None
     except gateway_tokens.GatewayTokenError as exc:
         raise click.ClickException(str(exc)) from None
+    if gateway_auth_policy is not None:
+        _enroll_then_set_gateway_auth(ctx, binary, argv, token, gateway_auth_policy, config_dir)
+        return
     try:
         gateway_helper.exec_helper_with_stdin_token(binary, argv, token)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from None
+
+
+def _gateway_auth_child(binary: str, argv: list[str]) -> dict:
+    """Run one `gateway-auth --json` call as a bounded child; refusals raise."""
+    import json
+    import subprocess
+
+    flags = 0x08000000 if sys.platform == "win32" else 0
+    try:
+        proc = subprocess.run([binary, *argv], stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=60, creationflags=flags)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise click.ClickException(f"gateway-auth could not run: {type(exc).__name__}") from None
+    if proc.returncode != 0:
+        lines = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise click.ClickException(f"gateway-auth refused: {lines[-1] if lines else proc.returncode}")
+    try:
+        return json.loads(proc.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise click.ClickException("gateway-auth returned no JSON state") from None
+
+
+def _require_managed_keys(binary: str, config_dir: Optional[str]) -> None:
+    """A vault-only policy without managed keys would refuse every login."""
+    state = _gateway_auth_child(binary, build_gateway_auth_argv("show", config_dir=config_dir, as_json=True))
+    if not state.get("managed_keys"):
+        raise click.ClickException(
+            "--gateway-auth-policy managed needs vault public keys first (no login would work); "
+            "install them with `pocketshell gateway auth set --keys-stdin`, or use `both`"
+        )
+
+
+def _enroll_then_set_gateway_auth(ctx: click.Context, binary: str, argv: list[str], token: Optional[str],
+                                  policy: str, config_dir: Optional[str]) -> None:
+    """Enroll as a child, then set the policy against the enrolled endpoint.
+
+    Without --gateway-auth-policy, enroll still execs the helper. Here the
+    helper must validate managed/both against the enrolled exec endpoint's
+    sshd config, so it runs after enrollment. A minted token is the child's
+    whole stdin. With --token-stdin the child inherits stdin unread.
+    """
+    import subprocess
+
+    flags = 0x08000000 if sys.platform == "win32" else 0
+    stdin_data = None if token is None else token.encode("ascii") + b"\n"
+    try:
+        proc = subprocess.run([binary, *argv], input=stdin_data, creationflags=flags)
+    except OSError:
+        raise click.ClickException("could not start the gateway helper") from None
+    if proc.returncode != 0:
+        ctx.exit(proc.returncode)
+    try:
+        state = _gateway_auth_child(
+            binary, build_gateway_auth_argv("set", config_dir=config_dir, policy=policy, as_json=True))
+    except click.ClickException as exc:
+        raise click.ClickException(
+            f"enrolled, but the gateway auth policy was not set ({exc.message}); the host keeps "
+            f"its host keys. Retry: pocketshell gateway auth set --policy {policy}"
+        ) from None
+    click.echo(f"gateway auth policy: {state.get('policy', policy)}", err=True)
 
 
 @click.command("run")

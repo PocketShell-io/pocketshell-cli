@@ -471,6 +471,15 @@ over an SSH session you already have. The gateway never relays it, so an
 account token alone cannot add a login key. The helper contract is
 documented in pocketshell-gateway `docs/tunnel.md`.
 
+`pocketshell gateway enroll --gateway-auth-policy host|managed|both` sets the
+policy right after a successful enrollment, so the helper checks it against the
+enrolled endpoint. If that step is refused, the host stays enrolled with its
+host keys and the command prints the retry. Without the flag nothing changes
+(`host`). `managed`
+is refused until vault public keys are installed, because no login would work,
+and loopback `--ssh-host` endpoints accept only `host`. The tray shows and
+changes the same setting (docs/tray.md).
+
 ## 6. Docker / local development gateways
 
 Against a gateway running locally or in Docker (plain `ws://`, no TLS), the
