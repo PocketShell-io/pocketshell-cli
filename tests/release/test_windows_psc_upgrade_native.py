@@ -46,7 +46,9 @@ CMD = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "cmd.
 def run(argv, timeout=1800):
     from unelevated import run_unelevated
 
-    code, out = run_unelevated(argv, env=dict(os.environ), cwd=str(LOCAL), timeout=timeout)
+    # A real Windows user has no XDG_* overrides; CI runners may.
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("XDG_")}
+    code, out = run_unelevated(argv, env=env, cwd=str(LOCAL), timeout=timeout)
     text = out.decode("utf-8", "replace")
     print(f"$ (unelevated) {' '.join(map(str, argv))} -> exit {code}\n{text[-3000:]}")
     return code, text
@@ -67,7 +69,7 @@ def active_tree():
 
 
 def psc_works():
-    code, text = run([CMD, "/d", "/c", f'"{SHIM}" --version'], timeout=120)
+    code, text = run([CMD, "/d", "/c", str(SHIM), "--version"], timeout=120)
     assert code == 0, text
     assert text.strip()
 

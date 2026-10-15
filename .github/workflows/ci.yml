@@ -208,6 +208,50 @@ jobs:
   # the helper is the labelled CI stand-in (never run: no enrollment). Then the
   # revision D new-machine flow runs as an ORDINARY user with the real guardian
   # e862645d and the owned sshd under a space + Unicode userData.
+  windows-psc-install:
+    # Re-running any tray installer over any existing PSC install must
+    # succeed (the v0.5.10 laptop upgrade failed with "Existing PSC version
+    # differs"). Runs scripts/release/psc-install.ps1 against the previous
+    # release's real PSC package as an ordinary user, without a full build.
+    name: Windows PSC install over existing installs
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PREVIOUS_RELEASE: v0.5.10
+      PREVIOUS_INSTALLER_SHA256: 887f986999d331f3efe2363412eda79499f7085d7b650c58965abd478fece0e3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          version: "0.10.11"
+      - name: Install pocketshell + dev deps from the committed lock
+        run: uv sync --frozen --group dev --extra link
+      - name: Fetch the previous release installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "$env:RUNNER_TEMP\previous"
+          gh release download $env:PREVIOUS_RELEASE --repo PocketShell-io/pocketshell-cli --pattern PocketShellGateway-Setup-x64.exe --dir $dir
+          if ($LASTEXITCODE -ne 0) { throw 'previous installer download failed' }
+          $got = (Get-FileHash "$dir\PocketShellGateway-Setup-x64.exe" -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:PREVIOUS_INSTALLER_SHA256) { throw "previous installer SHA256 $got is not the pinned $env:PREVIOUS_INSTALLER_SHA256" }
+          "POCKETSHELL_TEST_PREVIOUS_INSTALLER=$dir\PocketShellGateway-Setup-x64.exe" >> $env:GITHUB_ENV
+      - name: PSC install over existing installs (ordinary user)
+        env:
+          PYTHONIOENCODING: utf-8
+        run: uv run --frozen pytest -v -rs -s tests/release/test_windows_psc_install_native.py
+
   windows-complete-runtime:
     name: Windows complete runtime (v3 closure)
     runs-on: windows-latest
