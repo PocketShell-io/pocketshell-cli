@@ -289,6 +289,7 @@ def status_document():
 def run_tray(root):
     from pocketshell.tray.app import TrayApp
     from pocketshell.tray.autostart import install_autostart
+    from pocketshell.tray.gateway_auth import GatewayAuthClient
     from pocketshell.tray.single_instance import SingleInstance
     from pocketshell.tray.status_client import GatewayStatusClient
 
@@ -339,6 +340,18 @@ def run_tray(root):
             with self.guard:
                 return control("restart")
 
+    class ManagedGatewayAuth(GatewayAuthClient):
+        """`gateway auth` through the bound, digest-pinned helper and config dir."""
+
+        def __init__(self):
+            super().__init__(command=[sys.executable, "-I", "-B", "-m", "pocketshell", "gateway", "auth"])
+
+        def _run(self, args, stdin=b""):
+            binding = own_binding()
+            self.config_dir = binding["configDir"]
+            self.env = dict(os.environ, POCKETSHELL_GATEWAY_HELPER=binding["helper"])
+            return super()._run(args, stdin)
+
     class ManagedApp(TrayApp):
         def do_open_logs(self):
             os.startfile(home())
@@ -374,7 +387,8 @@ def run_tray(root):
     if not instance.acquire():
         return
     try:
-        ManagedApp(status_client=ManagedClient(), autostart_installer=lambda: install_autostart(
+        ManagedApp(status_client=ManagedClient(), gateway_auth_client=ManagedGatewayAuth(),
+                   autostart_installer=lambda: install_autostart(
             command=f'"{root / "GatewayTray.exe"}"')).run()
     finally:
         instance.release()

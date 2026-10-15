@@ -198,8 +198,11 @@ def menu_spec(state: Optional[GatewayAuthState]) -> MenuItemSpec:
         return MenuItemSpec(text=state.summary, children=tuple(children))
 
     for policy in POLICIES:
+        label = POLICY_LABELS[policy]
+        if policy == "host" and state.host_only:
+            label = "Host keys only (this gateway's authorized keys)"
         children.append(MenuItemSpec(
-            text=POLICY_LABELS[policy],
+            text=label,
             action_id=f"gateway_auth_policy:{policy}",
             # A refused choice stays clickable so the tray can say why.
             checked=policy == state.policy,
@@ -234,15 +237,18 @@ class GatewayAuthClient:
     """Runs ``gateway auth show|set --json``; never puts key bytes in argv."""
 
     def __init__(self, command: Optional[Sequence[str]] = None, *, config_dir: Optional[str] = None,
-                 timeout: float = 20.0) -> None:
+                 env: Optional[dict[str, str]] = None, timeout: float = 20.0) -> None:
         self.command = list(command or [sys.executable, "-m", "pocketshell", "gateway", "auth"])
         self.config_dir = config_dir
+        self.env = env
         self.timeout = timeout
 
     def _run(self, args: Sequence[str], stdin: bytes = b"") -> subprocess.CompletedProcess:
         kwargs: dict[str, Any] = {"input": stdin, "capture_output": True, "timeout": self.timeout}
         if _CREATE_NO_WINDOW:
             kwargs["creationflags"] = _CREATE_NO_WINDOW
+        if self.env is not None:
+            kwargs["env"] = self.env
         tail = ["--config-dir", self.config_dir] if self.config_dir else []
         return subprocess.run([*self.command, *args, *tail], **kwargs)
 

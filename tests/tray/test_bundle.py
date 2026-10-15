@@ -124,6 +124,30 @@ def test_login_start_failure_is_visible_and_recovers_on_retry(tmp_path, monkeypa
     bundle.run_tray(tmp_path)
 
 
+def test_tray_gateway_auth_uses_the_bound_helper_and_config(tmp_path, monkeypatch):
+    import subprocess
+    from pocketshell.tray import gateway_auth
+    from pocketshell.tray.app import TrayApp
+    monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(bundle, "own_binding", lambda: {"configDir": r"C:\cfg", "helper": r"C:\rel\bin\pocketshell-link.exe"})
+    calls = []
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        out = b'{"policy":"host","source":"default","endpoint":"loopback","managed_keys":[]}'
+        return subprocess.CompletedProcess(cmd, 0, out, b"")
+    monkeypatch.setattr(gateway_auth.subprocess, "run", fake_run)
+    def run(app):
+        shown = app.gateway_auth_client.show()
+        assert shown.policy == "host" and shown.host_only
+    monkeypatch.setattr(TrayApp, "run", run)
+    bundle.run_tray(tmp_path)
+    cmd, kwargs = calls[0]
+    assert cmd[1:] == ["-I", "-B", "-m", "pocketshell", "gateway", "auth", "show", "--json",
+                       "--config-dir", r"C:\cfg"]
+    assert kwargs["env"]["POCKETSHELL_GATEWAY_HELPER"] == r"C:\rel\bin\pocketshell-link.exe"
+
+
 def test_tray_cannot_adopt_another_installations_binding(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, "home", lambda: tmp_path)
     with pytest.raises(RuntimeError, match="another installation"):
