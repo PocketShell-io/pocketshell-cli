@@ -158,7 +158,7 @@ def test_aplexer_replaces_both_executables_and_old_native_client(tmp_path, monke
     old.mkdir(parents=True)
     (old / "client.pyc").write_bytes(b"obsolete sourceless client")
     receipt = builder.stage_aplexer(*wheels, root)
-    assert receipt["version"] == "0.1.12"
+    assert receipt["version"] == "0.1.13"
     assert (root / "python/a.exe").read_bytes() == (root / "python/aplexer.exe").read_bytes() == b"RPC CLI and worker"
     assert not (old / "client.pyc").exists()
     assert (old / "_native.pyd").read_bytes() == b"native client"
