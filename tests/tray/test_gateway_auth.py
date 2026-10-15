@@ -332,3 +332,11 @@ def test_real_helper_round_trip(tmp_path: Path):
 def test_module_imports_without_gui():
     subprocess.run([sys.executable, "-c", "import pocketshell.tray.gateway_auth, pocketshell.tray.dialogs"],
                    check=True)
+
+
+def test_policy_refresh_failure_never_breaks_status_polling():
+    app, client = make_app(state("host"), FakeDialogs())
+    client.show.side_effect = RuntimeError("binding unreadable")
+    app.status_client.fetch_status.return_value = TrayModel(state="online", summary="ok")
+    assert app.poll_once().state == "online"
+    assert app.gateway_auth.error == "refresh failed"

@@ -289,7 +289,7 @@ def status_document():
 def run_tray(root):
     from pocketshell.tray.app import TrayApp
     from pocketshell.tray.autostart import install_autostart
-    from pocketshell.tray.gateway_auth import GatewayAuthClient
+    from pocketshell.tray.gateway_auth import GatewayAuthClient, GatewayAuthError
     from pocketshell.tray.single_instance import SingleInstance
     from pocketshell.tray.status_client import GatewayStatusClient
 
@@ -347,7 +347,10 @@ def run_tray(root):
             super().__init__(command=[sys.executable, "-I", "-B", "-m", "pocketshell", "gateway", "auth"])
 
         def _run(self, args, stdin=b""):
-            binding = own_binding()
+            try:
+                binding = own_binding()
+            except (OSError, ValueError, KeyError, RuntimeError) as exc:
+                raise GatewayAuthError(f"gateway binding unavailable: {str(exc)[:200]}") from None
             self.config_dir = binding["configDir"]
             self.env = dict(os.environ, POCKETSHELL_GATEWAY_HELPER=binding["helper"])
             return super()._run(args, stdin)

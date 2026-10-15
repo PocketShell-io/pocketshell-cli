@@ -181,3 +181,17 @@ def test_status_uses_this_gateways_enrollment_not_global_defaults(tmp_path, monk
     monkeypatch.setattr(status, "collect_gateway_status", collect)
     assert bundle.managed_status()["device_id"] == "this-device"
     assert calls == [enrollment]
+
+
+def test_tray_gateway_auth_reports_a_missing_binding(tmp_path, monkeypatch):
+    from pocketshell.tray.app import TrayApp
+    monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    def missing():
+        raise RuntimeError("Run Gateway Setup before starting this gateway")
+    monkeypatch.setattr(bundle, "own_binding", missing)
+    def run(app):
+        shown = app.gateway_auth_client.show()
+        assert not shown.available and "Gateway Setup" in shown.error
+    monkeypatch.setattr(TrayApp, "run", run)
+    bundle.run_tray(tmp_path)

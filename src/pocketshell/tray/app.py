@@ -70,7 +70,12 @@ class TrayApp:
         for event in events:
             self.notify(event.message, event.title)
 
-        self._maybe_refresh_gateway_auth()
+        try:
+            self._maybe_refresh_gateway_auth()
+        except Exception as exc:  # the key policy must never stall status polling
+            logger.debug("Gateway key policy refresh failed: %s", exc)
+            self.gateway_auth = gateway_auth.GatewayAuthState.unavailable("refresh failed")
+            self._gateway_auth_checked_at = time.monotonic()
 
         # Refresh tray icon and menu if running
         self._refresh_icon()
