@@ -115,6 +115,48 @@ def test_tray_app_actions():
     mock_client.restart_gateway.assert_called_once()
 
 
+def test_run_control_notifies_on_failure_result():
+    mock_client = MagicMock()
+    mock_client.start_gateway.return_value = (False, "task refused the start")
+    mock_client.fetch_status.return_value = TrayModel(state="offline")
+    app = TrayApp(status_client=mock_client)
+    notifications = []
+    app.notify = lambda msg, title="": notifications.append((title, msg))
+
+    app.do_start()
+
+    assert len(notifications) == 1
+    assert "Gateway needs attention" in notifications[0][0]
+    assert "task refused the start" in notifications[0][1]
+
+
+def test_run_control_notifies_on_raised_exception():
+    mock_client = MagicMock()
+    mock_client.stop_gateway.side_effect = RuntimeError("no link process appeared within 15s")
+    mock_client.fetch_status.return_value = TrayModel(state="offline")
+    app = TrayApp(status_client=mock_client)
+    notifications = []
+    app.notify = lambda msg, title="": notifications.append((title, msg))
+
+    app.do_stop()
+
+    assert len(notifications) == 1
+    assert "gateway stop failed" in notifications[0][1]
+
+
+def test_run_control_success_stays_silent():
+    mock_client = MagicMock()
+    mock_client.restart_gateway.return_value = (True, "restarted pocketshell-gateway.service")
+    mock_client.fetch_status.return_value = TrayModel(state="online")
+    app = TrayApp(status_client=mock_client)
+    notifications = []
+    app.notify = lambda msg, title="": notifications.append((title, msg))
+
+    app.do_restart()
+
+    assert notifications == []
+
+
 def test_tray_app_build_menu():
     pystray = pytest.importorskip("pystray")
 

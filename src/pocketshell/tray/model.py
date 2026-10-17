@@ -6,8 +6,9 @@ event detection from any GUI toolkit (pystray/Pillow).
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,15 @@ class MenuItemSpec:
     children: tuple[MenuItemSpec, ...] = ()
 
 
+STATE_LABELS = {
+    "online": "Online",
+    "degraded": "Degraded",
+    "offline": "Offline",
+    "not_installed": "Not Installed",
+    "error": "Error",
+}
+
+
 @dataclass(frozen=True)
 class TrayModel:
     """State snapshot for the tray app derived from `gateway status --json`."""
@@ -173,14 +183,7 @@ class TrayModel:
 
     @property
     def header_title(self) -> str:
-        state_labels = {
-            "online": "Online",
-            "degraded": "Degraded",
-            "offline": "Offline",
-            "not_installed": "Not Installed",
-            "error": "Error",
-        }
-        label = state_labels.get(self.state, self.state.capitalize())
+        label = STATE_LABELS.get(self.state, self.state.capitalize())
         return f"PocketShell: {label}"
 
     @property
@@ -318,32 +321,79 @@ class NotificationEvent:
 
 
 class NotificationDetector:
-    """Detects state changes and new client connections across poll cycles."""
+    """Detects state changes and new client connections across poll cycles.
 
-    def __init__(self) -> None:
+    Downward transitions (offline / degraded / error) are debounced: the
+    announcement only goes out once the new state has persisted for
+    ``debounce_seconds`` across polls, so a single bad poll (a slow broker
+    probe, a link process restart between guardian checks) no longer
+    produces an "offline" balloon followed by an "online" one. The tray
+    icon still tracks the real state on every poll; only the balloons are
+    debounced. Recovery to a healthy state is announced immediately, but
+    only after the outage itself was announced — a blip that resolved
+    inside the window stays completely silent.
+    """
+
+    DOWN_STATES = ("offline", "degraded", "error")
+    DEBOUNCE_SECONDS = 60.0
+
+    def __init__(
+        self,
+        *,
+        debounce_seconds: float = DEBOUNCE_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._last_state: Optional[str] = None
         self._known_client_keys: Optional[set[str]] = None
+        # The last state the user was told about (the first poll counts as
+        # announced baseline), the down state waiting out its debounce
+        # window, and when that window started.
+        self._announced_state: Optional[str] = None
+        self._pending_state: Optional[str] = None
+        self._pending_since: float = 0.0
+        self._debounce_seconds = max(0.0, float(debounce_seconds))
+        self._clock = clock
 
     def update(self, model: TrayModel) -> list[NotificationEvent]:
         events: list[NotificationEvent] = []
+        now = self._clock()
+        state = model.state
 
-        # 1. State transition notification
-        if self._last_state is not None and model.state != self._last_state:
-            state_labels = {
-                "online": "Online",
-                "degraded": "Degraded",
-                "offline": "Offline",
-                "not_installed": "Not Installed",
-                "error": "Error",
-            }
-            state_label = state_labels.get(model.state, model.state.capitalize())
+        # 1. Debounced state-transition notification
+        if self._last_state is None:
+            # Baseline: the first poll sets the reference, never notifies.
+            self._announced_state = state
+        elif state != self._last_state:
+            if state in self.DOWN_STATES:
+                # An outage is only announced once it persists; switching
+                # between down states keeps the original timer running.
+                if self._pending_state is None:
+                    self._pending_since = now
+                self._pending_state = state
+            else:
+                self._pending_state = None
+                if self._announced_state is not None and state != self._announced_state:
+                    events.append(
+                        NotificationEvent(
+                            title=f"PocketShell Gateway: {STATE_LABELS.get(state, state.capitalize())}",
+                            message=model.summary,
+                        )
+                    )
+                self._announced_state = state
+        elif (
+            self._pending_state is not None
+            and state == self._pending_state
+            and now - self._pending_since >= self._debounce_seconds
+        ):
             events.append(
                 NotificationEvent(
-                    title=f"PocketShell Gateway: {state_label}",
+                    title=f"PocketShell Gateway: {STATE_LABELS.get(state, state.capitalize())}",
                     message=model.summary,
                 )
             )
-        self._last_state = model.state
+            self._announced_state = state
+            self._pending_state = None
+        self._last_state = state
 
         # 2. New client connection notification
         current_keys = {c.key_identifier for c in model.clients}

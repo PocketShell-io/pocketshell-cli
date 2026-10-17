@@ -97,6 +97,7 @@ def test_exec_status_never_probes_tcp_or_auth_logs(endpoint_home, monkeypatch):
                                                "ssh_exec": ["/usr/sbin/sshd", "-i", "-f", "/private/config"]}))
     monkeypatch.setattr(status, "collect_agent_status", lambda *a, **k: (
         {"installed": True, "running": True, "connected": True}, []))
+    monkeypatch.setattr(status, "live_link_configs", lambda: [])
     monkeypatch.setattr(status, "check_sshd_reachable", lambda *a, **k: pytest.fail("TCP probe"))
     monkeypatch.setattr(status, "collect_clients_status", lambda *a, **k: pytest.fail("system auth logs"))
     doc = status.collect_gateway_status(config_dir=str(cfg), enumerate_sessions_fn=lambda: ([], []))
@@ -111,6 +112,7 @@ def test_legacy_port_22_status_refuses_system_probe(endpoint_home, monkeypatch):
                                                "ssh_host": "127.0.0.1:22"}))
     monkeypatch.setattr(status, "collect_agent_status", lambda *a, **k: (
         {"installed": True, "running": True, "connected": True}, []))
+    monkeypatch.setattr(status, "live_link_configs", lambda: [])
     monkeypatch.setattr(status, "check_sshd_reachable", lambda *a, **k: pytest.fail("system TCP probe"))
     monkeypatch.setattr(status, "collect_clients_status", lambda *a, **k: pytest.fail("system auth logs"))
     doc = status.collect_gateway_status(config_dir=str(cfg), enumerate_sessions_fn=lambda: ([], []))

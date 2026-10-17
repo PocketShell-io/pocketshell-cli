@@ -195,3 +195,35 @@ def test_tray_gateway_auth_reports_a_missing_binding(tmp_path, monkeypatch):
         assert not shown.available and "Gateway Setup" in shown.error
     monkeypatch.setattr(TrayApp, "run", run)
     bundle.run_tray(tmp_path)
+
+
+def test_control_reports_non_runtime_start_errors(tmp_path, monkeypatch):
+    # A native-spawn refusal (OSError, not RuntimeError) must still reach
+    # the user as a "needs attention" balloon, never die on the worker floor.
+    monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    monkeypatch.setattr(bundle, "own_binding", lambda: {})
+    monkeypatch.setattr(bundle, "agent", lambda *a, **kw: {})
+    def start():
+        raise OSError("native spawn refused: tray job is closed")
+    monkeypatch.setattr(bundle, "start_gateway", start)
+    ok, detail = bundle.control("start")
+    assert ok is False
+    assert "native spawn refused" in detail
+
+
+def test_legacy_link_task_warning_is_none_off_windows(monkeypatch):
+    monkeypatch.setattr(bundle.sys, "platform", "linux")
+    assert bundle.legacy_link_task_warning() is None
+
+
+def test_legacy_link_task_warning_names_duplicate_link(monkeypatch):
+    from types import SimpleNamespace
+    from pocketshell.gateway import service_windows
+    monkeypatch.setattr(bundle.sys, "platform", "win32")
+    monkeypatch.setattr(
+        service_windows, "query_task",
+        lambda runner=None: SimpleNamespace(state="Ready", last_result=0),
+    )
+    warning = bundle.legacy_link_task_warning()
+    assert "GatewayLink" in warning
+    assert "duplicate" in warning

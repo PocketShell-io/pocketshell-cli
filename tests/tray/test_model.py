@@ -219,15 +219,13 @@ def test_notification_detector_transitions_and_new_clients():
     events_repeat = detector.update(model1)
     assert len(events_repeat) == 0
 
-    # State transition: online -> degraded
+    # State transition: online -> degraded is debounced (no instant balloon)
     doc_degraded = dict(SAMPLE_STATUS_JSON, state="degraded", summary="Local SSH server is not running")
     model2 = TrayModel.from_status_dict(doc_degraded)
     events2 = detector.update(model2)
-    assert len(events2) == 1
-    assert events2[0].title == "PocketShell Gateway: Degraded"
-    assert "Local SSH server is not running" in events2[0].message
+    assert len(events2) == 0
 
-    # Client connects: new client added
+    # Client connects: new client added (client notifications are not debounced)
     clients_with_new = list(SAMPLE_STATUS_JSON["clients"]) + [
         {
             "user": "bob",
@@ -243,7 +241,8 @@ def test_notification_detector_transitions_and_new_clients():
     assert events3[0].title == "New Gateway Connection"
     assert "bob (bob-workstation) connected" in events3[0].message
 
-    # Both state change and new client in same poll
+    # Both state recovery and new client in same poll: recovery was never
+    # announced (the blip stayed silent), so only the client event fires.
     clients_third = list(clients_with_new) + [
         {
             "user": "charlie",
@@ -255,6 +254,95 @@ def test_notification_detector_transitions_and_new_clients():
     doc_both = dict(SAMPLE_STATUS_JSON, state="online", summary="Back online", clients=clients_third)
     model4 = TrayModel.from_status_dict(doc_both)
     events4 = detector.update(model4)
-    assert len(events4) == 2
-    assert any("Online" in e.title for e in events4)
+    assert len(events4) == 1
     assert any("charlie connected" in e.message for e in events4)
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+def _model(state, summary="s"):
+    return TrayModel.from_status_dict(dict(SAMPLE_STATUS_JSON, state=state, summary=summary))
+
+
+def test_notification_detector_offline_hysteresis_needs_60s():
+    clock = _FakeClock()
+    detector = NotificationDetector(clock=clock)
+    assert detector.update(_model("online")) == []
+
+    # A single bad poll stays completely silent.
+    clock.advance(5)
+    assert detector.update(_model("offline")) == []
+
+    # Still silent just before the 60s window closes (window opened at t=1005).
+    clock.advance(54.9)
+    assert detector.update(_model("offline")) == []
+
+    # Persisting past the window announces the outage once.
+    clock.advance(5.2)
+    events = detector.update(_model("offline"))
+    assert len(events) == 1
+    assert events[0].title == "PocketShell Gateway: Offline"
+
+    # No repeat announcements while the outage continues.
+    clock.advance(120)
+    assert detector.update(_model("offline")) == []
+
+
+def test_notification_detector_blip_resolving_inside_window_stays_silent():
+    clock = _FakeClock()
+    detector = NotificationDetector(clock=clock)
+    assert detector.update(_model("online")) == []
+
+    clock.advance(10)
+    assert detector.update(_model("offline")) == []
+    # Recovers before the window closes: no outage was announced, so no
+    # recovery announcement either.
+    clock.advance(10)
+    assert detector.update(_model("online")) == []
+
+
+def test_notification_detector_recovery_after_announced_outage_is_immediate():
+    clock = _FakeClock()
+    detector = NotificationDetector(clock=clock)
+    assert detector.update(_model("online")) == []
+
+    clock.advance(1)
+    assert detector.update(_model("degraded")) == []
+    clock.advance(60)
+    events = detector.update(_model("degraded"))
+    assert len(events) == 1
+
+    clock.advance(1)
+    recovered = detector.update(_model("online", summary="Back online"))
+    assert len(recovered) == 1
+    assert recovered[0].title == "PocketShell Gateway: Online"
+
+
+def test_notification_detector_down_state_switch_keeps_original_timer():
+    clock = _FakeClock()
+    detector = NotificationDetector(clock=clock)
+    assert detector.update(_model("online")) == []
+
+    clock.advance(1)
+    assert detector.update(_model("offline")) == []
+    # Switching between down states does not restart the debounce window.
+    clock.advance(50)
+    assert detector.update(_model("degraded")) == []
+    clock.advance(10)
+    events = detector.update(_model("degraded"))
+    assert len(events) == 1
+    assert events[0].title == "PocketShell Gateway: Degraded"
+
+
+def test_notification_detector_minimum_hysteresis_is_60s():
+    assert NotificationDetector.DEBOUNCE_SECONDS >= 60.0
+    assert NotificationDetector(clock=_FakeClock())._debounce_seconds >= 60.0

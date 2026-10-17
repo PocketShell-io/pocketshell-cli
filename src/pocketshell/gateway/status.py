@@ -337,6 +337,143 @@ def read_enrolled_config(config_dir: Optional[str] = None) -> tuple[Optional[str
     return None, DEFAULT_SSHD_PORT, None
 
 
+def _cmdline_argv(raw: bytes) -> list[str]:
+    """Split a /proc/<pid>/cmdline blob into argv (NUL-separated)."""
+    return [seg.decode("utf-8", "replace") for seg in raw.split(b"\x00") if seg]
+
+
+def _is_link_run_argv(argv: list[str]) -> bool:
+    """Whether argv invokes a link process (not a client-side subcommand).
+
+    Token-exact: a client ``gateway proxy`` shares the substrings
+    "pocketshell", "gateway" and "run" (via /run/... socket paths) but never
+    the token sequence, so substring matching would mistake a connected
+    client for a running link.
+    """
+    if not argv:
+        return False
+    prog = os.path.basename(argv[0])
+    if prog in ("pocketshell-link", "pocketshell-link.exe"):
+        return "run" in argv[1:]
+    return any(
+        argv[i : i + 3] == ["pocketshell", "gateway", "run"]
+        for i in range(len(argv) - 2)
+    )
+
+
+def _proc_link_run_entries() -> list[tuple[int, list[str]]]:
+    """(pid, argv) of running link processes via Linux /proc (empty elsewhere)."""
+    if not sys.platform.startswith("linux"):
+        return []
+    entries: list[tuple[int, list[str]]] = []
+    try:
+        with os.scandir("/proc") as it:
+            candidates = [entry for entry in it if entry.name.isdigit()]
+    except OSError:
+        return []
+    for entry in candidates:
+        pid = int(entry.name)
+        if pid == os.getpid():
+            continue
+        try:
+            with open(os.path.join(entry.path, "cmdline"), "rb") as f:
+                raw = f.read(4096)
+        except OSError:
+            continue
+        argv = _cmdline_argv(raw)
+        if _is_link_run_argv(argv):
+            entries.append((pid, argv))
+    return entries
+
+
+def _config_dir_from_argv(argv: list[str]) -> Optional[str]:
+    """The ``--config-dir`` value of a link/run argv, if present.
+
+    Accepts both ``--config-dir DIR`` and ``--config-dir=DIR``. Returns None
+    when the flag is absent (the link then uses the helper's default config
+    dir).
+    """
+    for i, part in enumerate(argv):
+        if part == "--config-dir" and i + 1 < len(argv):
+            return argv[i + 1] or None
+        if part.startswith("--config-dir="):
+            return part.partition("=")[2] or None
+    return None
+
+
+def live_link_configs(
+    *,
+    _entries: Optional[list[tuple[int, list[str]]]] = None,
+) -> list[tuple[str, str]]:
+    """(config_dir, device_id) backing the currently running link processes.
+
+    Each running ``pocketshell-link run`` / ``pocketshell gateway run``
+    process serves exactly one enrollment: the config dir on its command
+    line (or the helper default when the flag is absent). Entries are
+    deduplicated by config dir, in stable (sorted) order. Empty when no link
+    process runs, or when a command line cannot be read on this platform
+    (Windows has no cheap locale-independent command-line source; the
+    managed tray there already polls with the binding's live config dir).
+    """
+    if _entries is None:
+        if not sys.platform.startswith("linux"):
+            return []
+        _entries = _proc_link_run_entries()
+    configs: dict[str, str] = {}
+    for _pid, argv in _entries:
+        flag_dir = _config_dir_from_argv(argv)
+        config_dir = flag_dir or common.default_config_dir()
+        if config_dir in configs:
+            continue
+        try:
+            device_id, _, _ = read_enrolled_config(config_dir)
+        except Exception:  # noqa: BLE001 - a half-written config never breaks status
+            continue
+        if device_id:
+            configs[config_dir] = device_id
+    return sorted(configs.items())
+
+
+def live_link_device_ids(
+    *,
+    _entries: Optional[list[tuple[int, list[str]]]] = None,
+) -> list[str]:
+    """Device ids backing the running links, deduplicated, in stable order."""
+    return sorted({device_id for _, device_id in live_link_configs(_entries=_entries)})
+
+
+def _prefer_live_device_id(
+    enrolled_id: Optional[str], live_ids: list[str]
+) -> tuple[Optional[str], list[str]]:
+    """Pick the device id status should track, plus warning strings.
+
+    When exactly one enrollment backs the running link(s) it is the live
+    host id even if the (default) enrolled config says otherwise — e.g. a
+    leftover pre-managed enrollment next to the managed link. When several
+    different enrollments each have a live link, the choice is kept
+    deterministic (the enrolled id) so status cannot flip-flop between ids
+    on every poll; the duplicate-link warning tells the user to remove the
+    leftover instead.
+    """
+    if len(live_ids) == 1 and live_ids[0] != enrolled_id:
+        live = live_ids[0]
+        if enrolled_id:
+            return live, [
+                f"the running gateway link reports device '{live}', not the "
+                f"enrolled '{enrolled_id}'; tracking the live registration "
+                "(remove the leftover enrollment or service to stop the warning)"
+            ]
+        return live, []
+    if len(live_ids) > 1:
+        return enrolled_id, [
+            f"multiple gateway links are running with different device ids "
+            f"({', '.join(live_ids)}); tracking '{enrolled_id or 'none'}' — "
+            "stop the leftover link (e.g. the legacy scheduled task) so "
+            "presence stops flapping"
+        ]
+    return enrolled_id, []
+
+
 def _presence_cache_path(device_id: str) -> str:
     uid = getattr(os, "getuid", lambda: "u")()
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", device_id)
@@ -722,7 +859,22 @@ def collect_gateway_status(
     all_errors: list[str] = []
 
     # 1. Config & Enrollment
-    device_id, sshd_port, server_url = read_enrolled_config(config_dir)
+    enrolled_id, sshd_port, server_url = read_enrolled_config(config_dir)
+    # The default enrolled config can be a leftover (e.g. a pre-managed
+    # enrollment) while the actually running link serves another one. Track
+    # the live host id from the link's config so status, presence and "copy
+    # device id" follow the live registration instead of a stale file.
+    live_configs = live_link_configs()
+    live_ids = sorted({dev for _, dev in live_configs})
+    device_id, id_warnings = _prefer_live_device_id(enrolled_id, live_ids)
+    all_errors: list[str] = []
+    all_errors.extend(id_warnings)
+    # A single live link from another enrollment is the serving setup: take
+    # its endpoint facts (sshd target, server, exec kind) as well.
+    status_config_dir = config_dir
+    if len(live_configs) == 1 and device_id != enrolled_id:
+        status_config_dir = live_configs[0][0]
+        _, sshd_port, server_url = read_enrolled_config(status_config_dir)
 
     # 2. Agent Status
     agent_dict, agent_errors = collect_agent_status(
@@ -737,7 +889,7 @@ def collect_gateway_status(
     # 3. SSHD Reachability
     endpoint = {"kind": "loopback"}
     try:
-        with open(os.path.join(config_dir or common.default_config_dir(), common.CONFIG_FILE)) as f:
+        with open(os.path.join(status_config_dir or common.default_config_dir(), common.CONFIG_FILE)) as f:
             config = json.load(f)
         if config.get("ssh_exec"):
             endpoint = {"kind": "exec"}
@@ -851,30 +1003,72 @@ def format_human_status(doc: Mapping[str, Any]) -> str:
 
 # --- Lifecycle commands (start / stop / restart) --------------------------------------
 
+# The link scheduled task and how long `start` waits for its action to
+# actually produce a running link process before reporting failure.
+WINDOWS_LINK_TASK = r"\PocketShell\GatewayLink"
+START_CONFIRM_SECONDS = 15.0
+
+
+def _windows_task_command(runner: Optional[common.Runner] = None) -> Optional[str]:
+    """The registered link task's Exec command path, or None when unreadable.
+
+    Uses the locale-independent COM query; any failure returns None so the
+    caller simply skips the stale-path precheck.
+    """
+    try:
+        from pocketshell.gateway import service_windows
+        info = service_windows.query_task(runner=runner)
+    except Exception:  # noqa: BLE001 - lifecycle commands never traceback
+        return None
+    if info is None:
+        return None
+    try:
+        return service_windows.parse_task_xml(info.xml).get("command")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _windows_task_detail(runner: Optional[common.Runner] = None) -> str:
+    """Diagnostic suffix (task state, last result) for start failures."""
+    try:
+        from pocketshell.gateway import service_windows
+        info = service_windows.query_task(runner=runner)
+    except Exception:  # noqa: BLE001
+        return ""
+    if info is None:
+        return " (the task is no longer registered)"
+    return f" (task state {info.state}, last result {info.last_result})"
+
+
+def _await_agent_start(
+    runner: Optional[common.Runner] = None,
+    timeout: float = START_CONFIRM_SECONDS,
+    *,
+    sleep_fn: Optional[Callable[[float], None]] = None,
+) -> bool:
+    """Poll until a link process is running (image-based, locale-independent).
+
+    Service managers report success even when the agent instantly fails
+    (``systemctl start`` exits 0 while the unit crash-loops; ``schtasks
+    /Run`` exits 0 when the task's action instantly fails), so the only
+    honest confirmation is the process itself.
+    """
+    sleep = sleep_fn or time.sleep
+    deadline = time.monotonic() + timeout
+    while True:
+        if find_running_gateway_pids(runner=runner):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        sleep(1.0)
+
+
 def find_running_gateway_pids(runner: Optional[common.Runner] = None) -> list[int]:
     """Find process IDs of running pocketshell-link run or pocketshell gateway run processes."""
     pids: list[int] = []
     if sys.platform.startswith("linux"):
-        try:
-            for entry in os.scandir("/proc"):
-                if not entry.name.isdigit():
-                    continue
-                pid = int(entry.name)
-                if pid == os.getpid():
-                    continue
-                cmdline_path = os.path.join(entry.path, "cmdline")
-                try:
-                    with open(cmdline_path, "rb") as f:
-                        raw = f.read(1024)
-                    cmd = raw.replace(b"\x00", b" ").decode("utf-8", "replace")
-                    if ("pocketshell-link" in cmd and " run" in cmd) or (
-                        "pocketshell" in cmd and "gateway" in cmd and "run" in cmd
-                    ):
-                        pids.append(pid)
-                except OSError:
-                    continue
-        except OSError:
-            pass
+        for pid, _argv in _proc_link_run_entries():
+            pids.append(pid)
         if not pids:
             run_fn = runner or common.run_child
             try:
@@ -942,26 +1136,70 @@ def start_gateway(
             if res.returncode != 0:
                 err = common.decode(res.stderr or res.stdout).strip()
                 raise common.ServiceError(f"failed to start pocketshell-gateway.service: {err}")
+            # `systemctl start` exits 0 while the unit crash-loops, so only a
+            # running link process proves the service really started.
+            if not _await_agent_start(run_fn):
+                raise common.ServiceError(
+                    "pocketshell-gateway.service accepted the start request but no "
+                    f"link process appeared within {START_CONFIRM_SECONDS:g}s; "
+                    "check `journalctl --user -u pocketshell-gateway`"
+                )
             return "started pocketshell-gateway.service"
 
+        already = find_running_gateway_pids(runner=run_fn)
+        if already:
+            return f"gateway agent is already running (PID {', '.join(map(str, already))})"
+        device_id, _, _ = read_enrolled_config()
+        if not device_id:
+            raise common.ServiceError(
+                "no enrolled gateway configuration found; run "
+                "`pocketshell gateway enroll` before starting the agent"
+            )
         pid = spawn_detached_run(spawn_fn=spawn_fn)
         return f"pocketshell-gateway.service is not installed; spawned detached 'pocketshell gateway run' (PID {pid})"
 
     elif sys.platform == "win32":
+        already = find_running_gateway_pids(runner=run_fn)
+        if already:
+            return f"gateway agent is already running (PID {', '.join(map(str, already))})"
+
         task_installed = False
         try:
-            res = run_fn(["schtasks.exe", "/Query", "/TN", r"\PocketShell\GatewayLink", "/FO", "CSV"])
+            res = run_fn(["schtasks.exe", "/Query", "/TN", WINDOWS_LINK_TASK, "/FO", "CSV"])
             task_installed = (res.returncode == 0)
         except Exception:
             task_installed = False
 
         if task_installed:
-            res = run_fn(["schtasks.exe", "/Run", "/TN", r"\PocketShell\GatewayLink"])
+            # /Run reports success even when the task's action instantly
+            # fails (a stale helper path after an interrupted upgrade, an
+            # S4U logon refusal), so verify the agent actually came up.
+            command = _windows_task_command(runner)
+            if command and not os.path.exists(command):
+                raise common.ServiceError(
+                    f"the {WINDOWS_LINK_TASK} task points at {command}, which does not "
+                    "exist; reinstall the gateway (Gateway Setup) or re-run "
+                    "`pocketshell gateway service install` with the current helper"
+                )
+            res = run_fn(["schtasks.exe", "/Run", "/TN", WINDOWS_LINK_TASK])
             if res.returncode != 0:
                 err = common.decode(res.stderr or res.stdout).strip()
                 raise common.ServiceError(f"failed to start GatewayLink task: {err}")
-            return r"started \PocketShell\GatewayLink task"
+            if not _await_agent_start(runner):
+                raise common.ServiceError(
+                    f"the {WINDOWS_LINK_TASK} task accepted the start request but no "
+                    f"link process appeared within {START_CONFIRM_SECONDS:g}s"
+                    f"{_windows_task_detail(runner)}; check the task's last run "
+                    "result in Task Scheduler"
+                )
+            return rf"started {WINDOWS_LINK_TASK} task"
 
+        device_id, _, _ = read_enrolled_config()
+        if not device_id:
+            raise common.ServiceError(
+                "no enrolled gateway configuration found; run "
+                "`pocketshell gateway enroll` (or Gateway Setup) before starting"
+            )
         pid = spawn_detached_run(spawn_fn=spawn_fn)
         return f"Task Scheduler task is not installed; spawned detached 'pocketshell gateway run' (PID {pid})"
 
@@ -1009,14 +1247,14 @@ def stop_gateway(
     elif sys.platform == "win32":
         task_installed = False
         try:
-            res = run_fn(["schtasks.exe", "/Query", "/TN", r"\PocketShell\GatewayLink", "/FO", "CSV"])
+            res = run_fn(["schtasks.exe", "/Query", "/TN", WINDOWS_LINK_TASK, "/FO", "CSV"])
             task_installed = (res.returncode == 0)
         except Exception:
             task_installed = False
 
         stopped_task = False
         if task_installed:
-            res = run_fn(["schtasks.exe", "/End", "/TN", r"\PocketShell\GatewayLink"])
+            res = run_fn(["schtasks.exe", "/End", "/TN", WINDOWS_LINK_TASK])
             if res.returncode != 0:
                 err = common.decode(res.stderr or res.stdout).strip()
                 raise common.ServiceError(f"failed to stop GatewayLink task: {err}")
@@ -1030,7 +1268,7 @@ def stop_gateway(
                 run_fn(["taskkill", "/PID", str(pid), "/F"])
 
         if stopped_task:
-            return r"stopped \PocketShell\GatewayLink task"
+            return rf"stopped {WINDOWS_LINK_TASK} task"
         elif pids:
             return f"stopped detached gateway agent (PID {', '.join(map(str, pids))})"
         else:
@@ -1058,6 +1296,12 @@ def restart_gateway(
             if res.returncode != 0:
                 err = common.decode(res.stderr or res.stdout).strip()
                 raise common.ServiceError(f"failed to restart pocketshell-gateway.service: {err}")
+            if not _await_agent_start(run_fn):
+                raise common.ServiceError(
+                    "pocketshell-gateway.service accepted the restart request but no "
+                    f"link process appeared within {START_CONFIRM_SECONDS:g}s; "
+                    "check `journalctl --user -u pocketshell-gateway`"
+                )
             return "restarted pocketshell-gateway.service"
 
         stop_gateway(runner=run_fn, kill_fn=kill_fn)
@@ -1067,7 +1311,7 @@ def restart_gateway(
     elif sys.platform == "win32":
         task_installed = False
         try:
-            res = run_fn(["schtasks.exe", "/Query", "/TN", r"\PocketShell\GatewayLink", "/FO", "CSV"])
+            res = run_fn(["schtasks.exe", "/Query", "/TN", WINDOWS_LINK_TASK, "/FO", "CSV"])
             task_installed = (res.returncode == 0)
         except Exception:
             task_installed = False

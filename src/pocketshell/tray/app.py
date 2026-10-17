@@ -164,17 +164,32 @@ class TrayApp:
 
     def do_start(self) -> None:
         logger.info("Starting gateway...")
-        self.status_client.start_gateway()
-        self.poll_once()
+        self._run_control("start", self.status_client.start_gateway)
 
     def do_stop(self) -> None:
         logger.info("Stopping gateway...")
-        self.status_client.stop_gateway()
-        self.poll_once()
+        self._run_control("stop", self.status_client.stop_gateway)
 
     def do_restart(self) -> None:
         logger.info("Restarting gateway...")
-        self.status_client.restart_gateway()
+        self._run_control("restart", self.status_client.restart_gateway)
+
+    def _run_control(self, action: str, control: Callable[[], Any]) -> None:
+        """Run one lifecycle action and actually report what happened.
+
+        The result is an ``(ok, message)`` pair; both the result and any
+        raised exception used to be dropped on the worker-thread floor, so
+        a Start that failed left the tray silently showing "offline" with
+        no explanation for the user.
+        """
+        try:
+            result = control()
+            ok, message = result if isinstance(result, tuple) and len(result) == 2 else (True, "")
+        except Exception as exc:
+            ok, message = False, f"gateway {action} failed: {exc}"
+        if not ok:
+            logger.error("Gateway %s failed: %s", action, message)
+            self.notify(message or f"Gateway {action} failed", "Gateway needs attention")
         self.poll_once()
 
     def do_open_logs(self) -> None:

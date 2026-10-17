@@ -92,7 +92,7 @@ Right-clicking (or left-clicking on Windows) the tray icon opens the context men
 5. **`Stop gateway`**: Stops the gateway background service (enabled when online/degraded).
 6. **`Restart`**: Restarts the gateway agent and endpoint.
 7. **`Open logs folder`**: Opens the PocketShell logs directory in Explorer (Windows) or the system file manager (Linux).
-8. **`Copy device id`**: Copies the enrolled device ID to the system clipboard.
+8. **`Copy device id`**: Copies the live device ID to the system clipboard (the registration the running link actually serves, taken from the link's config; falls back to the enrolled ID when no link runs).
 9. **`Start at login`**: Checkbox toggling autostart at user logon.
 10. **`Quit tray`**: Closes the tray application (does **not** stop the background gateway service).
 
@@ -137,5 +137,5 @@ alone cannot add a login key.
 ## 6. Notifications
 
 The application delivers native system notifications (balloons):
-- **State transitions**: When the gateway moves between states (e.g. `Offline` -> `Online`, or `Online` -> `Degraded`).
+- **State transitions**: When the gateway moves between states (e.g. `Offline` -> `Online`, or `Online` -> `Degraded`). Outage transitions (`offline` / `degraded` / `error`) are announced only after persisting for at least 60 seconds across polls, so a single bad poll never flaps a balloon; the tray icon itself always tracks the latest state. Recovery is announced immediately once an outage was announced — a blip resolving inside the window stays silent.
 - **Client connections**: When a new remote user or key establishes an SSH connection through the gateway.

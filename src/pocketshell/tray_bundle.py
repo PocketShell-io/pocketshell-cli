@@ -214,7 +214,9 @@ def control(action):
             start_gateway()
             set_enabled(True)
         return True, f"Gateway {action} completed"
-    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+    except Exception as exc:
+        # A ServiceError or a native-spawn refusal must reach the user as a
+        # "needs attention" balloon, not die on the worker-thread floor.
         return False, str(exc)
 
 
@@ -273,7 +275,33 @@ def managed_status():
     outbound = local.get("outbound") or {}
     doc["agent"].update(installed=True, running=outbound.get("state") == "running", pid=outbound.get("pid"))
     doc["state"], doc["summary"] = status.derive_state(doc["agent"], doc["sshd"], doc["device_id"])
+    legacy = legacy_link_task_warning()
+    if legacy:
+        doc["errors"] = [*doc.get("errors", []), legacy]
     return doc
+
+
+def legacy_link_task_warning():
+    r"""A warning when a pre-managed \PocketShell\GatewayLink task survives.
+
+    The managed runtime never creates a scheduled task, so a registered
+    \PocketShell\GatewayLink is a leftover of an older install. Its 5-minute
+    watchdog keeps a SECOND link alive from the old enrollment: duplicate
+    device registrations on the gateway and flapping presence. Detection
+    only; removal is the user's explicit decision.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        from pocketshell.gateway import service_windows
+        info = service_windows.query_task()
+    except Exception:
+        return None
+    if info is None:
+        return None
+    return (f"legacy scheduled task \\PocketShell\\GatewayLink is still registered "
+            f"(state {info.state}); it can start a duplicate gateway link from an old "
+            "enrollment — remove it with `pocketshell gateway service uninstall`")
 
 
 def status_document():
@@ -360,7 +388,10 @@ def run_tray(root):
             os.startfile(home())
 
         def do_control(self, action):
-            ok, detail = getattr(self.status_client, action + "_gateway")()
+            try:
+                ok, detail = getattr(self.status_client, action + "_gateway")()
+            except Exception as exc:
+                ok, detail = False, str(exc)
             if not ok:
                 self.notify(detail, "Gateway needs attention")
                 logging.error("Gateway %s failed: %s", action, detail)
