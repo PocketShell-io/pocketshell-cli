@@ -94,11 +94,14 @@ def test_reinstalling_over_any_existing_psc_install_succeeds():
     psc_works()
     before = active_tree()
 
-    # new over previous: the reported upgrade
+    # new over previous: the reported upgrade. When the new release ships
+    # byte-identical PSC content, the verified tree is legitimately reused
+    # instead of switched (content-addressed installs).
     code, psc_code, log = install(NEW)
     assert code == 0
     assert_new_active(log, psc_code)
-    assert active_tree() != before
+    if active_tree() == before:
+        assert "Reusing verified PSC tree" in log
     upgraded = active_tree()
 
     # the same version twice: reuses the verified tree
