@@ -89,11 +89,25 @@ def test_msys_child_runtime_identity(closure, tmp_path):
             continue
         env = {k: v for k, v in os.environ.items() if k.casefold() != "path"}
         env["PATH"] = str(directory) + os.pathsep + str(Path(os.environ["SystemRoot"]) / "System32")
-        p = subprocess.run([str(bash), "--noprofile", "--norc", "-c", "command -v uname; uname -s"],
-                           env=env, cwd=tmp_path, capture_output=True, timeout=60)
-        print("MSYS runtime control:", label, p.returncode, ascii(p.stdout), ascii(p.stderr))
+        # Windows communicate() can keep waiting for a descendant's pipe even
+        # after the Bash process is killed on timeout. Files keep this control
+        # bounded independently of the broken runtime's handle inheritance.
+        stdout, stderr = tmp_path / f"{label}.stdout", tmp_path / f"{label}.stderr"
+        print("MSYS runtime control starting:", label, flush=True)
+        with stdout.open("wb") as so, stderr.open("wb") as se:
+            p = subprocess.Popen([str(bash), "--noprofile", "--norc", "-c", "command -v uname; uname -s"],
+                                 env=env, cwd=tmp_path, stdout=so, stderr=se, stdin=subprocess.DEVNULL)
+            try:
+                code = p.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                subprocess.run([str(Path(os.environ["SystemRoot"]) / "System32" / "taskkill.exe"),
+                                "/PID", str(p.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=15)
+                code = "timeout"
+        out, err = stdout.read_bytes(), stderr.read_bytes()
+        print("MSYS runtime control:", label, code, ascii(out), ascii(err), flush=True)
         if label == "owned":
-            assert p.returncode == 0 and b"MSYS_NT" in p.stdout and b"assertion" not in p.stderr
+            assert code == 0 and b"MSYS_NT" in out and b"assertion" not in err
 
 
 def test_new_machine_complete_runtime(closure, tmp_path):
@@ -103,6 +117,7 @@ def test_new_machine_complete_runtime(closure, tmp_path):
     api = win.WindowsApi()
     if api.current_session() == 0:
         pytest.skip("the runner process is in session 0 (no interactive session for the active-console mode)")
+    print("Starting ordinary-user endpoint flow", flush=True)
     user_data = Path(os.environ["APPDATA"]) / f"José Smith e2e {uuid.uuid4().hex[:6]}" / "PocketShell"
     user_data.parent.mkdir(parents=True)
     port = _free_port()
@@ -115,6 +130,7 @@ def test_new_machine_complete_runtime(closure, tmp_path):
         argv = [sys.executable, str(HARNESS), str(seams), "gateway", "agent", *args, "--json"]
         if stdin_file is not None:
             argv = [CMD, "/d", "/c", subprocess.list2cmdline(argv) + f' < "{stdin_file}"']
+        print("Starting agent call:", args, flush=True)
         code, out = run_unelevated(argv, env=env, cwd=str(tmp_path), timeout=900)
         text = out.decode("utf-8", "replace")
         print(f"$ (unelevated) pocketshell gateway agent {' '.join(args)} -> exit {code}\n{text[-4000:]}")
