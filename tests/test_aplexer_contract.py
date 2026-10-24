@@ -53,7 +53,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import tomllib
 import uuid
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -132,29 +131,6 @@ def bundled_a() -> str:
         f"({expected}), got {report.path} via {report.source}"
     )
     return report.path
-
-
-def _pinned_version() -> str:
-    """Lower bound of the aplexer pin (exact or range).
-
-    F5 moved the pin from exact (==0.1.8) to a compatible range
-    (>=0.1.19,<0.2); the contract below checks the bundled binary satisfies
-    the range instead of equaling a string.
-    """
-    import re
-
-    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
-    reqs = [
-        r
-        for r in data["project"]["dependencies"]
-        if r.split(";")[0].strip().startswith("aplexer")
-    ]
-    assert len(reqs) == 1, f"expected exactly one aplexer requirement, got {reqs}"
-    spec = reqs[0].split(";")[0].strip().removeprefix("aplexer").strip()
-    match = re.search(r">=\s*([0-9][0-9A-Za-z.\-]*)", spec)
-    if match:
-        return match.group(1)
-    return spec.split("==", 1)[1].strip()
 
 
 def _short_runtime_root() -> str:
@@ -1256,14 +1232,11 @@ def test_bundled_aplexer_reports_the_pinned_version(aplexer_fixture) -> None:
     assert len(parts) == 2 and parts[0] == "a", (
         f"bundled `a --version` is {completed.stdout.strip()!r}"
     )
-    installed = tuple(int(p) for p in parts[1].split("."))
-    floor = tuple(int(p) for p in _pinned_version().split("."))
-    assert installed >= floor, (
-        f"bundled `a --version` is {parts[1]!r}, pyproject floor is "
-        f"{_pinned_version()!r}"
-    )
-    assert installed < (0, 2), (
-        f"bundled `a --version` is {parts[1]!r}, must stay <0.2"
+    from tests.aplexer_requirement import aplexer_requirement
+
+    requirement = aplexer_requirement()
+    assert parts[1] in requirement.specifier, (
+        f"bundled `a --version` is {parts[1]!r}, project requires {requirement}"
     )
 
 

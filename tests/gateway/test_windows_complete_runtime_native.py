@@ -76,6 +76,26 @@ def _ssh_base(key, known, port):
             "-o", f"UserKnownHostsFile={known}", "-o", "ConnectTimeout=20"]
 
 
+def test_msys_child_runtime_identity(closure, tmp_path):
+    """Control the PATH independently of SSH to diagnose mixed MSYS runtimes."""
+    shell_bin = closure["staged"] / "endpoint" / "shell" / "usr" / "bin"
+    bash = shell_bin / "bash.exe"
+    # The old backend imported this machine PATH from the registry. Record the
+    # selected executable and runtime failure without treating that host tool
+    # as a product dependency. The owned-path control below must succeed.
+    machine_git = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git" / "usr" / "bin"
+    for label, directory in (("machine-git", machine_git), ("owned", shell_bin)):
+        if not (directory / "uname.exe").is_file():
+            continue
+        env = {k: v for k, v in os.environ.items() if k.casefold() != "path"}
+        env["PATH"] = str(directory) + os.pathsep + str(Path(os.environ["SystemRoot"]) / "System32")
+        p = subprocess.run([str(bash), "--noprofile", "--norc", "-c", "command -v uname; uname -s"],
+                           env=env, cwd=tmp_path, capture_output=True, timeout=60)
+        print("MSYS runtime control:", label, p.returncode, ascii(p.stdout), ascii(p.stderr))
+        if label == "owned":
+            assert p.returncode == 0 and b"MSYS_NT" in p.stdout and b"assertion" not in p.stderr
+
+
 def test_new_machine_complete_runtime(closure, tmp_path):
     from pocketshell.gateway import service_windows as win
     from unelevated import run_unelevated
@@ -208,10 +228,8 @@ def test_new_machine_complete_runtime(closure, tmp_path):
         user = manifest["configBindings"]["allowUser"]
         base = _ssh_base(key, known, port)
 
-        # 4a. non-PTY EXEC requests: the command line travels as UTF-8 and sshd hands it to the
-        # default shell as Unicode (typing it on cmd's stdin would go through the OEM code page and
-        # mangle the non-ASCII profile path). Win32-OpenSSH already wraps the command for cmd /c
-        # (run 38045489674: an extra outer pair made cmd treat the whole line as one name).
+        # 4a. Exec uses the owned Bash default shell, a closed private PATH,
+        # and Unicode argv. No machine Git/MSYS installation may supply tools.
         def exec_(command):
             p = subprocess.run([str(SSH_DIR / "ssh.exe"), *base, "-p", str(port), f"{user}@127.0.0.1",
                                 command], capture_output=True, timeout=120, stdin=subprocess.DEVNULL)
@@ -220,29 +238,26 @@ def test_new_machine_complete_runtime(closure, tmp_path):
                   ascii(p.stderr.decode("utf-8", "replace")[-1500:]))
             return p.returncode, out_
 
-        # The inbox Windows ssh client sends a non-ASCII command line in the ANSI code page (run
-        # 38043511773: "Jos\ufffd ... is not recognized"), so the exec stays ASCII: it reaches the
-        # release through the backend environment the endpoint's SetEnv delivers. Since the
-        # per-user aplexer namespace (APLEXER_STATE_DIR = %LOCALAPPDATA%/aplexer/state) no longer
-        # anchors the closure, navigation starts at APLEXER_CONFIG (<root>/endpoint/aplexer.toml);
-        # two levels up is the closure root that carries releases/.
-        # the backend environment the generated SetEnv must deliver into the session (diagnostic print;
-        # the assertion follows)
-        rc, out = exec_("set APLEXER & set XDG & set BASH_ENV & cd")
-        assert "APLEXER_RUN_IN_PLACE=1" in out, "SetEnv did not reach the session"
-        lines = {l.split("=", 1)[0]: l.split("=", 1)[1] for l in out.splitlines() if "=" in l}
+        # The generated SetEnv reaches the actual shell session.
+        rc, out = exec_("env | grep -E '^(APLEXER|XDG|BASH_ENV)'")
+        assert rc == 0 and "APLEXER_RUN_IN_PLACE=1" in out
+        lines = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
         for var, tail in (("APLEXER_STATE_DIR", "/aplexer/state"), ("APLEXER_RUNTIME_DIR", "/aplexer/run")):
             assert lines.get(var, "").endswith(tail) and "managed-runtime" not in lines.get(var, ""), \
                 f"SetEnv must deliver the shared per-user aplexer namespace, got {var}={lines.get(var)!r}"
-        release = manifest["daemon"].replace("/", "\\").split("\\releases\\")[1].split("\\")[0]
-        to_rel = f'cd /d "%APLEXER_CONFIG%\\..\\..\\releases\\{release}'
-        bash_cmd = (f'{to_rel}\\endpoint\\shell\\usr\\bin" && bash.exe --noprofile --norc -c '
-                    f'"echo bash-$((6*7)); uname -s; exit 5"')
+        # Keep the SSH command ASCII: the inbox Windows client uses the ANSI
+        # code page. Expand the Unicode release path inside the remote shell.
+        rc, out = exec_('printf "uname-path=%s\\n" "$(command -v uname)"; '
+                        'test "$(command -v uname)" = '
+                        '"$(cygpath -u "$POCKETSHELL_RUNTIME_ROOT/endpoint/shell/usr/bin")/uname" '
+                        '&& printf "owned-uname-ok\\n"')
+        assert rc == 0 and "owned-uname-ok" in out, "uname escaped the owned runtime PATH"
+        bash_cmd = "echo bash-$((6*7)); uname -s; exit 5"
         rc, out = exec_(bash_cmd)
         assert "bash-42" in out and "bash-42" not in bash_cmd and "MSYS_NT" in out
         assert rc == 5  # the real exit status of the remote backend shell
-        rc, out = exec_(f'{to_rel}\\python" && a.exe --json engines')
-        assert rc == 0 and '"shell"' in out  # the aplexer CLI answered with its engines (incl. the shell engine)
+        rc, out = exec_('a --json engines')
+        assert rc == 0 and '"shell"' in out
 
         # 4b. PTY session (ssh-shellhost + conhost), driven like a terminal: input is sent only
         # after the shell prompt appears (run 38046668305: input written before conhost was ready
@@ -265,8 +280,8 @@ def test_new_machine_complete_runtime(closure, tmp_path):
                 _time.sleep(0.2)
             return False
 
-        assert seen(b">", 60), b"".join(chunks)[-2000:]  # the cmd prompt
-        pty_in = b"set /a 6*7+1000\r"
+        assert seen(b"$ ", 60), b"".join(chunks)[-2000:]  # the owned Bash prompt
+        pty_in = b"echo $((6*7+1000))\r"
         pty.stdin.write(pty_in)
         pty.stdin.flush()
         assert seen(b"1042", 30), b"".join(chunks)[-2000:]

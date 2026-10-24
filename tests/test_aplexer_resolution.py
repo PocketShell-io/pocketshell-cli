@@ -25,7 +25,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tomllib
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -529,56 +528,19 @@ def test_kill_switches_unaffected_by_bundled_resolution(tmp_path: Path) -> None:
 
 
 def _aplexer_requirement() -> str:
-    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
-    reqs = [r for r in data["project"]["dependencies"] if r.split(";")[0].strip().startswith("aplexer")]
-    assert len(reqs) == 1, f"expected exactly one aplexer requirement, got {reqs}"
-    return reqs[0]
+    from tests.aplexer_requirement import aplexer_requirement
+
+    return str(aplexer_requirement())
 
 
-def test_aplexer_is_pinned_exactly() -> None:
-    """The pin is exact, like quse — a host upgrade must not reach us.
+def test_installed_aplexer_satisfies_project_requirement() -> None:
+    """A pin bump changes only pyproject; the installed wheel must satisfy it."""
+    from importlib.metadata import version
+    from tests.aplexer_requirement import aplexer_requirement
 
-    Under the D22 hard cut the bundled wheel is the ONLY aplexer this CLI can
-    run, so the pin decides what every host gets and an older published wheel
-    is a silent DOWNGRADE, not merely stale:
-
-    * 0.1.2, never 0.1.1 — 0.1.1 lacks the profile `executable` override and
-      the shell provider-env fix, and `a --version` cannot distinguish the two
-      builds (both report 0.1.1).
-    * 0.1.3, never 0.1.2 — 0.1.2's `list_records` fails the whole registry
-      scan on a session directory that has no `session.json` yet, which is the
-      state every `a start` creates for 26-43 ms, so a session being created
-      blanked the phone's aplexer session rows (aplexer#2 / aplexer#3).
-    * 0.1.5, never 0.1.4 — `a attach --no-status` keeps the Android terminal
-      plain: no status chrome or reserved row, raw input reaches the worker,
-      and PTY resize geometry still propagates to the session.
-    * 0.1.4, never 0.1.3 — 0.1.3 emits no `agent` field, so the session tree
-      cannot say WHICH agent a session is running. `engine` cannot stand in
-      for it: every session PocketShell creates is `engine: "shell"` with the
-      agent launched by hand inside it (issue #2581).
-    * 0.1.6, never 0.1.5 — 0.1.5 answers a kill for an already-finished
-      session with `no matching session` and exit 1; 0.1.6 leaves a
-      tombstone under retired-sessions/ and answers quiet success, first
-      kill and repeat alike (aplexer#2665), which `pocketshell sessions
-      kill` surfaces directly.
-    * 0.1.7, never 0.1.6 — 0.1.6 spawns a placeholder anchor scope and
-      expects the workload to migrate itself into it, which `nsdelegate`
-      boxes EACCES-refuse: every capped start fails closed there. 0.1.7
-      hands the workload argv to `systemd-run --scope` so systemd places
-      it as the scope's initial process (aplexer#13); nothing migrates.
-    * 0.1.8, never 0.1.7 — the crash/OOM warnings UI (`pocketshell
-      sessions warnings` / `sessions ack`, issue #18) shells out to `a
-      warnings` / `a ack`, which only exist from 0.1.8; on 0.1.7 the
-      bundled binary has no warnings subcommand and the UI degrades to
-      its quiet no-warning path.
-
-    This assertion only guards the STRING. ``test_aplexer_contract.py`` pins
-    the behaviours themselves against the bundled binary, which is the part
-    a version comparison provably cannot do.
-    """
-    requirement = _aplexer_requirement()
-    pin = requirement.split(";")[0].strip()
-    assert pin == "aplexer==0.1.8", pin
+    requirement = aplexer_requirement()
+    if requirement.marker.evaluate():
+        assert version(requirement.name) in requirement.specifier
 
 
 def test_aplexer_dependency_marker_is_linux_only() -> None:

@@ -6,6 +6,7 @@ name: Backend
 
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     branches:
       - gateway-user-agent
