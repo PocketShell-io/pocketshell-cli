@@ -1,5 +1,7 @@
 # pocketshell
 
+See [SCOPE.md](SCOPE.md) for ownership and product boundaries.
+
 Unified server-side Python utility for the [PocketShell](https://github.com/PocketShell-io/pocketshell)
 Android and desktop clients. This is the host-side companion CLI, maintained in its own
 repo with an independent release cycle; before v0.5.5 it lived at
