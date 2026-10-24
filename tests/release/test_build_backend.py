@@ -108,3 +108,21 @@ def test_managed_session_path_prefers_tools_and_excludes_user_path(bb):
     assert 'BASH_FUNC_a%%' in patched
     assert 'BASH_FUNC_aplexer%%' in patched
     assert 'set_managed_commands();\n\tret = 0;' in patched
+
+
+@pytest.mark.parametrize("overlay", [None, "0" * 64, "current"])
+def test_closure_rejects_backends_without_current_private_shell_path(overlay, tmp_path):
+    spec = importlib.util.spec_from_file_location("build_closure", SCRIPT.with_name("build_closure.py"))
+    closure = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(closure)
+    receipt = {"accepted": True, "executedOutputs": False, "outputs": {}, "inputs": {}}
+    if overlay is not None:
+        receipt["inputs"]["privateShellOverlaySHA256"] = (
+            closure.sha256(SCRIPT.with_name("private_shell_overlay.py")) if overlay == "current" else overlay
+        )
+    (tmp_path / "openssh-build-receipt.json").write_text(json.dumps(receipt))
+    if overlay == "current":
+        assert closure._verified_receipt(tmp_path, "openssh") == receipt
+    else:
+        with pytest.raises(SystemExit, match="current private shell/PATH overlay"):
+            closure._verified_receipt(tmp_path, "openssh")

@@ -172,6 +172,7 @@ def build_openssh(work: Path, out: Path, rec: Recorder) -> dict:
         shutil.copyfile(repl, target)
         overlay[rel] = {"upstream": upstream, "reviewed": reviewed}
     inputs["overlay"] = overlay
+    inputs["privateShellOverlaySHA256"] = sha256(Path(__file__).with_name("private_shell_overlay.py"))
     for name, patch in (("pwd.c", patch_pwd), ("w32-doexec.c", patch_session)):
         target = src / "contrib/win32/win32compat" / name
         upstream = sha256(target)

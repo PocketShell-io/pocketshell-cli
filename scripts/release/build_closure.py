@@ -260,6 +260,13 @@ def _verified_receipt(directory: Path, part: str) -> dict:
     receipt = json.loads((directory / f"{part}-build-receipt.json").read_text())
     if receipt.get("accepted") is not True or receipt.get("executedOutputs") is not False:
         raise SystemExit(f"the {part} backend build receipt is not an accepted build")
+    if part == "openssh":
+        # A byte-valid old build can still import the machine PATH, mixing the
+        # owned Bash with another MSYS DLL in its children. Require the exact
+        # current private shell/PATH adapter, not just exported DLL symbols.
+        expected = sha256(Path(__file__).with_name("private_shell_overlay.py"))
+        if receipt.get("inputs", {}).get("privateShellOverlaySHA256") != expected:
+            raise SystemExit("the OpenSSH backend must be rebuilt with the current private shell/PATH overlay")
     for name, digest in receipt["outputs"].items():
         if sha256(directory / part / name) != digest:
             raise SystemExit(f"{part}/{name} is not the bytes its build receipt records")
