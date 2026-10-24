@@ -199,7 +199,17 @@ dependencies = [
     # 2.17 to 2.28. Linux hosts older than that (CentOS 7, Ubuntu 18.04) can
     # no longer install pocketshell at all now that aplexer is a hard
     # dependency. Flagged, not solved here — see docs/aplexer-integration.md.
-    "aplexer==0.1.8; sys_platform == 'linux'",
+    #
+    # F5 (hub-pocketshell separation): one aplexer per host. The exact pin
+    # 0.1.8 is replaced by a compatible range >=0.1.19,<0.2 so hosts converge
+    # on a single modern aplexer instead of pinning an old bundle while Hub
+    # runs 0.1.19. 0.1.19 is the first released wheel containing the full
+    # Hub/PocketShell consumer surface (message send/deliver/log/ack, status,
+    # capture --screen/--plain, context hook, task run); the Hub binding
+    # labels (--label hub.managed/hub.session, aplexer F5) arrive with the
+    # next aplexer release and are consumed opportunistically (see
+    # tests/test_aplexer_contract.py).
+    "aplexer>=0.1.19,<0.2; sys_platform == 'linux'",
 ]
 
 [project.scripts]
@@ -279,7 +289,11 @@ required-version = "==0.10.11"
 # quse 0.0.17 uploaded at 2026-10-02T08:56:21Z for the `gemini` provider (the
 # Antigravity CLI quota; aliases `antigravity` / `agy`) — the usage panel's
 # seventh row.
-exclude-newer = "2026-10-02T12:00:00Z"
+# 0.1.19 uploaded at 2026-10-18T09:40:14Z (client at 09:40:06Z) for F5
+# (hub-pocketshell separation): the first released wheel with the full
+# Hub/PocketShell consumer surface. Cutoff moved past it for the
+# >=0.1.19,<0.2 range pin.
+exclude-newer = "2026-10-24T00:00:00Z"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

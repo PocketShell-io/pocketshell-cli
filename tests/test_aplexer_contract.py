@@ -77,6 +77,8 @@ pytestmark = pytest.mark.skipif(
 #   engines.py / profiles.py                          -> engines, profiles
 #   agents.py::launch_agent shim                      -> launch-spec
 #   sessions.py attach / kill                         -> attach, kill
+#   sessions/rename.py                                -> rename
+#   sessions/warnings.py                              -> warnings, ack
 # A future pin that drops any of these (or renames a flag) breaks the CLI at
 # runtime with no compile-time signal, so assert the surface exists.
 REQUIRED_SURFACE: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -86,8 +88,28 @@ REQUIRED_SURFACE: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("engines", ()),
     ("profiles", ()),
     ("launch-spec", ("--engine", "--cwd", "--profile", "--no-skip-permissions")),
-    ("attach", ("--workspace", "--tag")),
+    ("attach", ("--workspace", "--tag", "--no-status")),
     ("kill", ("--workspace", "--tag")),
+    ("rename", ("--tag",)),
+    ("warnings", ()),
+    ("ack", ()),
+)
+
+# F5: the same binary also serves Hub on shared hosts. Hub's surface
+# (audit hub-pocketshell-separation-2026-10-24 §4.5) must keep working or a
+# Hub upgrade breaks under PocketShell's feet. PocketShell never CALLS these;
+# it only asserts they still exist, so an aplexer release that drops Hub's
+# flags fails here instead of shipping a silent cross-product downgrade.
+# (Drop entries only when F6 removes the PocketShell caller — never before.)
+HUB_SURFACE: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("status", ("--workspace", "--tag", "--json")),
+    ("capture", ("--workspace", "--tag", "--screen", "--plain")),
+    ("message send", ("--to", "--kind", "--json", "--queue")),
+    ("message deliver", ("--workspace", "--json")),
+    ("message log", ("--workspace", "--json")),
+    ("message ack", ("--json",)),
+    ("context hook", ("--engine",)),
+    ("task run", ("--prompt-file", "--engine", "--json")),
 )
 
 
@@ -113,6 +135,14 @@ def bundled_a() -> str:
 
 
 def _pinned_version() -> str:
+    """Lower bound of the aplexer pin (exact or range).
+
+    F5 moved the pin from exact (==0.1.8) to a compatible range
+    (>=0.1.19,<0.2); the contract below checks the bundled binary satisfies
+    the range instead of equaling a string.
+    """
+    import re
+
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     reqs = [
         r
@@ -120,7 +150,11 @@ def _pinned_version() -> str:
         if r.split(";")[0].strip().startswith("aplexer")
     ]
     assert len(reqs) == 1, f"expected exactly one aplexer requirement, got {reqs}"
-    return reqs[0].split(";")[0].strip().split("==", 1)[1]
+    spec = reqs[0].split(";")[0].strip().removeprefix("aplexer").strip()
+    match = re.search(r">=\s*([0-9][0-9A-Za-z.\-]*)", spec)
+    if match:
+        return match.group(1)
+    return spec.split("==", 1)[1].strip()
 
 
 def _short_runtime_root() -> str:
@@ -1077,6 +1111,54 @@ def test_bundled_aplexer_exposes_the_surface_pocketshell_drives(
     )
 
 
+@pytest.mark.parametrize("subcommand,flags", HUB_SURFACE)
+def test_bundled_aplexer_keeps_the_hub_surface(
+    aplexer_fixture, subcommand: str, flags: tuple[str, ...]
+) -> None:
+    """Hub's surface on the shared binary still exists (F5, audit §4.5).
+
+    PocketShell never calls these; the same `a` binary serves Hub on shared
+    hosts, so a release that drops Hub's flags must fail here, not on a Hub
+    host. Multi-word commands (`message send`) split on whitespace.
+    """
+    completed = aplexer_fixture.run([*subcommand.split(), "--help"])
+
+    assert completed.returncode == 0, (
+        f"the bundled aplexer has no `a {subcommand}`; Hub calls it. "
+        f"{completed.stderr or completed.stdout}"
+    )
+    help_text = completed.stdout
+    missing = [flag for flag in flags if flag not in help_text]
+    assert not missing, (
+        f"`a {subcommand}` no longer accepts {missing}; Hub passes "
+        f"them. Help:\n{help_text}"
+    )
+
+
+def test_snapshot_rows_carry_labels_mapping(aplexer_fixture) -> None:
+    """F5 Hub binding: `labels` is a mapping when present, never a lie.
+
+    The `--label` write path ships with the next aplexer release after
+    0.1.19; this pin is forward-compatible: 0.1.19 rows simply omit the
+    key, while newer builds must carry a dict (Hub sets hub.managed,
+    hub.session, hub.task; PocketShell renders Open-in-Hub from it).
+    A non-dict `labels` fails loudly instead of reaching the phone as a
+    crash.
+    """
+    rows = aplexer_fixture.json(["snapshot"])
+    assert isinstance(rows, list), f"snapshot must be a list, got {type(rows)}"
+    for row in rows:
+        if "labels" not in row:
+            continue
+        assert isinstance(row["labels"], dict), (
+            f"snapshot row labels must be a mapping, got {row['labels']!r}"
+        )
+        for key, value in row["labels"].items():
+            assert isinstance(key, str) and isinstance(value, str), (
+                f"snapshot row label must be str=str, got {key!r}={value!r}"
+            )
+
+
 # ---------------------------------------------------------------------------
 # aplexer#2665 — a kill for a FINISHED session answers success, not failure
 # ---------------------------------------------------------------------------
@@ -1159,19 +1241,29 @@ def test_bundled_aplexer_kill_of_finished_session_succeeds(aplexer_fixture) -> N
 
 
 def test_bundled_aplexer_reports_the_pinned_version(aplexer_fixture) -> None:
-    """Sanity only: the bundled binary IS the pinned wheel.
+    """Sanity only: the bundled binary satisfies the pinned range.
 
     Deliberately last and deliberately weak — the whole reason this file
     exists is that this assertion passed for a build missing the two fixes
     above. It guards "did the wheel install at all", nothing more; the
-    behavioural tests are the contract.
+    behavioural tests are the contract. F5: the pin is a range
+    (>=0.1.19,<0.2), so assert membership, not equality.
     """
     completed = aplexer_fixture.run(["--version"])
 
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.split() == ["a", _pinned_version()], (
-        f"bundled `a --version` is {completed.stdout.strip()!r}, pyproject "
-        f"pins {_pinned_version()}"
+    parts = completed.stdout.split()
+    assert len(parts) == 2 and parts[0] == "a", (
+        f"bundled `a --version` is {completed.stdout.strip()!r}"
+    )
+    installed = tuple(int(p) for p in parts[1].split("."))
+    floor = tuple(int(p) for p in _pinned_version().split("."))
+    assert installed >= floor, (
+        f"bundled `a --version` is {parts[1]!r}, pyproject floor is "
+        f"{_pinned_version()!r}"
+    )
+    assert installed < (0, 2), (
+        f"bundled `a --version` is {parts[1]!r}, must stay <0.2"
     )
 
 
