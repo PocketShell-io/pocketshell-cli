@@ -296,6 +296,25 @@ class PE(ctypes.Structure):
 k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
 k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE)]
 k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE)]
+k32.OpenProcess.restype = wintypes.HANDLE
+k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+k32.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+                                ctypes.POINTER(wintypes.FILETIME),
+                                ctypes.POINTER(wintypes.FILETIME),
+                                ctypes.POINTER(wintypes.FILETIME)]
+k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+def process_birth(pid):
+    h = k32.OpenProcess(0x1000, False, pid)
+    if not h:
+        return None
+    try:
+        t = [wintypes.FILETIME() for _ in range(4)]
+        if not k32.GetProcessTimes(wintypes.HANDLE(h), *[ctypes.byref(x) for x in t]):
+            return None
+        return t[0].dwHighDateTime << 32 | t[0].dwLowDateTime
+    finally:
+        k32.CloseHandle(wintypes.HANDLE(h))
 
 def processes():
     snap = k32.CreateToolhelp32Snapshot(2, 0)
@@ -344,6 +363,14 @@ proc = subprocess.Popen(cfg["argv"], env=cfg["env"], cwd=cfg["cwd"], stdin=subpr
 result["first_line"] = proc.stdout.readline().decode(errors="replace").strip()
 time.sleep(1.0)
 tree = descendants(proc.pid)
+# Pids are reused and parent-pids go stale: a fresh root pid can coincide
+# with a dead process whose orphaned children then look like ours. A real
+# child cannot be born before the root, so prune those (same guard as
+# scripts/windows-gateway-qualify.py); unknown births are kept.
+root_birth = process_birth(proc.pid)
+births = {t[0]: process_birth(t[0]) for t in tree}
+if root_birth is not None:
+    tree = [t for t in tree if (births.get(t[0]) or root_birth) >= root_birth]
 result["root"] = proc.pid
 result["tree"] = tree
 result["console"] = console_pids()
@@ -357,10 +384,19 @@ if cfg.get("ctrl_c"):
         proc.kill(); out, err = proc.communicate()
     result["exit_seconds"] = time.monotonic() - t0
     deadline = time.monotonic() + 10
-    pids = {p[0] for p in tree}
+    names = {t[0]: (t[2], births.get(t[0])) for t in tree}
     alive = []
     while time.monotonic() < deadline:
-        alive = [p for p in processes() if p[0] in pids and p[2] == next(t[2] for t in tree if t[0] == p[0])]
+        alive = []
+        for p in processes():
+            hit = names.get(p[0])
+            if hit is None or hit[0] != p[2]:
+                continue
+            if hit[1] is not None:
+                now = process_birth(p[0])
+                if now is not None and now != hit[1]:
+                    continue  # pid reused by an unrelated process
+            alive.append(p)
         if not alive:
             break
         time.sleep(0.2)

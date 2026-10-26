@@ -119,6 +119,45 @@ def process_birth(pid: int):
         k.CloseHandle(wintypes.HANDLE(h))
 
 
+def prune_stale_descendants(root_birth, tree, births):
+    """Drop descendants that cannot be ours.
+
+    ``tree`` comes from :func:`descendants`, which matches on parent-pid
+    only. Pids are reused, so a fresh ``root`` pid can coincide with a
+    dead process whose orphaned (still live) children then look like ours
+    — on a busy machine that over-capture can be a hundred processes
+    wide. A real child cannot be born before the root, so entries older
+    than ``root_birth`` are certainly stale. ``births`` maps pid to the
+    creation time measured while the tree was live (or None when the
+    process could not be opened); unknown births are kept. Pure logic,
+    no Win32 calls: unit-tested on any platform.
+    """
+    if root_birth is None:
+        return list(tree)
+    return [t for t in tree if (births.get(t[0]) or root_birth) >= root_birth]
+
+
+def live_survivors(names, current, birth_of):
+    """Of the snapshot ``names`` ({pid: (exe, birth)}), which are still
+    the SAME process now? A pid reused between the snapshot and this poll
+    by an unrelated process (different image, or different creation time)
+    is not a survivor. Unknown births fall back to the old pid+image
+    match. Pure logic, no Win32 calls: unit-tested on any platform.
+    """
+    alive = []
+    for pid, ppid, exe in current:
+        hit = names.get(pid)
+        if hit is None or hit[0] != exe:
+            continue
+        snap_birth = hit[1]
+        if snap_birth is not None:
+            now_birth = birth_of(pid)
+            if now_birth is not None and now_birth != snap_birth:
+                continue
+        alive.append((pid, ppid, exe))
+    return alive
+
+
 def console_pids() -> list[int]:
     from ctypes import wintypes
 
@@ -445,7 +484,8 @@ class Qualifier:
               and not res.get("survivors") and "Traceback" not in res.get("stderr", "")
               and "KeyboardInterrupt" not in res.get("stderr", ""))
         return self.record("ctrl-c", ok, f"exit {res.get('code')} after {res.get('seconds', 0):.1f}s, "
-                                         f"survivors {len(res.get('survivors') or [])}")
+                                         f"survivors {len(res.get('survivors') or [])} "
+                                         f"of {res.get('tree_size', '?')} (pruned {res.get('pruned', '?')})")
 
     def run_all(self) -> int:
         print(f"{MARK}: device {self.a.device_id}, remote {self.a.remote_os}", flush=True)
@@ -487,6 +527,17 @@ def _ctrl_c_harness(cfg_path: str) -> int:
     res["first"] = _first_line(proc, 90)
     time.sleep(1.0)
     tree = descendants(proc.pid)
+    # Snapshot identities while the tree is live: pid+image alone is not
+    # an identity (pids are reused; stale parent-pids over-capture), so
+    # prune entries that cannot be ours and match survivors by
+    # (pid, image, creation time).
+    root_birth = process_birth(proc.pid)
+    births = {t[0]: process_birth(t[0]) for t in tree}
+    pruned = len(tree)
+    tree = prune_stale_descendants(root_birth, tree, births)
+    pruned -= len(tree)
+    res["tree_size"] = len(tree)
+    res["pruned"] = pruned
     t0 = time.monotonic()
     res["fired"] = k32.GenerateConsoleCtrlEvent(0, 0)
     try:
@@ -498,11 +549,11 @@ def _ctrl_c_harness(cfg_path: str) -> int:
     res["code"] = proc.returncode
     res["stderr"] = err.decode(errors="replace")[-3000:]
     res["stdout"] = out.decode(errors="replace")[-500:]
-    names = {t[0]: t[2] for t in tree}
+    names = {t[0]: (t[2], births.get(t[0])) for t in tree}
     alive: list = []
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        alive = [p for p in processes() if names.get(p[0]) == p[2]]
+        alive = live_survivors(names, processes(), process_birth)
         if not alive:
             break
         time.sleep(0.2)
