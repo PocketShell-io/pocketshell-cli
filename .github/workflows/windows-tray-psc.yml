@@ -12,9 +12,17 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+
+# Path-filtered tray integration: a newer event on the same ref supersedes the
+# stale run (PR pushes) instead of stacking ~7 min Windows runs.
+concurrency:
+  group: windows-tray-psc-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:

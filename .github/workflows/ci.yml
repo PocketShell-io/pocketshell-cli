@@ -259,6 +259,11 @@ jobs:
 
   windows-complete-runtime:
     needs: backend-build
+    # The full v3 closure validation averages ~16 raw minutes on Windows
+    # (~33 billable with the 2x multiplier). It runs on main pushes, where
+    # releases are cut; PRs keep the faster windows-gateway signal (~8 raw
+    # min), which stays the every-PR Windows gate.
+    if: github.event_name != 'pull_request'
     name: Windows complete runtime (v3 closure)
     runs-on: windows-latest
     timeout-minutes: 120
