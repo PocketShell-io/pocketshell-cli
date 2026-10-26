@@ -39,6 +39,7 @@ jobs:
           fi
       - uses: actions/upload-artifact@v5
         with:
+          retention-days: 7
           name: dist
           path: dist/*
 

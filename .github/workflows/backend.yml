@@ -43,6 +43,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
+          retention-days: 7
           name: backend-${{ matrix.part }}
           path: ${{ runner.temp }}/backend-out
           if-no-files-found: error
