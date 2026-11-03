@@ -25,3 +25,23 @@ def test_top_level_version_matches_pyproject_metadata() -> None:
 
     assert result.exit_code == 0, result.output
     assert result.output == f"pocketshell, version {_pyproject_version()}\n"
+
+
+def test_hub_owned_commands_are_not_registered() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0, result.output
+    assert "push" not in cli.commands
+
+    for args in (["push", "--help"], ["agent-log", "handoff"]):
+        result = runner.invoke(cli, args)
+        assert result.exit_code != 0
+        assert (
+            "No such command" in result.output
+            or "unexpected extra argument" in result.output
+        )
+
+    usage_help = runner.invoke(cli, ["usage", "--help"])
+    assert usage_help.exit_code == 0, usage_help.output
+    for removed_option in ("--capture", "--cached", "--reset-events"):
+        assert removed_option not in usage_help.output

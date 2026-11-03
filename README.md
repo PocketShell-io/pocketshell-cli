@@ -11,6 +11,12 @@ host and uses its subcommands for usage, aplexer session lifecycle, agent
 conversations, repository discovery, environment files, hooks,
 logs, and daemon lifecycle checks.
 
+The CLI keeps human-operated terminal/session access, manual agent launch, raw
+conversation-log reads, and display-only local quota queries. Hub-managed agent
+automation, app cards and push notifications, quota history/reset capture, and
+conversation handoff exports are not provided here. The standalone CLI remains
+usable without Hub.
+
 ## Durable workspaces
 
 The Quiet workspace-first client uses the host-side workspace membership

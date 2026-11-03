@@ -195,8 +195,8 @@ relay sees the token); it makes configuration mistakes visible.
 ## Not supported over link (v1)
 
 - SFTP (browse/upload/download) and port forwarding → typed `UNSUPPORTED`.
-- Everything else clients do — sessions, attach, tree, usage capture — works
-  unchanged, including multiple concurrent clients per host.
+- Everything else clients do — sessions, attach, tree, and display-only quota
+  queries — works unchanged, including multiple concurrent clients per host.
 
 ## Testing
 

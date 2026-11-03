@@ -112,20 +112,3 @@ def _run_quse_json(args: Sequence[str]) -> int:
     if completed.stderr:
         sys.stderr.write(completed.stderr)
     return completed.returncode
-
-
-def _capture_via_quse(provider: Optional[str]) -> tuple[Optional[str], str, int]:
-    """Run quse once and flatten its output; never flattens a failed fetch."""
-    quse_path = _resolve_quse_binary()
-    if quse_path is None:
-        return (None, _QUSE_MISSING_MESSAGE + "\n", _QUSE_MISSING_EXIT_CODE)
-    args: list[str] = [quse_path]
-    if provider:
-        args.append(provider)
-    args.append("--json")
-    completed = subprocess.run(args, check=False, capture_output=True, text=True)
-    if completed.returncode != 0:
-        # A failed live fetch is not flattened/cached — return quse's raw
-        # stdout so the caller can decide (it will not be persisted).
-        return completed.stdout, completed.stderr, completed.returncode
-    return normalize_usage_stdout(completed.stdout), completed.stderr, completed.returncode
