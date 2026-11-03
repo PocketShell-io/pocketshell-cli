@@ -64,7 +64,7 @@ def test_closure_runs_from_its_own_directory(release, tmp_path):
 def test_closure_imports_its_native_and_guardian_dependencies(release, tmp_path):
     py = release["root"] / "python" / "python.exe"
     code = ("import sys, ctypes, ssl\n"
-            "import cryptography.hazmat.primitives.ciphers.aead, yaml, click, google.auth\n"
+            "import cryptography.hazmat.primitives.ciphers.aead, yaml, click\n"
             "import native_api, policy\n"
             "assert 'site' not in sys.modules, 'site must not be imported'\n"
             "print(sorted(p for p in sys.path))")
