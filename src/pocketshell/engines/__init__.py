@@ -1,9 +1,10 @@
 """Host-side declarative registry for coding-agent engines.
 
 The registry is the single source for the engine id used by the wrapper and
-the metadata sent to the Android picker.  Built-in entries provide the
-existing engines; ``~/.config/pocketshell/engines.yaml`` can add, override,
-enable, or disable entries without a Kotlin change.
+the metadata sent to the Android picker. Aplexer supplies live engine IDs and
+commands; PocketShell keeps presentation and launch-policy metadata, with
+static entries as the offline fallback. ``~/.config/pocketshell/engines.yaml``
+can add, override, enable, or disable entries without a Kotlin change.
 
 Registry ids are intentionally open.  ``family`` is the closed detection
 projection used by the client (for example, ``godex`` can use the ``codex``

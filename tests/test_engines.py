@@ -656,15 +656,15 @@ def test_generic_click_wrapper_resolves_and_launches_custom_engine(
     assert "OPENAI_API_KEY" not in launched["env"]
 
 
-def test_aplexer_overlay_takes_command_and_env_unset_but_not_availability(
+def test_aplexer_rows_are_authoritative_and_unknown_engines_remain_launchable(
     tmp_path, monkeypatch, install_fake_a
 ):
-    """Issue #2276: availability is THIS host's own observation.
+    """Aplexer owns the live catalog while the host still probes normally.
 
-    aplexer ships its own cached ``available`` bit. Inheriting it made a second
-    tool's stale answer authoritative for the picker, so the overlay now
-    carries launch data only (D22 hard cut — there is no legacy path that
-    still reads it).
+    aplexer owns the live engine IDs and commands. PocketShell adds metadata
+    for known engines and generic metadata for new ones. Its cached
+    ``available`` bit drives non-probing manual launch commands; normal
+    registry loads still check the local harness path.
     """
     install_fake_a(
         engines=[
@@ -676,23 +676,36 @@ def test_aplexer_overlay_takes_command_and_env_unset_but_not_availability(
             },
             {"name": "shell", "command": ["/bin/bash", "-l"], "available": True},
             {"name": "gemini", "command": ["gemini"], "available": True},
+            {"name": "missing-engine", "command": ["missing-engine"], "available": False},
         ]
     )
     registry = engines.load_registry(probe=False)
     ids = [item.id for item in registry]
     assert "shell" not in ids
-    assert "gemini" not in ids
+    assert "gemini" in ids
+    gemini = next(item for item in registry if item.id == "gemini")
+    assert gemini.launch.argv == ("gemini",)
+    assert gemini.harness == "gemini"
+    assert gemini.label == "gemini"
+    assert gemini.family == "gemini"
     claude = next(item for item in registry if item.id == "claude")
     assert claude.launch.argv == ("claude", "--from-aplexer")
     assert claude.label == "Claude"
     assert claude.family == "claude"
     assert "CUSTOM_UNSET" in claude.launch.env_unset
     assert "OPENAI_API_KEY" in claude.launch.env_unset
-    # aplexer said `available: False`; the registry does not inherit it.
-    assert claude.available is True
+    # Non-probing views preserve aplexer's availability observation.
+    assert claude.available is False
     assert claude.launch.skip_permissions_argv == (
         "--dangerously-skip-permissions",
     )
+
+    result = CliRunner().invoke(cli, ["agent", "gemini", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "Launch `gemini`" in result.output
+    result = CliRunner().invoke(cli, ["agent", "missing-engine", "--help"])
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
 
 def test_yaml_override_still_wins_over_aplexer(
@@ -727,6 +740,11 @@ def test_aplexer_engine_probe_failure_keeps_builtins(install_fake_a):
         "grok",
         "antigravity",
     ]
+
+
+def test_empty_aplexer_catalog_does_not_use_offline_fallback(install_fake_a):
+    install_fake_a(engines=[])
+    assert engines.load_registry(probe=False) == []
 
 
 def test_builtin_usage_providers_are_names_the_pinned_quse_actually_reports():

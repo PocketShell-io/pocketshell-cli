@@ -28,7 +28,6 @@ from pocketshell.tray.cli import tray_command
 
 if os.name != "nt":
     from pocketshell.agents.conversations.cli import agent_log_command
-    from pocketshell.cards import register_push_card_commands
     from pocketshell.agents import agents_group
     from pocketshell.agents.launch.cli import agent_group
     from pocketshell.env import env_group
@@ -39,7 +38,6 @@ if os.name != "nt":
     from pocketshell.logs import logs_group
     from pocketshell.profiles import profiles_group
     from pocketshell.attachments import prune_attachments_command
-    from pocketshell.push import push_group
     from pocketshell.repos import repos_group
     from pocketshell.sessions import sessions_group
     from pocketshell.serve import serve_command
@@ -79,11 +77,6 @@ if os.name != "nt":
     cli.add_command(hooks_group, name="hooks")
     cli.add_command(logs_group, name="logs")
     cli.add_command(prune_attachments_command, name="prune-attachments")
-    cli.add_command(push_group, name="push")
-    # Generic typed-card feed verbs (epic #859) extend the same `push` group:
-    # `push checklist|get|status|check`. Additive — the FCM `push` group stays the
-    # single owner of the group object (see pocketshell.cards).
-    register_push_card_commands(push_group)
     cli.add_command(serve_command, name="serve")
     cli.add_command(link_group, name="link")
     cli.add_command(relay_group, name="relay")
@@ -106,7 +99,7 @@ else:
     for _name in (
         "usage", "agent", "agents", "profiles", "engines", "tree",
         "agent-log", "repos", "github", "env", "hooks", "logs", "prune-attachments",
-        "push", "serve", "link", "relay", "workspaces",
+        "serve", "link", "relay", "workspaces",
     ):
         cli.add_command(click.Command(
             _name, callback=click.pass_context(_unsupported_windows),

@@ -1,6 +1,5 @@
 """Windows import refusal and native startup tests; no fake fcntl modules."""
 import os
-from pathlib import Path
 import subprocess
 import sys
 
@@ -32,7 +31,6 @@ assert command.main(['--version']) == 0
 assert command.main(['--help']) == 0
 assert command.main(['gateway', '--help']) == 0
 assert command.main(['sessions', 'list', '--json']) == 1
-assert 'pocketshell.cards.store' not in sys.modules
 assert 'pocketshell.tree.storage' not in sys.modules
 assert 'pocketshell.link.daemon' not in sys.modules
 '''

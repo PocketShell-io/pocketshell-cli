@@ -174,7 +174,9 @@ def _fresh_manifest(
         usage_provider=_optional_str(raw, "usage_provider"),
         launch=launch,
         enabled=bool(raw.get("enabled", True)),
-        available=bool(raw.get("available", True)),
+        # `available` is output-only; availability comes from aplexer or the
+        # host probe, while `force_available` is the explicit config escape.
+        available=True,
         unavailable_reason=_optional_str(raw, "unavailable_reason"),
         force_available=_force_available(raw, None),
         configured_unavailable_reason=_configured_reason(raw, None),
@@ -199,7 +201,7 @@ def _overridden_manifest(
         ),
         launch=_launch_from_mapping(raw.get("launch"), base.launch),
         enabled=bool(raw.get("enabled", base.enabled)),
-        available=bool(raw.get("available", base.available)),
+        available=base.available,
         unavailable_reason=(
             str(raw["unavailable_reason"])
             if raw.get("unavailable_reason") is not None
@@ -223,7 +225,8 @@ def _manifest_from_mapping(
     return _overridden_manifest(raw, base)
 
 
-# Engines aplexer lists that must not appear in the PocketShell agent picker.
+# aplexer lists this built-in engine too, but it is a shell rather than an
+# agent and must not appear in the PocketShell agent picker.
 _HIDDEN_APLEXER_ENGINES = frozenset({"shell"})
 
 
@@ -233,7 +236,10 @@ def _aplexer_engine_rows(
     payload = aplexer.run_json(["engines"], env=env, feature="engines")
     if not isinstance(payload, list):
         return None
-    return [row for row in payload if isinstance(row, Mapping)]
+    if not payload:
+        return []
+    rows = [row for row in payload if isinstance(row, Mapping)]
+    return rows or None
 
 
 def _aplexer_launch_for(
@@ -263,29 +269,62 @@ def _aplexer_launch_for(
     )
 
 
-def _overlay_aplexer_engines(
-    manifests: dict[str, EngineManifest],
-    env: Optional[Mapping[str, str]] = None,
-) -> None:
-    """Overlay argv / env_unset from ``a engines --json``.
+def _aplexer_manifests(rows: list[Mapping[str, object]]) -> list[EngineManifest]:
+    """Build the live catalog from ``a engines --json`` rows.
 
-    Presentation fields (label, family, provider_mark, skip_permissions_argv)
-    stay PocketShell's. Unknown aplexer engines are not added, and aplexer's
-    own ``available`` bit is deliberately NOT read: availability is this
-    host's own harness resolution (:func:`resolve_harnesses`) — inheriting a
-    second tool's cached answer is what hid an installed engine in #2276.
+    Static PocketShell manifests supply presentation and launch-policy
+    metadata when available, and remain the offline catalog when ``a`` is
+    unavailable. They do not determine IDs while aplexer provides a catalog.
+    Aplexer-only engines get safe generic presentation metadata. Its cached
+    ``available`` is retained for non-probing callers such as the manual
+    launch command list. Normal registry loads still resolve availability on
+    this host (:func:`resolve_harnesses`) to avoid stale aplexer observations.
     """
-    rows = _aplexer_engine_rows(env)
-    if rows is None:
-        return
+    fallback_by_id = {item.id: item for item in builtin_manifests()}
+    manifests: list[EngineManifest] = []
+    seen: set[str] = set()
     for row in rows:
         name = row.get("name")
-        if not isinstance(name, str) or name in _HIDDEN_APLEXER_ENGINES:
+        if not isinstance(name, str):
             continue
-        item = manifests.get(name)
-        if item is None:
+        engine_id = name.strip().lower()
+        if (
+            not _ID_RE.fullmatch(engine_id)
+            or engine_id in _HIDDEN_APLEXER_ENGINES
+            or engine_id in seen
+        ):
             continue
-        manifests[name] = replace(item, launch=_aplexer_launch_for(item, row))
+        seen.add(engine_id)
+        base = fallback_by_id.get(engine_id)
+        if base is not None:
+            manifests.append(
+                replace(
+                    base,
+                    launch=_aplexer_launch_for(base, row),
+                    available=(
+                        row["available"]
+                        if isinstance(row.get("available"), bool)
+                        else base.available
+                    ),
+                )
+            )
+            continue
+
+        command = _string_tuple(row.get("command"), (engine_id,))
+        env_unset = _string_tuple(row.get("env_unset"))
+        available = row.get("available")
+        manifests.append(
+            EngineManifest(
+                id=engine_id,
+                family=engine_id,
+                harness=command[0],
+                label=engine_id,
+                provider_mark="",
+                launch=LaunchSpec(argv=command, env_unset=env_unset),
+                available=available if isinstance(available, bool) else True,
+            )
+        )
+    return manifests
 
 
 def _apply_config_entries(
@@ -343,7 +382,7 @@ def load_registry(
     *,
     probe: bool = True,
 ) -> list[EngineManifest]:
-    """Load built-ins plus declarative overrides/additions.
+    """Load the aplexer engine catalog plus PocketShell metadata/config.
 
     Availability is a host observation, not config state: when probing is
     enabled every configured harness is resolved once and stale configured
@@ -351,17 +390,17 @@ def load_registry(
     explicit ``force_available:`` boolean in ``engines.yaml``. The CLI emits
     the full registry, including disabled/unavailable entries, so the picker
     hides only non-createable engines while existing sessions still render
-    from their recorded identity. When ``a`` is present, argv/env_unset for
-    known ids come from ``a engines --json``; ``engines.yaml`` still wins on
-    presentation and can add engines aplexer does not know.
+    from their recorded identity. When ``a`` is present, ``a engines --json``
+    owns the engine IDs and launch commands. PocketShell's static manifests
+    add presentation and launch-policy metadata for known IDs, while
+    ``engines.yaml`` can add or override entries. If aplexer is unavailable,
+    static manifests provide an offline catalog.
     """
-    manifests: dict[str, EngineManifest] = {
-        item.id: item for item in builtin_manifests()
-    }
+    rows = _aplexer_engine_rows(env)
+    source = builtin_manifests() if rows is None else _aplexer_manifests(rows)
+    manifests = {item.id: item for item in source}
     order = list(manifests)
-    # Aplexer supplies argv/env_unset for known ids; user yaml still wins
-    # if it then overrides the same id.
-    _overlay_aplexer_engines(manifests, env)
+    # User yaml may add engines or override live aplexer rows.
     _apply_config_entries(manifests, order, env)
 
     items = [manifests[engine_id] for engine_id in order]

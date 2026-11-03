@@ -4,7 +4,6 @@ from typing import Optional
 import click
 from pocketshell.engines import engine_for, load_registry
 # --- sibling modules ---
-from pocketshell.agents.launch.environment import AGENT_KINDS
 from pocketshell.agents.launch.run import _resolve_config_dir, launch_agent
 # __SIBLING_IMPORTS__
 
@@ -88,7 +87,11 @@ class _RegistryAgentGroup(click.Group):
 
     def list_commands(self, ctx: click.Context) -> list[str]:
         names = set(super().list_commands(ctx))
-        names.update(item.id for item in load_registry(probe=False))
+        names.update(
+            item.id
+            for item in load_registry(probe=False)
+            if item.available
+        )
         return sorted(names)
 
     def get_command(self, ctx: click.Context, name: str):
@@ -96,8 +99,10 @@ class _RegistryAgentGroup(click.Group):
         if command is not None:
             return command
         try:
-            engine_for(name, probe=False)
+            item = engine_for(name, probe=False)
         except KeyError:
+            return None
+        if not item.available:
             return None
         return _make_agent_command(name)
 
@@ -118,11 +123,3 @@ class _RegistryAgentGroup(click.Group):
 )
 def agent_group() -> None:
     """Top-level group registered onto the root `pocketshell` CLI."""
-
-
-for _kind in AGENT_KINDS:
-    agent_group.add_command(_make_agent_command(_kind))
-
-
-for _kind in AGENT_KINDS:
-    agent_group.add_command(_make_agent_command(_kind))

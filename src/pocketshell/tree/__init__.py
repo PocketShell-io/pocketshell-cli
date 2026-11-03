@@ -37,10 +37,9 @@ Storage
 
 ``${XDG_STATE_HOME:-~/.local/state}/pocketshell/tree/registry.json`` — a single
 JSON document keyed by host alias. Persisted with the atomic temp-file +
-``os.replace`` private-write pattern (mode 0600, dir 0700) copied from
-:func:`pocketshell.usage.capture._write_private`, so a concurrent reader (the
-app's SSH fetch racing a mutation) never sees a half-written file. JSON, not
-SQLite: the dataset is tiny (a few hosts × tens of sessions) and read-whole /
+``os.replace`` private-write pattern (mode 0600, dir 0700), so a concurrent
+reader (the app's SSH fetch racing a mutation) never sees a half-written
+file. JSON, not SQLite: the dataset is tiny (a few hosts × tens of sessions) and read-whole /
 write-whole semantics match the per-open ``tree.get`` + per-mutation
 ``tree.upsert`` access pattern (#837 non-goal: SQLite / versioned history).
 """

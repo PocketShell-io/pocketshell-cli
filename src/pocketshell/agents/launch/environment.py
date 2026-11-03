@@ -100,8 +100,8 @@ PROVIDER_ENV_UNSET_VARS: tuple[str, ...] = (
 )
 
 
-# Recognised agent kinds. Order is the picker's order (claude, codex,
-# opencode) but the wrapper is keyed by name, not ordinal.
+# Offline fallback IDs for compatibility callers and tests. The live `agent`
+# command list is resolved from `a engines --json` in `launch/cli.py`.
 AGENT_KINDS: tuple[str, ...] = builtin_engine_ids()
 
 

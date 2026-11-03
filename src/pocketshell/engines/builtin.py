@@ -1,4 +1,9 @@
-"""The built-in engine manifests compiled into PocketShell."""
+"""PocketShell engine metadata and the offline fallback catalog.
+
+When aplexer is available, its ``a engines --json`` output owns the engine
+IDs and launch commands. These manifests retain PocketShell-only picker and
+launch-policy metadata and provide a catalog for offline use.
+"""
 from __future__ import annotations
 # --- sibling modules ---
 from pocketshell.engines.harness import _profile
@@ -68,10 +73,9 @@ _OPENCODE = EngineManifest(
         # `--dangerously-skip-permissions` are hidden aliases for the same
         # switch; the documented one is used so an opencode release that
         # drops the hidden aliases cannot silently break yolo launches.
-        # Keep in sync with aplexer's `builtin_engines()` -- aplexer is
-        # authoritative for the argv this CLI actually execs (see
-        # `agents/launch/run.py::_build_launch`), so a divergence here is
-        # silently dead in production.
+        # aplexer supplies this engine's actual command. This value is the
+        # offline fallback; the skip-permissions policy remains PocketShell
+        # metadata because `a engines --json` does not expose it.
         skip_permissions_argv=("--auto",),
     ),
 )
@@ -106,7 +110,7 @@ _ANTIGRAVITY = EngineManifest(
 
 
 def builtin_manifests() -> tuple[EngineManifest, ...]:
-    """Return the shipped registry entries in the established picker order."""
+    """Return the offline fallback entries in the established picker order."""
     return (_CLAUDE, _CODEX, _OPENCODE, _GROK, _ANTIGRAVITY)
 
 
