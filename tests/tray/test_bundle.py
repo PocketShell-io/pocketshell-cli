@@ -255,3 +255,34 @@ def test_explicit_private_home_is_carried_to_autostart_and_validated(monkeypatch
     for args in (['--user-data'], ['--user-data', '../other'], ['--user-data', r'C:\safe', '--user-data', r'C:\other']):
         with pytest.raises(RuntimeError):
             bundle.configure_user_data(args)
+
+
+def test_normal_setup_uses_vault_instead_of_manual_public_key_picker(tmp_path, monkeypatch):
+    import json
+    from pocketshell.gateway import service_user_agent, vault_enrollment
+    from pocketshell.tray import autostart, dialogs
+
+    root = tmp_path / "managed-runtime"
+    root.mkdir()
+    authority = root / "authority.json"
+    authority.write_text(json.dumps({"location": {"root": str(root)}, "release": "tray-fixture",
+                                     "endpoint": {"manifest": "fixture-manifest"},
+                                     "keys": {"authorizedKeys": str(tmp_path / "public-keys")}}))
+    agent_home = tmp_path / "agent"
+    agent_home.mkdir()
+    (agent_home / "binding.json").write_text(json.dumps({"authority": str(authority), "enrolled": True}))
+    monkeypatch.setattr(bundle, "home", lambda: tmp_path)
+    monkeypatch.setattr(service_user_agent, "agent_dir", lambda: str(agent_home))
+    installed = root / "releases/tray-fixture"
+    monkeypatch.setattr(bundle.sys, "executable", str(installed / "python/python.exe"))
+    events = []
+    password = lambda _: "fixture-only"
+    monkeypatch.setattr(dialogs, "password", password)
+    monkeypatch.setattr(vault_enrollment, "register_from_tray", lambda prompt: events.append(("vault", prompt)))
+    monkeypatch.setattr(bundle, "start_gateway", lambda: events.append(("start", None)))
+    monkeypatch.setattr(bundle, "set_enabled", lambda enabled: None)
+    monkeypatch.setattr(bundle, "message", lambda text, **kwargs: None)
+    monkeypatch.setattr(autostart, "install_autostart", lambda **kwargs: (True, ""))
+    assert bundle.setup(installed) is True
+    assert events == [("vault", password), ("start", None)]
+    assert not hasattr(bundle, "select_public_key")

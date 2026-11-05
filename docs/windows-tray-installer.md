@@ -24,11 +24,18 @@ host's independently obtained key. Then use `psc hetzner ls` or
 `psc hetzner connect`. PSC device login has its own current-user DPAPI store.
 
 Run `PocketShellGateway-Setup-x64.exe` as the ordinary Windows user. First-use
-Gateway Setup generates the local host key, opens browser sign-in, enrolls the
-gateway and asks for the connecting client's SSH **public** `.pub` key. Approve
-the browser code using your PocketShell account. These per-user identities
+Gateway Setup generates the local host key, opens device-flow account sign-in,
+enrolls the gateway, and asks for your **vault passphrase** in a masked native
+dialog. It creates a dedicated SSH access key locally, uploads its encrypted
+private half and authenticated server identity, then authorizes only its public
+half on this private endpoint. No public-key file selection or fingerprint copy
+is required. Approve the browser code using your PocketShell account. These identities
 cannot be bundled in an installer. Cancelled setup can be resumed from the
 Start menu's **Gateway Setup** shortcut without regenerating keys.
+
+An existing tray can use **Register this server with vault** to enable this flow.
+The Windows passphrase dialog never persists the secret in Credential Manager.
+See [vault enrollment](vault-enrollment.md) for retry, recovery and revocation.
 
 The tray starts at login. If the user's Run registry key is read-only (as
 observed on win35), it uses a per-user Startup-folder shortcut instead.

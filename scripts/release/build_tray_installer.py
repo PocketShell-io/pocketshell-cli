@@ -411,7 +411,7 @@ def build(args):
     if sys.platform == "win32":
         # Catch missing metadata / native wheels before producing a broken EXE.
         subprocess.run([str(root / "python/python.exe"), "-I", "-B", "-c",
-                        "import PIL.Image, pystray, pocketshell.tray_bundle, aplexer; print('Bundled imports OK')"], check=True)
+                        "import PIL.Image, pystray, pocketshell.tray_bundle, pocketshell.account.shared_vault, aplexer; print('Bundled imports OK')"], check=True)
         version = subprocess.check_output([str(root / "python/a.exe"), "--version"], text=True).strip()
         if version != "a " + APLEXER_VERSION:
             raise ValueError("Bundled aplexer executable version differs")

@@ -681,6 +681,8 @@ def gateway_auth_set(
 
 
 gateway_group.add_command(enroll)
+from pocketshell.gateway.vault_enrollment import register as vault_register  # noqa: E402
+gateway_group.add_command(vault_register)
 gateway_group.add_command(run)
 gateway_group.add_command(show)
 gateway_group.add_command(gateway_auth_group)

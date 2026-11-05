@@ -1126,13 +1126,24 @@ def parse_authorized_key(text) -> object:
 
 
 def authorize_key_command(text, *, api, runner, operation_id=None, confirmed: bool = False) -> tuple:
+    return _change_authorized_key(text, api=api, runner=runner, operation_id=operation_id,
+                                  confirmed=confirmed, revoke=False)
+
+
+def revoke_key_command(text, *, api, runner, operation_id=None, confirmed: bool = False) -> tuple:
+    """Remove the exact public key from the actual owner-private endpoint."""
+    return _change_authorized_key(text, api=api, runner=runner, operation_id=operation_id,
+                                  confirmed=confirmed, revoke=True)
+
+
+def _change_authorized_key(text, *, api, runner, operation_id=None, confirmed=False, revoke=False):
     """`gateway agent authorize-key --public-key-stdin` (revision D): append the
     user's OWN client public key to the generated authorized_keys, atomically
     and owner-private. The gateway never brokers user keys (docs/gateway.md
     §2); nothing is read from a registry or copied from another machine."""
 
     def doc(ok, authorized=None, error=None):
-        return {"version": API_VERSION, "operationId": operation_id, "action": "authorize-key", "ok": ok,
+        return {"version": API_VERSION, "operationId": operation_id, "action": "revoke-key" if revoke else "authorize-key", "ok": ok,
                 "authorized": authorized,
                 "error": None if error is None else {"code": error.code, "message": sanitize(str(error), 600)}}
 
@@ -1153,13 +1164,25 @@ def authorize_key_command(text, *, api, runner, operation_id=None, confirmed: bo
             if current is None:
                 raise AgentError("authority-invalid", "the generated authorized_keys is missing")
             lines = current.decode("utf-8").splitlines()
-            if key.line not in lines:
+            if revoke:
+                # Compare parsed public halves, not comments. Preserve every
+                # unrelated line and refuse malformed existing authorization.
+                kept = []
+                for line in lines:
+                    if line.strip() and not line.lstrip().startswith("#"):
+                        existing = parse_authorized_key(line)
+                        if existing.line == key.line:
+                            continue
+                    kept.append(line)
+                _write_private(target, ("\n".join(kept) + "\n").encode("utf-8"))
+            elif key.line not in lines:
                 lines.append(key.line)
                 _write_private(target, ("\n".join(lines) + "\n").encode("utf-8"))
             # the recorded explicit consent (public facts only)
             log = (_read_private(_path(CONSENT_LOG), 4 * 1024 * 1024) or b"").decode("utf-8").splitlines()
             log.append(json.dumps({"operationId": operation_id, "type": key.key_type, "fingerprint": key.fingerprint,
-                                   "consent": "user-confirmed", "authority": b["authority"], "at": int(time.time())}))
+                                   "consent": "user-confirmed", "action": "revoke" if revoke else "authorize",
+                                   "authority": b["authority"], "at": int(time.time())}))
             _write_private(_path(CONSENT_LOG), ("\n".join(log[-1000:]) + "\n").encode("utf-8"))
     except AgentError as exc:
         return doc(False, error=exc), EXIT_USAGE if exc.code == "usage" else EXIT_ERROR

@@ -275,6 +275,36 @@ def test_authorize_key_appends_one_validated_public_key(authority, tmp_path):
     assert result.exit_code == 0 and ak.read_text().splitlines() == [ED25519_LINE_2, ED25519_LINE]
 
 
+def test_vault_revocation_removes_exact_endpoint_key_preserving_others(authority, tmp_path):
+    from gateway_keyblobs import ED25519_LINE, ED25519_LINE_2
+    from pocketshell.gateway.cli import _api_runner
+
+    ak = _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    assert authorize(ED25519_LINE + "\n")[0].exit_code == 0
+    assert authorize(ED25519_LINE_2 + "\n")[0].exit_code == 0
+    # Existing comments do not cause the revoked key to remain authorized.
+    ak.write_text(ED25519_LINE + " old comment\n" + ED25519_LINE_2 + "\n")
+    api, runner = _api_runner()
+    doc, code = agent_mod.revoke_key_command(ED25519_LINE, api=api, runner=runner,
+                                            operation_id="revoke-fixture", confirmed=True)
+    assert code == 0 and doc["ok"] and doc["action"] == "revoke-key"
+    assert ak.read_text().splitlines() == [ED25519_LINE_2]
+
+
+def test_vault_revocation_requires_local_confirmation(authority, tmp_path):
+    from gateway_keyblobs import ED25519_LINE
+    from pocketshell.gateway.cli import _api_runner
+
+    ak = _generated(authority, tmp_path)
+    assert bind_pre()[0].exit_code == 0
+    assert authorize(ED25519_LINE + "\n")[0].exit_code == 0
+    before = ak.read_bytes()
+    api, runner = _api_runner()
+    doc, code = agent_mod.revoke_key_command(ED25519_LINE, api=api, runner=runner)
+    assert code != 0 and not doc["ok"] and ak.read_bytes() == before
+
+
 @pytest.mark.parametrize("text", [
     "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n",
     'command="sh" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK8B0Ctl2bl8wdg50ZKPY7t9WuU170cplZpzuMckYrSU\n',

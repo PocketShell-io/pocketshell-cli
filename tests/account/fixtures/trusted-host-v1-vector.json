@@ -1,0 +1,35 @@
+{
+  "comment": "Public throwaway vector; same DEK as vault-v1-vectors.json",
+  "dekHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+  "identity": {
+    "accountId": "google:fixture-subject",
+    "vaultId": "ICEiIyQlJicoKSorLC0uLw",
+    "epoch": 1,
+    "serverUrl": "wss://gateway.pocketshell.io",
+    "deviceId": "fixture-linux",
+    "revision": 1
+  },
+  "data": {
+    "hostAlias": "Fixture server",
+    "username": "orin",
+    "keyId": "_LgT2DhVIZFXDq2Ms35vug",
+    "sshHostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMdOUe/RL4ueMiTai8tfQmeSP2yvIwF0WKOjWMHwB0gp",
+    "devicePublicKey": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+    "status": "active",
+    "updatedAt": "2026-11-05T00:00:00.000Z"
+  },
+  "plaintext": "{\"hostAlias\":\"Fixture server\",\"username\":\"orin\",\"keyId\":\"_LgT2DhVIZFXDq2Ms35vug\",\"sshHostKey\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMdOUe/RL4ueMiTai8tfQmeSP2yvIwF0WKOjWMHwB0gp\",\"devicePublicKey\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc\",\"status\":\"active\",\"updatedAt\":\"2026-11-05T00:00:00.000Z\"}",
+  "aad": "[\"pocketshell-trusted-host/v1\",\"google:fixture-subject\",\"ICEiIyQlJicoKSorLC0uLw\",1,\"wss://gateway.pocketshell.io\",\"fixture-linux\",1]",
+  "slot": "th-_GbQAg4FEK59Aey011dgNg",
+  "envelope": {
+    "v": 1,
+    "accountId": "google:fixture-subject",
+    "vaultId": "ICEiIyQlJicoKSorLC0uLw",
+    "epoch": 1,
+    "serverUrl": "wss://gateway.pocketshell.io",
+    "deviceId": "fixture-linux",
+    "revision": 1,
+    "n": "YGFiY2RlZmdoaWpr",
+    "ct": "1wphanTg0cpg4AoUP6QaYndYm2NyHuJrfAyuyonuJY5Tip9wGqa6q5Lbz1pyQCIG3E0INTwij45HSVUMqLOI2BLo9QgXCy71D3quTM1sKDmxcCWWAHr3yi4aOS3pclwnVKxDgI9hRakutaRY5hGW-cFN3nhgjzs2uy7sgCc2F-gtVGUXrtMhOGkeRNQntkf1mXSs_z-CutS-8VOVKDWFiI52p_sa0eBUzAJwm0qhZm8X7ZBuzVVPkbgRYl7d1v7BrziLcKjQB1pLs_jtNVE6IeWgrZj8ZipXTWON5eSBXBqtDADLHbUtHyX0GffgT7-ThLHI1n6Ndzn3pI4S8PSPsv2Y12Z8aB3Z6ACZTQoNJF64Xg6WkOnfjuLK64u3JQErgt9dQQnbxWAZ4-vmm4dXqD8xDCSgGAB0lv8"
+  }
+}

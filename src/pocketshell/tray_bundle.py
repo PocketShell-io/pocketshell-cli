@@ -146,12 +146,13 @@ def setup(root: Path):
         agent("enroll", "--config-dir", str(config), "--helper", str(helper))
         agent("bind", "--manifest", receipt["endpoint"]["manifest"], "--authority", str(authority),
               "--config-dir", str(config), "--helper", str(helper))
-    if not Path(receipt["keys"]["authorizedKeys"]).read_text().strip():
-        message("The gateway is enrolled. Select your CLIENT's SSH public key (.pub) next. Only that key will be allowed to connect. Never select a private key.")
-        key = select_public_key()
-        if not key:
-            return False
-        agent("authorize-key", "--public-key-stdin", "--confirmed", input=key.encode("utf-8"))
+    # The same account vault protocol as `gateway register`: generate the
+    # SSH access key locally, upload ciphertext and authenticated server
+    # identity, then authorize only its public half on this private endpoint.
+    # Existing enrollment keys are preserved; no client key/file selection.
+    from pocketshell.gateway.vault_enrollment import register_from_tray
+    from pocketshell.tray.dialogs import password
+    register_from_tray(password)
     start_gateway()
     set_enabled(True)
     from pocketshell.tray.autostart import install_autostart
@@ -167,35 +168,6 @@ def prepare_enrollment_directory(path):
     from pocketshell.gateway.service_agent_install import NativePaths
     from pocketshell.gateway.service_windows import WindowsApi
     NativePaths(WindowsApi()).mkdir(str(path))
-
-
-def select_public_key():
-    """Use the native file picker; no shell, profile or command interpolation."""
-    from ctypes import wintypes as w
-
-    class OPENFILENAME(ctypes.Structure):
-        _fields_ = [("size", w.DWORD), ("owner", w.HWND), ("instance", w.HINSTANCE),
-                    ("filter", w.LPCWSTR), ("custom", w.LPWSTR), ("maxCustom", w.DWORD),
-                    ("index", w.DWORD), ("file", w.LPWSTR), ("maxFile", w.DWORD),
-                    ("fileTitle", w.LPWSTR), ("maxTitle", w.DWORD), ("initial", w.LPCWSTR),
-                    ("title", w.LPCWSTR), ("flags", w.DWORD), ("offset", w.WORD),
-                    ("extension", w.WORD), ("defaultExt", w.LPCWSTR), ("data", w.LPARAM),
-                    ("hook", ctypes.c_void_p), ("template", w.LPCWSTR), ("reserved", ctypes.c_void_p),
-                    ("reserved2", w.DWORD), ("flagsEx", w.DWORD)]
-    path = ctypes.create_unicode_buffer(32768)
-    dialog = OPENFILENAME()
-    dialog.size = ctypes.sizeof(dialog)
-    dialog.filter = "SSH public keys (*.pub)\0*.pub\0\0"
-    dialog.file = ctypes.cast(path, w.LPWSTR)
-    dialog.maxFile = len(path)
-    dialog.title = "Select the SSH PUBLIC key of your connecting client"
-    dialog.flags = 0x1000 | 0x800 | 0x8  # existing file/path; do not change cwd
-    if not ctypes.windll.comdlg32.GetOpenFileNameW(ctypes.byref(dialog)):
-        return None
-    chosen = Path(path.value)
-    if chosen.suffix.lower() != ".pub" or chosen.stat().st_size > 16384:
-        raise RuntimeError("Select a small OpenSSH .pub file, not a private key.")
-    return chosen.read_text(encoding="utf-8").strip()
 
 
 def enabled():

@@ -148,6 +148,8 @@ class TrayApp:
             "gateway_auth_import_clipboard": lambda: self._spawn(lambda: self.do_import_managed_keys("clipboard")),
             "gateway_auth_import_file": lambda: self._spawn(lambda: self.do_import_managed_keys("file")),
             "gateway_auth_clear": lambda: self._spawn(self.do_clear_managed_keys),
+            "vault_register": lambda: self._spawn(self.do_register_vault),
+            "vault_revoke": lambda: self._spawn(lambda: self.do_register_vault(revoke=True)),
         }
         if action_id.startswith("gateway_auth_policy:"):
             policy = action_id.split(":", 1)[1]
@@ -203,7 +205,23 @@ class TrayApp:
         """Model menu plus the gateway key policy submenu after Sessions."""
         specs = list(self.model.menu_spec(autostart_checked=self._autostart_checked))
         specs.insert(3, gateway_auth.menu_spec(self.gateway_auth))
+        specs.insert(4, MenuItemSpec(text="Register this server with vault…", action_id="vault_register"))
+        specs.insert(5, MenuItemSpec(text="Revoke this server's vault key…", action_id="vault_revoke"))
         return tuple(specs)
+
+    def do_register_vault(self, revoke: bool = False) -> None:
+        from pocketshell.account.errors import AccountError
+        from pocketshell.gateway.vault_enrollment import register_from_tray
+
+        try:
+            result = register_from_tray(self.dialogs.password, revoke=revoke)
+            self.dialogs.info("Server revoked." if revoke else
+                              f"Server registered: {result['server']}. Unlock PocketShell on your phone to connect.")
+        except AccountError as exc:
+            self.dialogs.info(str(exc))
+        except Exception:
+            # Never expose secret-bearing exceptions or request objects.
+            self.dialogs.info("Vault registration could not complete safely. Check your PocketShell login and endpoint.")
 
     # Gateway key policy (key vault). The helper re-validates every change;
     # the tray explains refusals first and never shows key bytes.
