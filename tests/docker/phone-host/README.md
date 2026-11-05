@@ -11,7 +11,10 @@ Build from a clean source archive in a temporary context containing:
 - `helper/`: a linux-amd64 helper wheel verified against its trusted CI manifest;
 - `tests/docker/phone-host/`: this fixture directory.
 
-Pass `--build-arg CLI_REVISION=<full commit>` and use this Dockerfile. Keep
+Pass `--build-arg CLI_REVISION=<full commit>` and
+`--build-arg HELPER_SHA256=<trusted embedded binary digest>` and use this
+Dockerfile. The build verifies the installed helper bytes before ensuring its
+executable permission (pip may not preserve a data file's execute bit). Keep
 credentials outside the build context. Do not commit or bake generated keys,
 account sessions or enrollment tokens into an image.
 

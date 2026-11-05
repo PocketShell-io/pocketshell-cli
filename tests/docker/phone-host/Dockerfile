@@ -1,6 +1,7 @@
 FROM python:3.12-slim-bookworm
 
 ARG CLI_REVISION
+ARG HELPER_SHA256
 LABEL org.opencontainers.image.description="Disposable PocketShell phone acceptance host; no published ports" \
       org.opencontainers.image.revision="${CLI_REVISION}"
 
@@ -17,7 +18,8 @@ RUN apt-get update \
 COPY cli/ /opt/pocketshell-source/
 COPY helper/*.whl /opt/helper/
 RUN python -m pip install --no-cache-dir /opt/pocketshell-source \
-    && python -m pip install --no-index --no-deps /opt/helper/*.whl
+    && python -m pip install --no-index --no-deps /opt/helper/*.whl \
+    && python -c 'import hashlib,pathlib,re,sys,sysconfig; expected=sys.argv[1]; assert re.fullmatch("[0-9a-f]{64}",expected), "trusted helper digest required"; helper=pathlib.Path(sysconfig.get_paths()["purelib"])/"pocketshell_gateway_link/bin/pocketshell-link"; assert hashlib.sha256(helper.read_bytes()).hexdigest()==expected, "helper digest mismatch"; helper.chmod(0o755)' "${HELPER_SHA256}"
 COPY tests/docker/phone-host/entrypoint.sh /usr/local/bin/phone-host
 RUN chmod 0755 /usr/local/bin/phone-host
 
