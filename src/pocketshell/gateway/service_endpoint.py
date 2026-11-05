@@ -64,8 +64,18 @@ ALLOWED_ENDPOINT_MANIFEST_SHA256: frozenset = frozenset()
 # The trio is the e862645d successor of 6cf7ae85 (release/inputs/guardian-e862645d:
 # one line, the agreed 8 MiB manifest bound of §16.14; native_api/policy unchanged).
 SERVICING_GUARDIAN_SHA256 = "cb863ab6d47e0fd7d0342edb5bfac4349685c7b1452f3f53cc7130faca97ee62"
+INTERACTIVE_GUARDIAN_SHA256 = "d3c1bb51e72a3ae731f6942660df76994c55e74a4421a3fee1655987d62b95f4"
+INTERACTIVE_POLICY_SHA256 = "e39ee0ea26879f3418e1d14c270a507def71acd84be2e6cfe409afee3bcb1c17"
+
+
+def is_servicing_guardian(digest: str) -> bool:
+    return digest in (SERVICING_GUARDIAN_SHA256, INTERACTIVE_GUARDIAN_SHA256)
 
 ALLOWED_GUARDIAN_SOURCES: frozenset = frozenset({(
+    INTERACTIVE_GUARDIAN_SHA256,
+    "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
+    INTERACTIVE_POLICY_SHA256,
+), (
     "e862645ddc374801f1ae921be3bf66afeb0ccff03d82adb909ad1b4ec0bdd877",
     "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
     "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce",
@@ -455,14 +465,14 @@ def check_trust_authority(m: GuardianManifest, receipt, *, file_sha256: Callable
             if pins[key] != digest:
                 raise ServiceError(f"pinned release file {sanitize(key)} does not match its catalog row")
         elif key in refs:
-            if m.pins[m.guardian] == SERVICING_GUARDIAN_SHA256:
+            if is_servicing_guardian(m.pins[m.guardian]):
                 raise ServiceError("OS servicing images must not be hash-pinned")
             if refs[key] != digest:
                 raise ServiceError(f"the system reference pin {sanitize(key)} is not the recorded measurement")
         elif key not in generated:
             raise ServiceError(f"pinned file {sanitize(key)} is outside the recorded closure (not a catalog member "
                                "at its path, a generated config, or a recorded system reference)")
-    required_refs = () if m.pins[m.guardian] == SERVICING_GUARDIAN_SHA256 else refs
+    required_refs = () if is_servicing_guardian(m.pins[m.guardian]) else refs
     missing = sorted(k for k in (*pins, *required_refs, *generated) if k not in have)
     if missing:
         raise ServiceError(f"the manifest lacks {len(missing)} required pins (e.g. {sanitize(missing[0])})")
@@ -644,6 +654,7 @@ class Ready:
 
 MODE_S4U = "s4u-session0"
 MODE_ACTIVE_CONSOLE = "active-console"
+MODE_INTERACTIVE_SESSION = "interactive-session"
 
 
 def parse_ready(data: bytes, m: GuardianManifest, *, mode: str = MODE_S4U,
@@ -684,17 +695,19 @@ def parse_ready(data: bytes, m: GuardianManifest, *, mode: str = MODE_S4U,
         require(c.get("stationVisible") is False, "context.stationVisible is not false")
         require(isinstance(station, str) and bool(station) and not any(x in station for x in "\\/\x00\r\n")
                 and station.casefold() != "winsta0", "context.station is not an actual non-WinSta0 station")
-    elif mode == MODE_ACTIVE_CONSOLE:
+    elif mode in (MODE_ACTIVE_CONSOLE, MODE_INTERACTIVE_SESSION):
         # The ordinary-user mode: the guardian's validated interactive branch,
-        # captured AT LAUNCH (own SID, the caller's session, the active console
-        # session, the visible WinSta0 station, thread desktop Default). The
+        # captured AT LAUNCH (own SID, the caller's session, visible WinSta0,
+        # thread desktop Default). Active-console additionally requires the
+        # physical console; the tray's explicit mode also permits own RDP. The
         # CURRENT input desktop is never consulted: locking switches it to
         # Winlogon and the endpoint stays online.
         require(type(session) is int and session > 0, "the caller's session is unknown")
         require(type(c.get("session")) is int and c["session"] == session and c["session"] != 0,
                 "context.session is not the caller's (non-zero) session")
-        require(type(c.get("activeConsoleSession")) is int and c["activeConsoleSession"] == c["session"],
-                "context.session was not the active console session at launch")
+        if mode == MODE_ACTIVE_CONSOLE:
+            require(type(c.get("activeConsoleSession")) is int and c["activeConsoleSession"] == c["session"],
+                    "context.session was not the active console session at launch")
         require(station == "WinSta0", "context.station is not WinSta0")
         require(c.get("stationVisible") is True, "context.stationVisible is not true (visible WinSta0)")
         require(c.get("desktop") == "Default", "context.desktop at launch is not Default")

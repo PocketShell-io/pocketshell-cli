@@ -312,16 +312,17 @@ def gateway_auth_probe(helper, timeout=30):
 
 def stage_guardian(root, catalog):
     from pocketshell.gateway import service_endpoint as ep
-    source = REPO / "release/inputs/guardian-servicing"
-    expected = (ep.SERVICING_GUARDIAN_SHA256,
+    source = REPO / "release/inputs/guardian-interactive"
+    expected = (ep.INTERACTIVE_GUARDIAN_SHA256,
                 "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
-                "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce")
+                ep.INTERACTIVE_POLICY_SHA256)
     for name, sha in zip(ep.SOURCE_NAMES, expected):
         if digest(source / name) != sha:
             raise ValueError("Servicing guardian differs from its reviewed source")
     for name in ep.SOURCE_NAMES:
         shutil.copyfile(source / name, root / "guardian" / name)
     catalog["lineage"]["guardian"]["sourceSHA256"] = expected[0]
+    catalog["lineage"]["policy"]["sourceSHA256"] = expected[2]
 
 
 def build(args):

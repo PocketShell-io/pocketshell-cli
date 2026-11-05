@@ -2,6 +2,20 @@ from pocketshell import tray_bundle as bundle
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolated_tray_instance(monkeypatch, tmp_path):
+    """Unit tests must not acquire the real signed-in user's tray mutex."""
+    from pocketshell.tray import single_instance
+    from pocketshell.gateway import service_user_agent
+    from pocketshell import tray_supervisor
+    monkeypatch.setattr(service_user_agent, "MODE", "active-console")
+    original = single_instance.SingleInstance
+    monkeypatch.setattr(single_instance, "SingleInstance", lambda *a, **kw:
+                        original(name="pocketshell_test_" + tmp_path.name, lock_dir=tmp_path))
+    yield
+    tray_supervisor.close()
+
+
 def test_manual_stop_survives_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, "home", lambda: tmp_path)
     assert bundle.enabled()

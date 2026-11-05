@@ -176,7 +176,8 @@ def test_the_production_trio_is_compiled_generically():
     import importlib
 
     fresh = importlib.reload(importlib.import_module("pocketshell.gateway.service_endpoint"))
-    assert fresh.ALLOWED_GUARDIAN_SOURCES == frozenset({TRIO, (fresh.SERVICING_GUARDIAN_SHA256, *TRIO[1:])})
+    assert fresh.ALLOWED_GUARDIAN_SOURCES == frozenset({TRIO, (fresh.SERVICING_GUARDIAN_SHA256, *TRIO[1:]),
+        (fresh.INTERACTIVE_GUARDIAN_SHA256, TRIO[1], fresh.INTERACTIVE_POLICY_SHA256)})
     assert fresh.ALLOWED_ENDPOINT_MANIFEST_SHA256 == frozenset()  # NO per-host compiled digest
 
 

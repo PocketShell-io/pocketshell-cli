@@ -39,6 +39,12 @@ quits or crashes. This also works when Explorer itself has inherited job
 restrictions. The ordinary CLI retains its separate independent-launch policy.
 The helper reconnects after network outages. The tray checks dead local
 processes every 30 seconds and asks the measured guardian to recover them.
+The tray supports the signed-in owner's RDP session as well as the physical
+console. Its explicit `interactive-session` readiness mode requires the same
+owner SID and caller session, visible WinSta0/Default at launch, the pinned
+guardian and endpoint, private desktop and owned worker job. It does not require
+that RDP session to equal the physical console session. The ordinary CLI retains
+its `active-console` policy and S4U retains its separate session-0 policy.
 Stop is remembered across app restarts and logins. An existing unrelated
 gateway binding is refused rather than replaced. Client names and key comments
 depend on available OpenSSH authentication records; a connection whose identity

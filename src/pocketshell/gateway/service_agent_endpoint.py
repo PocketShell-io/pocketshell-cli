@@ -217,7 +217,7 @@ def generate(*, lay: dict, catalog: dict, owner_sid: str, account: str, port: in
     # 6cf startup_members accepts (cmd.exe / conhost.exe of the daemon's job)
     pins = {ntpath.join(rel, *f["path"].split("/")): f["sha256"] for f in catalog["files"]}
     # Old guardians require measurements; the successor uses system authority.
-    if role_file(catalog, "guardian")["sha256"] != ep.SERVICING_GUARDIAN_SHA256:
+    if not ep.is_servicing_guardian(role_file(catalog, "guardian")["sha256"]):
         pins.update(system_roles)
     pins[lay["config"]] = hashlib.sha256(config).hexdigest()
     pins[lay["backendConfig"]] = hashlib.sha256(backend).hexdigest()

@@ -40,6 +40,9 @@ def run_cli(args, *, timeout=600, input=None, pending=False, accepted=(0,)):
 
 
 def agent(action, *args, **kw):
+    if action == "stop":
+        from pocketshell.tray_supervisor import stop
+        return stop()
     kw.setdefault("accepted", {"status": (0, 3, 4), "stop": (0, 4), "start": (0, 3)}.get(action, (0,)))
     return run_cli(["gateway", "agent", action, *args, "--json", "--operation-id", uuid.uuid4().hex], **kw)
 
@@ -229,6 +232,8 @@ def observe_agent():
     """
     from pocketshell.gateway import service_common, service_user_agent, service_windows
     api = service_windows.WindowsApi()
+    from pocketshell.tray_supervisor import configure_context
+    configure_context(api)
     with service_user_agent._OperationLock():
         binding, manifest, key = service_user_agent.load_binding(api=api, runner=service_common.run_child,
                                                                 revalidate=False)
@@ -315,6 +320,8 @@ def status_document():
 
 
 def run_tray(root):
+    from pocketshell.tray_supervisor import configure_context
+    configure_context()
     from pocketshell.tray.app import TrayApp
     from pocketshell.tray.autostart import install_autostart
     from pocketshell.tray.gateway_auth import GatewayAuthClient, GatewayAuthError
@@ -462,6 +469,8 @@ def main():
                 pending = service_user_agent._read_private(service_user_agent._path("tray-upgrade.json"))
                 if receipt["release"] != staged["release"] or pending is not None:
                     from pocketshell.tray_repair import repair
+                    from pocketshell.tray_supervisor import configure_context
+                    configure_context()
                     (home() / "tray-exit").touch()
                     wait_for_tray_exit()
                     installed = installed_root(repair(root))

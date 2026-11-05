@@ -73,6 +73,7 @@ def api():
 
 def start():
     from pocketshell.gateway import service_common, service_user_agent
+    configure_context()
     doc, code = service_user_agent.start(api=api(), runner=service_common.run_child, timeout=300,
                                          operation_id=uuid.uuid4().hex)
     if code != 0:
@@ -81,15 +82,29 @@ def start():
     return doc
 
 
-def configure_background():
-    """The reviewed guardian also supports an invisible ordinary-user session 0.
+def configure_context(native_api=None):
+    """Select the tray's measured caller session, including an RDP desktop.
 
-    Keep its SID, DACL, private desktop, host-key and job checks intact. The
-    ordinary interactive CLI's default readiness contract remains unchanged.
+    Keep its SID, DACL, private desktop, host-key and job checks intact.
+    The ordinary interactive CLI's active-console contract remains unchanged.
     """
     from pocketshell.gateway import service_endpoint, service_user_agent
-    service_user_agent.MODE = (service_endpoint.MODE_S4U if api().current_session() == 0
-                               else service_endpoint.MODE_ACTIVE_CONSOLE)
+    measured = native_api if native_api is not None else api()
+    service_user_agent.MODE = (service_endpoint.MODE_S4U if measured.current_session() == 0
+                               else service_endpoint.MODE_INTERACTIVE_SESSION)
+
+
+configure_background = configure_context  # retained for the background-owner entry point
+
+
+def stop():
+    from pocketshell.gateway import service_common, service_user_agent
+    configure_context()
+    doc, code = service_user_agent.stop(api=api(), runner=service_common.run_child,
+                                      operation_id=uuid.uuid4().hex)
+    if code not in (0, 4):
+        raise RuntimeError((doc.get("error") or {}).get("message") or f"Gateway stop failed ({code})")
+    return doc
 
 
 def close():
