@@ -8,6 +8,7 @@ from uuid import uuid4
 import click
 from pocketshell.runtime import aplexer as _aplexer
 from pocketshell.runtime import memcap as _memcap
+from pocketshell.runtime import inherited_cgroup as _inherited_cgroup
 from pocketshell import profiles as _profiles
 from pocketshell.runtime import sessions as _session_enum
 # --- sibling modules ---
@@ -264,9 +265,16 @@ def _start_new_record(
     memory_bytes: int,
 ) -> dict[str, Any]:
     """Run ``a start`` and return the created-record envelope."""
-    argv = _start_argv(
-        aplexer_path, workspace, name, engine, profile, memory_bytes
-    )
+    try:
+        inherited = _inherited_cgroup.plan(memory_bytes)
+        argv = _start_argv(
+            aplexer_path, workspace, name, engine, profile,
+            None if inherited is not None else memory_bytes,
+        )
+        if inherited is not None:
+            _inherited_cgroup.revalidate(inherited)
+    except _memcap.MemCapError as exc:
+        raise _CreateError(str(exc)) from exc
     code, stdout, stderr = _run_aplexer(argv)
     if code != 0:
         raise _start_failure(
@@ -274,7 +282,10 @@ def _start_new_record(
             name=name, memory_bytes=memory_bytes,
         )
     record = _parse_start_record(stdout)
-    return _created_record_payload(record, name)
+    result = _created_record_payload(record, name)
+    if inherited is not None:
+        result["memory_enforcement"] = inherited.public()
+    return result
 
 
 def _create_on_aplexer(

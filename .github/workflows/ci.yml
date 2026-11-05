@@ -17,6 +17,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  inherited-memory:
+    name: Inherited cgroup kernel proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.10.11"
+      - run: uv sync --frozen --group dev
+      - name: Prove bounded inheritance and fail-closed cases in disposable containers
+        env:
+          POCKETSHELL_INHERITED_CAP_PROOF: required
+        run: uv run --frozen pytest -v -s tests/test_inherited_cgroup_kernel_proof.py
+
   backend-build:
     uses: ./.github/workflows/backend.yml
     permissions:

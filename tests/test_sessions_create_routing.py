@@ -5,12 +5,20 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 from click.testing import CliRunner
 
 from pocketshell import sessions
 from pocketshell.runtime import aplexer
 from pocketshell.sessions import create as create_mod
+
+
+@pytest.fixture(autouse=True)
+def dedicated_scope_fixture(monkeypatch):
+    # These tests exercise the dedicated-scope argv/response contract.
+    # Ambient host/container cgroups must not select a different backend.
+    monkeypatch.setattr(create_mod._inherited_cgroup, "plan", lambda _: None)
 
 
 def _resolution(path: str | None) -> aplexer.AplexerResolution:

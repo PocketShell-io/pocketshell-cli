@@ -39,6 +39,12 @@ create is refused before anything is started. Silently running uncapped is the
 bug (#2562), and silently substituting the fallback for a file the project
 clearly meant to be authoritative would hide it just as well.
 
+When a systemd user scope is unavailable, a verified read-only cgroup-v2
+domain with an existing finite RAM bound no greater than the requested cap
+and zero swap is sufficient. Sessions inherit that shared kernel bound;
+the create response names it honestly as ``inherited_cgroup``. Missing,
+ambiguous, writable, unbounded or weaker kernel evidence fails closed.
+
 The single, explicit escape hatch is ``--mem none`` at the CALL SITE. It
 exists because a cap is unenforceable on a host with no delegated cgroup-v2
 user scope (an unprivileged container, e.g. the Docker `agents` fixture),
