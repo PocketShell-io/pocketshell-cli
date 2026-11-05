@@ -131,6 +131,11 @@ jobs:
           tests/gateway/test_windows_service_private_read.py
           tests/gateway/test_gateway_user_agent.py
           tests/gateway/test_gateway_agent_install.py
+          tests/account/test_shared_vault.py
+          tests/account/test_vault_enrollment.py
+          tests/account/test_vault_revocation_replay.py
+          tests/account/test_vault_trust_store.py
+          tests/tray/test_vault_password.py
 
       # `pocketshell gateway service` against the REAL Task Scheduler of
       # this disposable runner: a fake pocketshell-link.exe (Go, built
