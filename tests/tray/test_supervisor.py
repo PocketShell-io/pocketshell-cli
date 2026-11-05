@@ -9,7 +9,7 @@ import pytest
 from pocketshell.gateway.service_windows import TargetJobError, WindowsApi
 
 
-@pytest.mark.parametrize("session,mode", [(0, "s4u-session0"), (1, "active-console")])
+@pytest.mark.parametrize("session,mode", [(0, "s4u-session0"), (1, "interactive-session"), (2, "interactive-session")])
 def test_background_selects_only_the_measured_guardian_context(monkeypatch, session, mode):
     from pocketshell import tray_supervisor
     from pocketshell.gateway import service_user_agent
@@ -67,3 +67,24 @@ def test_owned_mode_keeps_the_image_digest_gate(tmp_path):
                              str(tmp_path), None, image_sha256="0" * 64)
     finally:
         api.close()
+
+
+def test_interactive_guardian_is_a_pinned_successor_with_own_session_policy():
+    import runpy
+    from pocketshell.gateway import service_endpoint as ep
+    source = Path(__file__).parents[2] / 'release/inputs/guardian-interactive'
+    triple = tuple(hashlib.sha256((source / name).read_bytes()).hexdigest() for name in ep.SOURCE_NAMES)
+    assert triple in ep.ALLOWED_GUARDIAN_SOURCES
+    assert triple[0] == ep.INTERACTIVE_GUARDIAN_SHA256
+    assert triple[2] == ep.INTERACTIVE_POLICY_SHA256
+    validate = runpy.run_path(str(source / 'policy.py'))['validate_context']
+    owner = 'S-1-5-21-1-2-3-1001'
+    context = {'ownerSID': owner, 'session': 2, 'activeConsoleSession': 1,
+               'station': 'WinSta0', 'stationVisible': True, 'desktop': 'Default'}
+    assert validate(context, owner) == context
+    for change in ({'ownerSID': 'S-1-5-21-1-2-3-999'}, {'session': -1},
+                   {'session': True}, {'station': 'foreign'}, {'stationVisible': False},
+                   {'desktop': 'Winlogon'}):
+        with pytest.raises(ValueError):
+            validate({**context, **change}, owner)
+    assert validate({**context, 'session': 0, 'station': 'Service-0x0-1$', 'stationVisible': False}, owner)

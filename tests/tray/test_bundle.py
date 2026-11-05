@@ -2,6 +2,23 @@ from pocketshell import tray_bundle as bundle
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolated_tray_instance(monkeypatch, tmp_path):
+    """Unit tests must not acquire the real signed-in user's tray mutex."""
+    from pocketshell.tray import single_instance
+    from pocketshell.gateway import service_user_agent
+    from pocketshell import tray_supervisor
+    monkeypatch.setattr(service_user_agent, "MODE", "active-console")
+    monkeypatch.setattr(tray_supervisor, "configure_context", lambda: None)
+    monkeypatch.setattr(tray_supervisor, "configure_background", lambda: None)
+    monkeypatch.setattr(bundle, "_user_data", None)
+    original = single_instance.SingleInstance
+    monkeypatch.setattr(single_instance, "SingleInstance", lambda *a, **kw:
+                        original(name="pocketshell_test_" + tmp_path.name, lock_dir=tmp_path))
+    yield
+    tray_supervisor.close()
+
+
 def test_manual_stop_survives_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, "home", lambda: tmp_path)
     assert bundle.enabled()
@@ -227,3 +244,14 @@ def test_legacy_link_task_warning_names_duplicate_link(monkeypatch):
     warning = bundle.legacy_link_task_warning()
     assert "GatewayLink" in warning
     assert "duplicate" in warning
+
+def test_explicit_private_home_is_carried_to_autostart_and_validated(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(bundle, '_user_data', None)
+    bundle.configure_user_data(['--user-data', r'C:\Users\owner\.pocketshell-runtime'])
+    assert str(bundle.home()) == r'C:\Users\owner\.pocketshell-runtime'
+    assert bundle.user_data_args('--status') == ['--status', '--user-data', str(bundle.home())]
+    assert '--user-data' in bundle.startup_command(Path('runtime'))
+    for args in (['--user-data'], ['--user-data', '../other'], ['--user-data', r'C:\safe', '--user-data', r'C:\other']):
+        with pytest.raises(RuntimeError):
+            bundle.configure_user_data(args)

@@ -811,3 +811,28 @@ def test_unbound_commands_create_no_agent_state(agent, action):
     result, data = run(action, "--json")
     assert result.exit_code == 1 and data["error"]["code"] == "not-bound"
     assert not os.path.exists(agent_mod.agent_dir()), os.listdir(agent_mod.agent_dir())
+
+
+def test_tray_interactive_ready_accepts_own_rdp_without_relabeling_console():
+    context = {**CONSOLE, 'session': 2, 'activeConsoleSession': 1}
+    m, data = _ready(context)
+    ready = ep.parse_ready(data, m, mode=ep.MODE_INTERACTIVE_SESSION, session=2)
+    assert ready.mode == 'interactive-session' and ready.session == 2
+    with pytest.raises(ServiceError, match='active console'):
+        ep.parse_ready(data, m, mode=ep.MODE_ACTIVE_CONSOLE, session=2)
+    with pytest.raises(ServiceError, match='session'):
+        ep.parse_ready(data, m, mode=ep.MODE_S4U)
+
+
+@pytest.mark.parametrize('change,caller,message', [
+    ({'session': 3}, 2, 'session'),
+    ({'session': 0}, 0, 'session'),
+    ({'ownerSID': 'S-1-5-21-1-2-3-4'}, 2, 'owner'),
+    ({'station': 'Service-0x0-1$'}, 2, 'WinSta0'),
+    ({'stationVisible': False}, 2, 'visible'),
+    ({'desktop': 'Winlogon'}, 2, 'Default'),
+])
+def test_tray_interactive_ready_rejects_foreign_or_noninteractive_context(change, caller, message):
+    m, data = _ready({**CONSOLE, 'session': 2, 'activeConsoleSession': 1, **change})
+    with pytest.raises(ServiceError, match=message):
+        ep.parse_ready(data, m, mode=ep.MODE_INTERACTIVE_SESSION, session=caller)

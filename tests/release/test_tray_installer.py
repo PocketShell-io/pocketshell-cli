@@ -384,3 +384,25 @@ def test_gateway_auth_probe_refuses_helper_without_command(tmp_path):
     stub.chmod(0o755)
     with pytest.raises(ValueError, match="gateway-auth"):
         builder.gateway_auth_probe(stub)
+
+def test_runtime_update_refuses_changed_base_before_output(tmp_path, monkeypatch):
+    import sys
+    script_dir = str(Path(__file__).parents[2] / 'scripts/release')
+    monkeypatch.syspath_prepend(script_dir)
+    import update_tray_runtime as updater
+    resources = tmp_path / 'resources'
+    runtime = resources / 'runtime'
+    (runtime / 'python').mkdir(parents=True)
+    for name in ('a.exe', 'aplexer.exe'):
+        (runtime / 'python' / name).write_bytes(b'unchanged native fixture')
+    rows = inventory(runtime)
+    catalog = resources / 'host-runtime-catalog.json'
+    catalog.write_text('{}')
+    monkeypatch.setattr(updater, 'parse_catalog', lambda data: {'version': 3, 'files': rows})
+    out = tmp_path / 'result'
+    with pytest.raises(ValueError, match='digest'):
+        updater.build(resources, '0' * 64, out)
+    (runtime / 'python/a.exe').write_bytes(b'tampered')
+    with pytest.raises(ValueError, match='verified catalog'):
+        updater.build(resources, builder.digest(catalog), out)
+    assert not out.exists()

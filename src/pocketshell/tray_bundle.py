@@ -18,9 +18,33 @@ import time
 import uuid
 import webbrowser
 
+_user_data = None
+
+
+def configure_user_data(argv):
+    """An explicit per-user app directory; never override native known folders."""
+    global _user_data
+    if "--user-data" not in argv:
+        return
+    from pocketshell.gateway.service_agent_install import _abs
+    if argv.count("--user-data") != 1:
+        raise RuntimeError("Expected one --user-data directory")
+    index = argv.index("--user-data")
+    if index + 1 >= len(argv) or not _abs(argv[index + 1]):
+        raise RuntimeError("--user-data must be a plain drive-absolute directory")
+    _user_data = Path(argv[index + 1])
+
 
 def home() -> Path:
-    return Path(os.environ["LOCALAPPDATA"]) / "PocketShellGateway"
+    return _user_data if _user_data is not None else Path(os.environ["LOCALAPPDATA"]) / "PocketShellGateway"
+
+
+def user_data_args(*args):
+    return [*args, "--user-data", str(home())]
+
+
+def startup_command(root):
+    return f'"{root / "GatewayTray.exe"}" --user-data "{home()}"'
 
 
 def run_cli(args, *, timeout=600, input=None, pending=False, accepted=(0,)):
@@ -40,6 +64,9 @@ def run_cli(args, *, timeout=600, input=None, pending=False, accepted=(0,)):
 
 
 def agent(action, *args, **kw):
+    if action == "stop":
+        from pocketshell.tray_supervisor import stop
+        return stop()
     kw.setdefault("accepted", {"status": (0, 3, 4), "stop": (0, 4), "start": (0, 3)}.get(action, (0,)))
     return run_cli(["gateway", "agent", action, *args, "--json", "--operation-id", uuid.uuid4().hex], **kw)
 
@@ -93,7 +120,7 @@ def setup(root: Path):
     # All subsequent commands use the measured installed closure.
     global_interpreter = installed / "python" / "python.exe"
     if Path(sys.executable).resolve() != global_interpreter.resolve():
-        subprocess.Popen([str(installed / "GatewayTray.exe"), "--setup"], creationflags=0x08000000)
+        subprocess.Popen([str(installed / "GatewayTray.exe"), *user_data_args("--setup")], creationflags=0x08000000)
         return False
     if not binding_path.exists():
         agent("bind", "--manifest", receipt["endpoint"]["manifest"], "--authority", str(authority),
@@ -128,7 +155,7 @@ def setup(root: Path):
     start_gateway()
     set_enabled(True)
     from pocketshell.tray.autostart import install_autostart
-    ok, detail = install_autostart(command=f'"{installed / "GatewayTray.exe"}"')
+    ok, detail = install_autostart(command=startup_command(installed))
     if not ok:
         raise RuntimeError(detail)
     message("PocketShell Gateway is ready and will start at login. Right-click its tray icon for status, sessions and controls.")
@@ -229,6 +256,8 @@ def observe_agent():
     """
     from pocketshell.gateway import service_common, service_user_agent, service_windows
     api = service_windows.WindowsApi()
+    from pocketshell.tray_supervisor import configure_context
+    configure_context(api)
     with service_user_agent._OperationLock():
         binding, manifest, key = service_user_agent.load_binding(api=api, runner=service_common.run_child,
                                                                 revalidate=False)
@@ -315,6 +344,8 @@ def status_document():
 
 
 def run_tray(root):
+    from pocketshell.tray_supervisor import configure_context
+    configure_context()
     from pocketshell.tray.app import TrayApp
     from pocketshell.tray.autostart import install_autostart
     from pocketshell.tray.gateway_auth import GatewayAuthClient, GatewayAuthError
@@ -323,7 +354,7 @@ def run_tray(root):
 
     class ManagedClient(GatewayStatusClient):
         def __init__(self):
-            super().__init__(status_command=[sys.executable, "-I", "-B", "-m", "pocketshell.tray_bundle", "--status"])
+            super().__init__(status_command=[sys.executable, "-I", "-B", "-m", "pocketshell.tray_bundle", *user_data_args("--status")])
             self.guard = threading.Lock()
             self.last_retry = 0.0
             self.first_fetch = True
@@ -423,7 +454,7 @@ def run_tray(root):
     try:
         ManagedApp(status_client=ManagedClient(), gateway_auth_client=ManagedGatewayAuth(),
                    autostart_installer=lambda: install_autostart(
-            command=f'"{root / "GatewayTray.exe"}"')).run()
+            command=startup_command(root))).run()
     finally:
         instance.release()
 
@@ -431,6 +462,7 @@ def run_tray(root):
 def main():
     if sys.platform != "win32":
         raise SystemExit("The bundled tray installer supports Windows x64.")
+    configure_user_data(sys.argv[1:])
     root = Path(sys.executable).parent.parent
     home().mkdir(parents=True, exist_ok=True)
     logging.basicConfig(filename=home() / "tray.log", level=logging.INFO,
@@ -462,6 +494,8 @@ def main():
                 pending = service_user_agent._read_private(service_user_agent._path("tray-upgrade.json"))
                 if receipt["release"] != staged["release"] or pending is not None:
                     from pocketshell.tray_repair import repair
+                    from pocketshell.tray_supervisor import configure_context
+                    configure_context()
                     (home() / "tray-exit").touch()
                     wait_for_tray_exit()
                     installed = installed_root(repair(root))

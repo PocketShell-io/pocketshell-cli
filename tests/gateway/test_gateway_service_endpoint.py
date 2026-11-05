@@ -450,7 +450,10 @@ def test_reviewed_lists_no_per_host_manifest_and_only_generic_trios():
         "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce"), (
         ep.SERVICING_GUARDIAN_SHA256,
         "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
-        "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce")})
+        "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce"), (
+        ep.INTERACTIVE_GUARDIAN_SHA256,
+        "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
+        ep.INTERACTIVE_POLICY_SHA256)})
 
 
 def test_protected_ancestor_authority_is_checked_before_registration(env):

@@ -312,16 +312,51 @@ def gateway_auth_probe(helper, timeout=30):
 
 def stage_guardian(root, catalog):
     from pocketshell.gateway import service_endpoint as ep
-    source = REPO / "release/inputs/guardian-servicing"
-    expected = (ep.SERVICING_GUARDIAN_SHA256,
+    source = REPO / "release/inputs/guardian-interactive"
+    expected = (ep.INTERACTIVE_GUARDIAN_SHA256,
                 "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
-                "e92bbe02c497c959702b35cfd2d4444a073eafe6e17d5e3872449c3bd4f6b1ce")
+                ep.INTERACTIVE_POLICY_SHA256)
     for name, sha in zip(ep.SOURCE_NAMES, expected):
         if digest(source / name) != sha:
             raise ValueError("Servicing guardian differs from its reviewed source")
     for name in ep.SOURCE_NAMES:
         shutil.copyfile(source / name, root / "guardian" / name)
     catalog["lineage"]["guardian"]["sourceSHA256"] = expected[0]
+    catalog["lineage"]["policy"]["sourceSHA256"] = expected[2]
+
+
+def stage_python_application(root):
+    """Build the frozen Python application for a measured Windows closure."""
+    with tempfile.TemporaryDirectory() as scratch:
+        work = Path(scratch)
+        requirements = work / "requirements.txt"
+        requirements.write_bytes(subprocess.check_output([
+            "uv", "export", "--frozen", "--extra", "tray", "--no-dev", "--no-emit-project",
+            "--format", "requirements-txt"], cwd=REPO))
+        site = work / "site"
+        subprocess.run(["uv", "pip", "install", "--target", str(site), "--python-platform",
+                        "x86_64-pc-windows-msvc", "--python-version", "3.12", "--only-binary", ":all:",
+                        "--no-deps", "--require-hashes", "--no-cache", "--link-mode", "copy",
+                        "-r", str(requirements)], check=True)
+        subprocess.run(["uv", "build", "--wheel", "--out-dir", str(work / "wheel")], cwd=REPO, check=True)
+        wheel = next((work / "wheel").glob("pocketshell-*.whl"))
+        subprocess.run(["uv", "pip", "install", "--target", str(site), "--python-platform",
+                        "x86_64-pc-windows-msvc", "--python-version", "3.12", "--no-deps", str(wheel)], check=True)
+        for name in ("bin", "Scripts"):
+            shutil.rmtree(site / name, ignore_errors=True)
+        native = {p.relative_to(site).parts[0] for p in site.rglob("*") if p.suffix.lower() in (".pyd", ".dll")}
+        entries = {}
+        for p in sorted(site.rglob("*")):
+            if not p.is_file() or "__pycache__" in p.parts or p.name in ("direct_url.json", "uv_cache.json"):
+                continue
+            rel = p.relative_to(site)
+            if rel.parts[0] in native:
+                target = root / "python/site-native" / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(p, target)
+            else:
+                entries[rel.as_posix()] = p.read_bytes()
+        write_zip(root / "python/app.zip", entries)
 
 
 def build(args):
@@ -353,36 +388,7 @@ def build(args):
     backend_receipt = stage_private_backend(args.endpoint_backend, args.endpoint_backend_receipt_sha256, root, catalog)
     shutil.copyfile(Path(args.endpoint_backend) / "receipt.json", out / "payload/private-endpoint-build-receipt.json")
     shutil.copyfile(args.tray_launcher, root / "GatewayTray.exe")
-    with tempfile.TemporaryDirectory() as scratch:
-        work = Path(scratch)
-        requirements = work / "requirements.txt"
-        requirements.write_bytes(subprocess.check_output([
-            "uv", "export", "--frozen", "--extra", "tray", "--no-dev", "--no-emit-project",
-            "--format", "requirements-txt"], cwd=REPO))
-        site = work / "site"
-        subprocess.run(["uv", "pip", "install", "--target", str(site), "--python-platform",
-                        "x86_64-pc-windows-msvc", "--python-version", "3.12", "--only-binary", ":all:",
-                        "--no-deps", "--require-hashes", "--no-cache", "--link-mode", "copy",
-                        "-r", str(requirements)], check=True)
-        subprocess.run(["uv", "build", "--wheel", "--out-dir", str(work / "wheel")], cwd=REPO, check=True)
-        wheel = next((work / "wheel").glob("pocketshell-*.whl"))
-        subprocess.run(["uv", "pip", "install", "--target", str(site), "--python-platform",
-                        "x86_64-pc-windows-msvc", "--python-version", "3.12", "--no-deps", str(wheel)], check=True)
-        for name in ("bin", "Scripts"):
-            shutil.rmtree(site / name, ignore_errors=True)
-        native = {p.relative_to(site).parts[0] for p in site.rglob("*") if p.suffix.lower() in (".pyd", ".dll")}
-        entries = {}
-        for p in sorted(site.rglob("*")):
-            if not p.is_file() or "__pycache__" in p.parts or p.name in ("direct_url.json", "uv_cache.json"):
-                continue
-            rel = p.relative_to(site)
-            if rel.parts[0] in native:
-                target = root / "python/site-native" / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(p, target)
-            else:
-                entries[rel.as_posix()] = p.read_bytes()
-        write_zip(root / "python/app.zip", entries)
+    stage_python_application(root)
     stage_guardian(root, catalog)
     helper_receipt = stage_helper(args.helper, args.helper_sha256, args.helper_version, root, catalog)
     if sys.platform == "win32":

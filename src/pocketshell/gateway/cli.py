@@ -893,9 +893,11 @@ def _emit_raw(doc, code):
 @click.option("--endpoint-keys", type=click.Choice(["generate"]), default=None,
               help="New machine: generate a fresh owner-private host key before enrollment (with --port).")
 @click.option("--port", type=int, default=None, help="The endpoint's loopback port (with --endpoint-keys).")
+@click.option("--isolated-sessions", is_flag=True,
+              help="Keep this gateway's sessions inside its private runtime; leave other aplexer sessions alone.")
 @_JSON
 @_OPERATION_ID
-def agent_install(user_data, catalog, staged, dry_run, config_dir, endpoint_inputs, endpoint_keys, port, as_json,
+def agent_install(user_data, catalog, staged, dry_run, config_dir, endpoint_inputs, endpoint_keys, port, isolated_sessions, as_json,
                   operation_id):
     """Install the catalogued ordinary-v2 runtime and write authority.json (PROPOSED v3)."""
     _check_operation_id(operation_id)
@@ -903,7 +905,7 @@ def agent_install(user_data, catalog, staged, dry_run, config_dir, endpoint_inpu
     _emit_raw(*_agent.install_command(user_data=user_data, catalog=catalog, staged=staged, dry_run=dry_run,
                                       api=api, runner=runner, operation_id=operation_id,
                                       config_dir=config_dir, endpoint_inputs=endpoint_inputs,
-                                      endpoint_keys=endpoint_keys, port=port))
+                                      endpoint_keys=endpoint_keys, port=port, isolated_sessions=isolated_sessions))
 
 
 @agent_group.command("authorize-key")
