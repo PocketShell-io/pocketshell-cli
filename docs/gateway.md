@@ -1,5 +1,11 @@
 # Gateway: `pocketshell gateway`
 
+For normal phone access, use **`pocketshell gateway register`**. It handles
+device-flow sign-in, vault unlock, dedicated SSH key provisioning and trusted
+server registration; the phone then connects with one tap after vault unlock.
+See [vault enrollment](vault-enrollment.md). The lower-level host and operator
+commands below also serve setup tooling and isolated development gateways.
+
 `pocketshell gateway enroll|run|show` are the host-side entry points for the
 PocketShell **gateway transport**: the reverse-tunnel host agent for machines
 that have no inbound SSH (a phone cannot dial into a laptop behind NAT). The

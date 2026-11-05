@@ -65,6 +65,10 @@ def test_closure_imports_its_native_and_guardian_dependencies(release, tmp_path)
     py = release["root"] / "python" / "python.exe"
     code = ("import sys, ctypes, ssl\n"
             "import cryptography.hazmat.primitives.ciphers.aead, yaml, click\n"
+            "from pocketshell.account.shared_vault import derive\n"
+            "import pocketshell.gateway.vault_enrollment, pocketshell.tray.vault_password\n"
+            "kek, auth = derive('invented packaging fixture', {'alg':'argon2id', 'm':32768, 't':3, 'p':1, 'salt':'AAAAAAAAAAAAAAAAAAAAAA'})\n"
+            "assert len(kek) == len(auth) == 32\n"
             "import native_api, policy\n"
             "assert 'site' not in sys.modules, 'site must not be imported'\n"
             "print(sorted(p for p in sys.path))")

@@ -57,6 +57,9 @@ dependencies = [
     # of transitive dependency choices. 42 is a conservative floor for the
     # APIs used (GCM `update_into`, OpenSSH private-key serialization).
     "cryptography>=42",
+    # The account vault shares the clients' Argon2id v1 format. Never use
+    # the separate local device-password vault's PBKDF2 format for sync.
+    "argon2-cffi>=23.1.0",
     # aplexer ships WITH the pocketshell CLI (issue #2543). `pocketshell
     # sessions create` needs BOTH the `a` CLI and its
     # `aplexer` worker binary (aplexer/src/lib.rs::worker_executable resolves

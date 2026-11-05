@@ -120,7 +120,7 @@ def request(
     """
     headers = {"Accept": "application/json", "User-Agent": f"pocketshell/{__version__}"}
     data: bytes | None = None
-    if method == "POST":
+    if method in ("POST", "PUT"):
         data = b""
         if body is not None:
             data = json.dumps(body).encode()

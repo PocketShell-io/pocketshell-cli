@@ -80,7 +80,7 @@ DLLS = {"_asyncio.pyd", "_bz2.pyd", "_ctypes.pyd", "_decimal.pyd", "_elementtree
         "libffi-8.dll"}
 STDLIB_EXCLUDE = {"site-packages", "test", "idlelib", "tkinter", "turtledemo", "ensurepip", "lib2to3", "pydoc_data",
                   "venv", "__pycache__", "sqlite3", "dbm", "curses"}
-NATIVE_TOP = ("cryptography", "cffi", "_cffi_backend")  # extension modules cannot load from a zip
+NATIVE_TOP = ("cryptography", "cffi", "_cffi_backend", "_argon2_cffi_bindings")  # extensions cannot load from a zip
 ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 PTH = "python312.zip\nDLLs\napp.zip\nsite-native\n..\\guardian\n"
 

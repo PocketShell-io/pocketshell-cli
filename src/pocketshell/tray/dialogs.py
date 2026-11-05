@@ -67,6 +67,24 @@ def confirm(text: str) -> bool:
         return False
 
 
+def password(prompt: str) -> Optional[str]:
+    """Masked in-process entry. No clipboard, shell argument or temp file."""
+    if sys.platform == "win32":
+        from pocketshell.tray.vault_password import prompt_password
+        return prompt_password(prompt)
+    try:
+        from tkinter import simpledialog
+
+        root = _tk()
+        try:
+            return simpledialog.askstring(TITLE, prompt, show="*", parent=root)
+        finally:
+            root.destroy()
+    except Exception:
+        # No plaintext fallback when a secure input backend is unavailable.
+        return None
+
+
 def read_clipboard() -> Optional[str]:
     """Clipboard text, or None when it cannot be read."""
     if sys.platform == "win32":
