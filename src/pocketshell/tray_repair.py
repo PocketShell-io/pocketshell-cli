@@ -34,7 +34,8 @@ def repair(root: Path):
             if sha != b.get("authoritySHA256"):
                 raise RuntimeError("The authority changed; repair refused")
             plan = {"binding": b, "keys": receipt["keys"], "source": str(root.resolve()),
-                    "expect": agent._binding_sha256(), "authority": authority}
+                    "expect": agent._binding_sha256(), "authority": authority,
+                    "isolatedSessions": eps.isolated_session_manifest(m)}
         doc, code = agent.stop(api=api, runner=common.run_child)
         if code:
             raise RuntimeError((doc.get("error") or {}).get("message") or "Cannot stop the old gateway")
@@ -74,7 +75,8 @@ def repair(root: Path):
                                        "authorizedKeys": plan["keys"]["authorizedKeys"]}).encode(),
             owner_sid=api.current_sid(), account=eps.local_account(api.current_sid()),
             show=show, system_roles=eps.measure_system_roles(api, api.current_sid()),
-            paths=paths, folders=inst.known_folders(), cli_version=__version__)
+            paths=paths, folders=inst.known_folders(), cli_version=__version__,
+            isolated_sessions=plan.get("isolatedSessions", False))
         if receipt["keys"]["hostKeyPublic"] != plan["keys"]["hostKeyPublic"]:
             raise RuntimeError("The enrolled host key changed; repair refused")
         receipt["keys"] = plan["keys"]

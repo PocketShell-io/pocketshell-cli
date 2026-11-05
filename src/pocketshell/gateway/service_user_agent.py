@@ -992,7 +992,8 @@ def stop(*, api, runner, timeout: float = DEFAULT_STOP_TIMEOUT, operation_id=Non
 
 
 def install_command(*, user_data, catalog, staged, dry_run, api, runner, operation_id=None, paths=None,
-                    folders=None, config_dir=None, endpoint_inputs=None, endpoint_keys=None, port=None) -> tuple:
+                    folders=None, config_dir=None, endpoint_inputs=None, endpoint_keys=None, port=None,
+                    isolated_sessions=False) -> tuple:
     """`gateway agent install`: copy the catalogued closure and write the
     public-only authority receipt. Never starts, enrolls, or reads secrets."""
     from pocketshell import __version__
@@ -1009,6 +1010,8 @@ def install_command(*, user_data, catalog, staged, dry_run, api, runner, operati
                                                "--config-dir/--endpoint-inputs")), EXIT_USAGE
     elif port is not None:
         return doc(False, error=AgentError("usage", "--port goes with --endpoint-keys generate")), EXIT_USAGE
+    if isolated_sessions and config_dir is None and endpoint_keys is None:
+        return doc(False, error=AgentError("usage", "--isolated-sessions needs a v3 endpoint install")), EXIT_USAGE
     if (config_dir is None) != (endpoint_inputs is None):
         return doc(False, error=AgentError("usage", "--config-dir and --endpoint-inputs go together (setup ABI "
                                            "v3: install first)")), EXIT_USAGE
@@ -1018,7 +1021,7 @@ def install_command(*, user_data, catalog, staged, dry_run, api, runner, operati
     if config_dir is not None or endpoint_keys is not None:
         return _install_endpoint(doc, user_data=user_data, catalog=catalog, staged=staged, dry_run=dry_run,
                                  api=api, runner=runner, paths=paths, folders=folders, config_dir=config_dir,
-                                 endpoint_inputs=endpoint_inputs, port=port)
+                                 endpoint_inputs=endpoint_inputs, port=port, isolated_sessions=isolated_sessions)
     try:
         with _OperationLock():
             b, _m, host_key = load_binding(api=api, runner=runner, revalidate=True)
@@ -1037,7 +1040,7 @@ def install_command(*, user_data, catalog, staged, dry_run, api, runner, operati
 
 
 def _install_endpoint(doc, *, user_data, catalog, staged, dry_run, api, runner, paths, folders, config_dir,
-                      endpoint_inputs, port=None) -> tuple:
+                      endpoint_inputs, port=None, isolated_sessions=False) -> tuple:
     """Setup ABI v3: install FIRST (no binding). Migration: the public inputs
     file names the existing key files (never a source of executable paths).
     Revision D new machine (``config_dir`` None): fresh generated keys."""
@@ -1056,7 +1059,7 @@ def _install_endpoint(doc, *, user_data, catalog, staged, dry_run, api, runner, 
             common_kw = dict(user_data=user_data, catalog_path=catalog, staged=staged, owner_sid=sid,
                              account=eps.local_account(sid), system_roles=eps.measure_system_roles(api, sid),
                              paths=paths or inst.NativePaths(api), folders=folders or inst.known_folders(),
-                             cli_version=__version__, dry_run=dry_run)
+                             cli_version=__version__, dry_run=dry_run, isolated_sessions=isolated_sessions)
             if config_dir is None:
                 receipt = eps.install_endpoint_runtime(keys_mode="generated", port=port, **common_kw)
             else:

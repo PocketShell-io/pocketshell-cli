@@ -948,3 +948,24 @@ def test_servicing_guardian_manifest_pins_bundled_files_only(monkeypatch):
     ep.check_trust_authority(m, receipt, file_sha256=lambda p: _disk(paths, p), closure=_closure(host))
     system = [row for row in ep.authority_plan(m) if ep.is_servicing_image(row[0])]
     assert len(system) == 2 and all(row[4] for row in system)
+
+def test_isolated_install_keeps_session_state_inside_private_runtime():
+    host = Host()
+    host.user_data = r'C:\Users\owner\.pocketshell-runtime'
+    paths = staged(host)
+    receipt = install(host, paths, isolated_sessions=True)
+    manifest = ep.parse_manifest(paths.files[paths.key(receipt['endpoint']['manifest'])][1], receipt['endpoint']['manifest'])
+    env = manifest.raw_bindings['setEnv']
+    base = (host.user_data + r'\managed-runtime\endpoint\backend\aplexer').replace('\\', '/')
+    assert env['APLEXER_RUNTIME_DIR'] == base + '/run'
+    assert env['APLEXER_STATE_DIR'] == base + '/state'
+    assert eps.isolated_session_manifest(manifest)
+    assert not paths.exists(host.folders['LOCALAPPDATA'] + r'\aplexer')
+
+
+def test_regular_manifest_does_not_become_isolated_during_repair():
+    host = Host()
+    paths = staged(host)
+    receipt = install(host, paths)
+    manifest = ep.parse_manifest(paths.files[paths.key(receipt['endpoint']['manifest'])][1], receipt['endpoint']['manifest'])
+    assert not eps.isolated_session_manifest(manifest)

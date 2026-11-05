@@ -325,35 +325,8 @@ def stage_guardian(root, catalog):
     catalog["lineage"]["policy"]["sourceSHA256"] = expected[2]
 
 
-def build(args):
-    source = Path(args.resources).resolve()
-    cat_path = source / "host-runtime-catalog.json"
-    if digest(cat_path) != args.catalog_sha256:
-        raise ValueError("The base catalog is not the selected build input")
-    catalog = parse_catalog(cat_path.read_bytes())
-    if catalog["version"] != 3:
-        raise ValueError("The installer requires the complete catalog-v3 endpoint")
-    verify_inventory(source / "runtime", catalog["files"])
-    if not (REPO / "src/pocketshell/gateway/status.py").is_file():
-        raise ValueError("Merge gateway status and lifecycle support before building")
-    out = Path(args.out).resolve()
-    if out.exists():
-        raise ValueError("Use a fresh output directory")
-    root = out / "payload" / "runtime"
-    psc_receipt = stage_psc(args.psc_zip, args.psc_sha256, out / "payload" / "psc-package")
-    psc_receipt["sshClient"] = stage_ssh_client(args.ssh_zip, args.ssh_sha256, out / "payload" / "psc-ssh")
-    psc_receipt["contentId"] = configure_offline_psc(out / "payload" / "psc-package",
-                                                     psc_receipt["sshClient"]["sshSHA256"])
-    psc_receipt["installVariant"] = "gateway-ssh10"
-    psc_receipt["adaptedInstallerSHA256"] = digest(out / "payload" / "psc-package/install.ps1")
-    shutil.copytree(source / "runtime", root)
-    # Readiness and gateway ssh must work before PSC is installed, with no
-    # optional inbox OpenSSH feature. Keep the signed client in the measured
-    # closure as well as PSC's separate per-user package.
-    shutil.copytree(out / "payload" / "psc-ssh", root / "psc-ssh")
-    backend_receipt = stage_private_backend(args.endpoint_backend, args.endpoint_backend_receipt_sha256, root, catalog)
-    shutil.copyfile(Path(args.endpoint_backend) / "receipt.json", out / "payload/private-endpoint-build-receipt.json")
-    shutil.copyfile(args.tray_launcher, root / "GatewayTray.exe")
+def stage_python_application(root):
+    """Build the frozen Python application for a measured Windows closure."""
     with tempfile.TemporaryDirectory() as scratch:
         work = Path(scratch)
         requirements = work / "requirements.txt"
@@ -384,6 +357,38 @@ def build(args):
             else:
                 entries[rel.as_posix()] = p.read_bytes()
         write_zip(root / "python/app.zip", entries)
+
+
+def build(args):
+    source = Path(args.resources).resolve()
+    cat_path = source / "host-runtime-catalog.json"
+    if digest(cat_path) != args.catalog_sha256:
+        raise ValueError("The base catalog is not the selected build input")
+    catalog = parse_catalog(cat_path.read_bytes())
+    if catalog["version"] != 3:
+        raise ValueError("The installer requires the complete catalog-v3 endpoint")
+    verify_inventory(source / "runtime", catalog["files"])
+    if not (REPO / "src/pocketshell/gateway/status.py").is_file():
+        raise ValueError("Merge gateway status and lifecycle support before building")
+    out = Path(args.out).resolve()
+    if out.exists():
+        raise ValueError("Use a fresh output directory")
+    root = out / "payload" / "runtime"
+    psc_receipt = stage_psc(args.psc_zip, args.psc_sha256, out / "payload" / "psc-package")
+    psc_receipt["sshClient"] = stage_ssh_client(args.ssh_zip, args.ssh_sha256, out / "payload" / "psc-ssh")
+    psc_receipt["contentId"] = configure_offline_psc(out / "payload" / "psc-package",
+                                                     psc_receipt["sshClient"]["sshSHA256"])
+    psc_receipt["installVariant"] = "gateway-ssh10"
+    psc_receipt["adaptedInstallerSHA256"] = digest(out / "payload" / "psc-package/install.ps1")
+    shutil.copytree(source / "runtime", root)
+    # Readiness and gateway ssh must work before PSC is installed, with no
+    # optional inbox OpenSSH feature. Keep the signed client in the measured
+    # closure as well as PSC's separate per-user package.
+    shutil.copytree(out / "payload" / "psc-ssh", root / "psc-ssh")
+    backend_receipt = stage_private_backend(args.endpoint_backend, args.endpoint_backend_receipt_sha256, root, catalog)
+    shutil.copyfile(Path(args.endpoint_backend) / "receipt.json", out / "payload/private-endpoint-build-receipt.json")
+    shutil.copyfile(args.tray_launcher, root / "GatewayTray.exe")
+    stage_python_application(root)
     stage_guardian(root, catalog)
     helper_receipt = stage_helper(args.helper, args.helper_sha256, args.helper_version, root, catalog)
     if sys.platform == "win32":

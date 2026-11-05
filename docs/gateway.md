@@ -847,3 +847,29 @@ you can capture the device password as you type it, or use the private
 agent during its 120 s key lifetime); you pinning a key without checking
 where it came from; hosts whose sshd still allows non-key authentication
 (see §2.1); denial of service by any party on the path.
+
+## Private runtime location for interactive tray sessions
+
+An enrolled tray can use an explicit owner-private data directory with
+`GatewayTray.exe --user-data C:\Users\User\.pocketshell-runtime`. Its status
+children and autostart entry keep that directory. This does not change Windows
+known folders or the environment of unrelated applications.
+
+For an endpoint outside AppData, install with `gateway agent install
+--isolated-sessions` so new backend runtime/state directories also stay inside
+the private root. The default still shares the user's existing aplexer session
+namespace. Explicit isolation does not move or delete that existing state and
+is preserved by subsequent tray repair.
+
+A controlled operator upgrade can rebuild only the measured Python application
+and guardian using `scripts/release/update_tray_runtime.py --resources BASE
+--catalog-sha256 EXPECTED --out FRESH_DIRECTORY`. BASE must contain the complete
+previous `runtime` and its exact `host-runtime-catalog.json`; changed inputs
+are rejected before output. The builder reuses verified native binaries,
+rebuilds frozen dependencies and source, and emits a fresh catalog and receipt.
+It never installs, binds or accesses keys. Use committed clean source and normal
+CI before promoting that closure through the existing agent install/bind API.
+Keep private host/device keys on their original machine; any same-host relocation
+must retain their public fingerprints, preserve account credentials, stop the
+previous owned runtime, and use the compare-and-swap binding API. Never edit an
+installed manifest or hash list to bypass validation.
