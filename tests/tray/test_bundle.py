@@ -259,12 +259,23 @@ def test_explicit_private_home_is_carried_to_autostart_and_validated(monkeypatch
 
 def test_separate_module_entry_passes_its_explicit_home_without_aliasing_modules(tmp_path, monkeypatch):
     import runpy
+    import sys
     from pathlib import Path
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "default"))
     with pytest.warns(RuntimeWarning, match="found in sys.modules"):
         entry = runpy.run_module("pocketshell.tray_bundle", run_name="tray_entry_probe")
     custom = tmp_path / "custom-installation"
-    entry["configure_user_data"](["--user-data", str(custom)])
+    custom.mkdir()
+    if sys.platform == "win32":
+        # Native Windows exercises the genuine drive-absolute entry argument.
+        entry["configure_user_data"](["--user-data", str(custom)])
+    else:
+        # POSIX temp paths are not Windows entry arguments. Keep that refusal,
+        # then supply only the isolated module's selected-directory fixture
+        # to test context propagation/ownership with real temporary paths.
+        with pytest.raises(RuntimeError, match="plain drive-absolute directory"):
+            entry["configure_user_data"](["--user-data", str(custom)])
+        monkeypatch.setitem(entry["home"].__globals__, "_user_data", custom)
     binding = {"authority": str(custom / "managed-runtime/authority.json")}
     assert entry["home"]() == custom and bundle.home() != custom
     with pytest.raises(RuntimeError, match="binding belongs to another installation"):
@@ -275,7 +286,7 @@ def test_separate_module_entry_passes_its_explicit_home_without_aliasing_modules
     bundle.check_own_binding(default_binding)
     with pytest.raises(RuntimeError, match="binding belongs to another installation"):
         bundle.check_own_binding(default_binding, user_data=custom)
-    if __import__("sys").platform == "win32":
+    if sys.platform == "win32":
         bundle.check_own_binding(binding, user_data=Path(str(custom).swapcase()))
     with pytest.raises(RuntimeError, match="binding belongs to another installation"):
         bundle.check_own_binding(binding, user_data=tmp_path / "foreign-installation")
