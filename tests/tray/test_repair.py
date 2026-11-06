@@ -25,7 +25,9 @@ def test_upgrade_preserves_keys_and_enrollment_and_resumes(tmp_path, monkeypatch
     receipt = {"keys": keys}
     store = {}
     events = []
-    monkeypatch.setattr(tray_bundle, "home", lambda: tmp_path)
+    # The native -m entry has its own module namespace. Its explicit home must
+    # win even when the separately imported canonical tray has another default.
+    monkeypatch.setattr(tray_bundle, "home", lambda: tmp_path / "unrelated-default")
     monkeypatch.setattr(agent, "_path", lambda name: str(tmp_path / name))
     monkeypatch.setattr(agent, "_OperationLock", nullcontext)
     monkeypatch.setattr(agent, "_read_private", lambda path: store.get(path))
@@ -46,6 +48,7 @@ def test_upgrade_preserves_keys_and_enrollment_and_resumes(tmp_path, monkeypatch
     monkeypatch.setattr(eps, "role_file", lambda *a: {"path": "bin/link.exe"})
     attempts = []
     def install(**kw):
+        assert kw["user_data"] == str(tmp_path)
         assert json.loads(kw["endpoint_inputs"]) == {
             "version": 1, "hostKey": keys["hostKey"], "authorizedKeys": keys["authorizedKeys"]}
         assert kw["config_dir"] == binding["configDir"] and kw["keys_mode"] == "migrated"
@@ -60,11 +63,14 @@ def test_upgrade_preserves_keys_and_enrollment_and_resumes(tmp_path, monkeypatch
         assert kw["expect"] == "expected-binding" and kw["authority"] == authority
         events.append("bind")
     monkeypatch.setattr(agent, "bind", bind)
+    with pytest.raises(RuntimeError, match="binding belongs to another installation"):
+        tray_repair.repair(root, user_data=tmp_path / "foreign-installation")
+    assert events == [] and not attempts
     if interrupted:
         with pytest.raises(OSError, match="interrupted"):
-            tray_repair.repair(root)
+            tray_repair.repair(root, user_data=tmp_path)
         assert (tmp_path / "tray-upgrade.json").exists()
-    result = tray_repair.repair(root)
+    result = tray_repair.repair(root, user_data=tmp_path)
     assert result["keys"] == keys
     assert events.count("stop") == 1 and events.index("stop") < events.index("authority")
     assert events[-1] == "bind"

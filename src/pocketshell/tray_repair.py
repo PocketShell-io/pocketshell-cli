@@ -9,7 +9,7 @@ import ntpath
 from pathlib import Path
 
 
-def repair(root: Path):
+def repair(root: Path, *, user_data: Path):
     from pocketshell import __version__, tray_bundle as tray
     from pocketshell.gateway import service_agent_endpoint as eps
     from pocketshell.gateway import service_agent_install as inst
@@ -20,14 +20,14 @@ def repair(root: Path):
     api = win.WindowsApi()
     paths = inst.NativePaths(api)
     journal = agent._path("tray-upgrade.json")
-    authority = str(tray.home() / "managed-runtime/authority.json")
+    authority = str(user_data / "managed-runtime/authority.json")
     pending = agent._read_private(journal)
     if pending is None:
         # Full old release validation, excluding historical OS hashes. The
         # owner/SID, manifest, catalog, keys and path authority still gate this.
         with agent._OperationLock():
             b, m, _key = agent.load_binding(api=api, runner=common.run_child, revalidate=True)
-            tray.check_own_binding(b)
+            tray.check_own_binding(b, user_data=user_data)
             if not b.get("enrolled"):
                 raise RuntimeError("Complete Gateway Setup before upgrading this installation")
             receipt, sha, _closure = eps.load_authority(authority, api.current_sid(), paths)
@@ -46,13 +46,13 @@ def repair(root: Path):
             agent._write_private(journal, json.dumps(plan).encode())
     with agent._OperationLock():
         plan = json.loads(agent._read_private(journal))
-        tray.check_own_binding(plan["binding"])
+        tray.check_own_binding(plan["binding"], user_data=user_data)
         if plan["source"] != str(root.resolve()) or plan["authority"] != authority:
             raise RuntimeError("Resume repair using the same installer runtime")
         if agent._binding_sha256() != plan["expect"]:
             # A crash after the atomic bind may leave only journal cleanup.
             current, _manifest, _key = agent.load_binding(api=api, runner=common.run_child, revalidate=True)
-            tray.check_own_binding(current)
+            tray.check_own_binding(current, user_data=user_data)
             receipt, _sha, _closure = eps.load_authority(authority, api.current_sid(), paths)
             catalog = inst.parse_catalog((root.parent / "host-runtime-catalog.json").read_bytes())
             if (receipt["release"] != catalog["release"] or current.get("deviceId") != plan["binding"]["deviceId"]
@@ -69,7 +69,7 @@ def repair(root: Path):
             return common.check_enrollment(binary, b["configDir"], common.run_child), win.file_sha256(binary)
 
         receipt = eps.install_endpoint_runtime(
-            user_data=str(tray.home()), catalog_path=str(root.parent / "host-runtime-catalog.json"),
+            user_data=str(user_data), catalog_path=str(root.parent / "host-runtime-catalog.json"),
             staged=str(root), config_dir=b["configDir"], keys_mode="migrated",
             endpoint_inputs=json.dumps({"version": 1, "hostKey": plan["keys"]["hostKey"],
                                        "authorizedKeys": plan["keys"]["authorizedKeys"]}).encode(),
