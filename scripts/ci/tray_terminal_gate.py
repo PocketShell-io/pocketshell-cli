@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,35 @@ def main():
     assert len(proof["proofs"]) == 12 and all(row["independentFileOracle"] for row in proof["proofs"])
     assert any(row.get("interruptVerified") is True for row in proof["proofs"])
     assert len(proof["killProofs"]) == 5 and all(len(row["ownedProcessesGone"]) == 2 for row in proof["killProofs"])
+    observations = proof["memoryObservations"]
+    assert len(observations) == 2
+    python_sha = hashlib.sha256((args.payload / "runtime/python/python.exe").read_bytes()).hexdigest()
+    interpreter = proof["provenance"]["module"].replace("\\", "/").casefold().split("/app.zip/", 1)[0] + "/python.exe"
+    assert all(row["isolated"] is True and row["childJobMember"] is True and row["imageVerified"] is True
+               and row["imageSHA256"] == python_sha
+               and row["imagePath"].replace("\\", "/").casefold() == interpreter for row in observations)
+    assert all(row["kernelFlags"] & 0x200 and row["kernelFlags"] & 0x2000
+               and not row["kernelFlags"] & (0x800 | 0x1000)
+               and row["before"]["memory_limit_bytes"] == row["after"]["memory_limit_bytes"] == row["kernelLimitBytes"]
+               for row in observations)
+    control, bounded = observations
+    assert control["kernelLimitBytes"] == 12 * 1024**3 and control["nativeExit"] == 0
+    assert control["allocation"]["value"]["allocated"] is True
+    assert control["before"]["oom_kill_count"] == control["after"]["oom_kill_count"]
+    assert bounded["kernelLimitBytes"] == 64 * 1024**2 and bounded["nativeExit"] == 0xC000012D
+    assert bounded["after"]["oom_kill_count"] == bounded["before"]["oom_kill_count"] + 1
+    assert len(proof["oomPreservations"]) == 1
+    preserved = proof["oomPreservations"][0]
+    assert preserved["preservedBeforeExplicitCleanup"] is True and len(preserved["preservationSHA256"]) == 64
+    ended = preserved["nativeEndedRecord"]
+    assert ended["exit"]["oom_killed"] is True and ended["phase"] == ended["state"] == "exited"
+    assert ended["worker_alive"] is False and ended["containment_empty"] is True
+    assert bounded["before"]["job"] == bounded["after"]["job"] == "aplexer-" + preserved["id"]
+    assert preserved["firstKill"]["uncertain"] is False and "not confirmed" in preserved["firstKill"]["error"]
+    assert preserved["absence"]["namedJobAbsent"] is True
+    explicit = [row for row in proof["killProofs"] if row["explicitEndedCleanup"]]
+    assert len(explicit) == 1 and explicit[0]["id"] == preserved["id"]
+    assert explicit[0]["ownedProcessesGone"] == preserved["absence"]["ownedPIDsUnallocated"]
 
 
 if __name__ == "__main__":

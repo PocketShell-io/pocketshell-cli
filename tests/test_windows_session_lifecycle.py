@@ -14,7 +14,7 @@ from pocketshell import windows_session_lifecycle as subject
 def backend(monkeypatch, tmp_path):
     monkeypatch.setattr(subject, "workspace_path", lambda value, **_kw: str(value))
     monkeypatch.setattr(subject, "backend", lambda: "verified-bundled-a")
-    row = {"id": str(uuid4()), "workspace": str(tmp_path), "tag": "home", "state": "running",
+    row = {"id": str(uuid4()), "workspace": str(tmp_path), "tag": "home", "phase": "running", "state": "running",
            "limits": {"memory_bytes": 12 * 1024**3}, "workload_pid": 1234}
     calls = []
     snapshots = [[], [copy.deepcopy(row)]]
@@ -124,7 +124,7 @@ def test_json_malformed_success_is_not_accepted(monkeypatch):
 
 def test_kill_requires_exact_backend_removal_receipt(backend, monkeypatch):
     row, calls, _ = backend
-    monkeypatch.setattr(subject, "resolve", lambda binary, selector: row)
+    monkeypatch.setattr(subject, "_record", lambda binary, selector: row)
     monkeypatch.setattr(subject, "_json", lambda binary, args: {"id": str(uuid4()), "record_removed": True})
     with pytest.raises(subject.SessionError, match="not confirmed"):
         subject.kill(row["id"])
@@ -160,3 +160,131 @@ def test_duplicate_backend_ids_are_never_treated_as_one_target(monkeypatch):
     monkeypatch.setattr(subject, "_json", lambda *args: [row, row.copy()])
     with pytest.raises(subject.SessionError, match="duplicate identities"):
         subject.snapshot("verified-bundled-a")
+
+
+def test_explicit_finished_kill_requires_native_removal_and_fresh_absence(backend, monkeypatch):
+    row, calls, snapshots = backend
+    row.update(phase="exited", state="exited", worker_alive=False, containment_empty=True, worker_pid=5678)
+    snapshots[:] = [[copy.deepcopy(row)], [copy.deepcopy(row)], []]
+    checked = []
+    monkeypatch.setattr(subject.windows_job, "verify_finished", lambda *args: checked.append(args))
+    original = subject._json
+    def response(binary, args, **kwargs):
+        if args[0] == "kill":
+            calls.append((args, kwargs))
+            return {"id": row["id"], "record_removed": True}
+        return original(binary, args, **kwargs)
+    monkeypatch.setattr(subject, "_json", response)
+    result = subject.kill(row["id"])
+    assert result["killed"] is True and result["reaped"] is True
+    assert checked == [(row["id"], 5678, 1234)]
+    assert [args for args, _ in calls] == [["snapshot"], ["snapshot"], ["kill", row["id"], "--grace-ms", "1000"], ["snapshot"]]
+
+
+@pytest.mark.parametrize("field,value", [("worker_alive", True), ("worker_alive", None),
+    ("worker_alive", 0), ("containment_empty", False), ("containment_empty", None),
+    ("phase", "running"), ("state", "running"), ("state", None), ("phase", "unknown")])
+def test_finished_cleanup_refuses_missing_or_contradictory_facts(backend, monkeypatch, field, value):
+    row, calls, snapshots = backend
+    row.update(phase="exited", state="exited", worker_alive=False, containment_empty=True, worker_pid=5678)
+    row[field] = value
+    snapshots[:] = [[copy.deepcopy(row)]]
+    checked = []
+    monkeypatch.setattr(subject.windows_job, "verify_finished", lambda *args: checked.append(args))
+    with pytest.raises(subject.SessionError):
+        subject.kill(row["id"])
+    assert not checked and all(args == ["snapshot"] for args, _ in calls)
+
+
+def test_finished_cleanup_refuses_native_absence_uncertainty(backend, monkeypatch):
+    row, calls, snapshots = backend
+    row.update(phase="exited", state="exited", worker_alive=False, containment_empty=True, worker_pid=5678)
+    snapshots[:] = [[copy.deepcopy(row)]]
+    def uncertain(*args):
+        raise subject.windows_job.JobError("access denied or reused PID")
+    monkeypatch.setattr(subject.windows_job, "verify_finished", uncertain)
+    with pytest.raises(subject.SessionError, match="access denied"):
+        subject.kill(row["id"])
+    assert [args for args, _ in calls] == [["snapshot"]]
+
+
+def test_finished_cleanup_refuses_identity_changed_during_absence_check(backend, monkeypatch):
+    row, calls, snapshots = backend
+    row.update(phase="exited", state="exited", worker_alive=False, containment_empty=True, worker_pid=5678)
+    changed = {**row, "worker_pid": 9999}
+    snapshots[:] = [[copy.deepcopy(row)], [changed]]
+    monkeypatch.setattr(subject.windows_job, "verify_finished", lambda *args: None)
+    with pytest.raises(subject.SessionError, match="identity changed"):
+        subject.kill(row["id"])
+    assert [args for args, _ in calls] == [["snapshot"], ["snapshot"]]
+
+
+@pytest.mark.parametrize("process_result,process_error,job_result,job_error,allowed", [
+    (0, 87, 0, 2, True), (0, 1168, 0, 2, True),
+    (123, 0, 0, 2, False), (0, 5, 0, 2, False), (0, 6, 0, 2, False),
+    (0, 87, 456, 0, False), (0, 87, 0, 5, False), (0, 87, 0, 0, False),
+])
+def test_finished_native_guard_uses_only_read_queries_and_refuses_ambiguity(
+        monkeypatch, process_result, process_error, job_result, job_error, allowed):
+    import ctypes
+    from types import SimpleNamespace
+    error, calls = [0], []
+    class Function:
+        def __init__(self, name, result, last_error):
+            self.name, self.result, self.last_error = name, result, last_error
+        def __call__(self, *args):
+            calls.append((self.name, args))
+            error[0] = self.last_error
+            return self.result
+    kernel = SimpleNamespace(OpenProcess=Function("process", process_result, process_error),
+                             OpenJobObjectW=Function("job", job_result, job_error),
+                             CloseHandle=Function("close", 1, 0))
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: kernel, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: error[0], raising=False)
+    if allowed:
+        subject.windows_job.verify_finished(str(uuid4()), 1234, 5678)
+        assert [name for name, _ in calls] == ["process", "process", "job"]
+    else:
+        with pytest.raises(subject.windows_job.JobError):
+            subject.windows_job.verify_finished(str(uuid4()), 1234, 5678)
+    assert all(args[0] == 0x1000 for name, args in calls if name == "process")
+    assert all(args[0] == 4 for name, args in calls if name == "job")
+    if process_result:
+        assert ("close", (process_result,)) in calls
+    if job_result and not process_result and process_error in (87, 1168):
+        assert ("close", (job_result,)) in calls
+
+
+@pytest.mark.parametrize("pids", [(None, 1), (True, 1), (0, 1), (-1, 1), (2**32, 1), (1, 1)])
+def test_finished_guard_refuses_unknown_pid_identity_before_any_os_query(monkeypatch, pids):
+    import ctypes
+    def forbidden(*args, **kwargs):
+        raise AssertionError("No OS query is allowed for malformed identities")
+    monkeypatch.setattr(ctypes, "WinDLL", forbidden, raising=False)
+    with pytest.raises(subject.windows_job.JobError):
+        subject.windows_job.verify_finished(str(uuid4()), *pids)
+
+
+def test_live_kill_retained_record_is_never_automatically_reaped(backend, monkeypatch):
+    row, _, _ = backend
+    calls = []
+    monkeypatch.setattr(subject, "_record", lambda binary, selector: row)
+    def answer(binary, args):
+        calls.append(args)
+        return {"id": row["id"], "record_removed": False}
+    monkeypatch.setattr(subject, "_json", answer)
+    monkeypatch.setattr(subject.windows_job, "verify_finished", lambda *args: pytest.fail("No automatic cleanup"))
+    with pytest.raises(subject.SessionError, match="not confirmed"):
+        subject.kill(row["id"])
+    assert calls == [["kill", row["id"], "--grace-ms", "1000"]]
+
+
+def test_finished_removal_receipt_does_not_replace_fresh_registry_absence(backend, monkeypatch):
+    row, _, _ = backend
+    row.update(phase="exited", state="exited", worker_alive=False, containment_empty=True, worker_pid=5678)
+    monkeypatch.setattr(subject, "_record", lambda binary, selector: row)
+    monkeypatch.setattr(subject.windows_job, "verify_finished", lambda *args: None)
+    monkeypatch.setattr(subject, "_json", lambda binary, args: {"id": row["id"], "record_removed": True})
+    monkeypatch.setattr(subject, "snapshot", lambda binary: [row])
+    with pytest.raises(subject.SessionError, match="still appears"):
+        subject.kill(row["id"])

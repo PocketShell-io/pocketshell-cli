@@ -165,20 +165,32 @@ def create(name, cwd=None, mem=None, engine=None, profile=None):
             "memory_enforcement": bound}
 
 
-def resolve(binary, selector):
+def _record(binary, selector):
     try:
         ident = _uuid(selector)
     except SessionError:
         raise SessionError("A full immutable session UUID is required.", 2) from None
-    rows = snapshot(binary)
-    matching = [row for row in rows if row["id"] == ident]
-    live = [row for row in matching if sessions.aplexer_record_is_alive(row)]
-    if len(live) != 1:
-        raise SessionError("Session not found." if not live else "Session name is ambiguous; use its full UUID.",
-                           3 if not live else 4)
-    row = live[0]
+    matches = [row for row in snapshot(binary) if row["id"] == ident]
+    if len(matches) != 1:
+        raise SessionError("Session not found.", 3)
+    return matches[0]
+
+
+def resolve(binary, selector):
+    row = _record(binary, selector)
+    if not sessions.aplexer_record_is_alive(row):
+        raise SessionError("Session not found.", 3)
     _verify_record(row)
     return row
+
+
+def _ended_identity(row):
+    phase = row.get("phase")
+    if phase not in ("exited", "failed") or row.get("state") != phase \
+            or row.get("worker_alive") is not False or row.get("containment_empty") is not True:
+        raise SessionError("The finished session's state and empty containment are not verified.")
+    return tuple(row.get(key) for key in
+                 ("id", "phase", "state", "worker_alive", "containment_empty", "worker_pid", "workload_pid"))
 
 
 def attach(selector):
@@ -193,7 +205,21 @@ def attach(selector):
 
 def kill(selector):
     binary = backend()
-    row = resolve(binary, selector)
+    row = _record(binary, selector)
+    if sessions.aplexer_record_is_alive(row) and row.get("phase") not in ("exited", "failed"):
+        if row.get("phase") != row.get("state") or row.get("phase") not in sessions.APLEXER_LIVE_STATES:
+            raise SessionError("The session's live state is not verified.")
+        _verify_record(row)
+    else:
+        identity = _ended_identity(row)
+        try:
+            windows_job.verify_finished(row["id"], row.get("worker_pid"), row.get("workload_pid"))
+        except windows_job.JobError as error:
+            raise SessionError(str(error)) from None
+        # This explicit invocation may remove an ended record. Never turn a
+        # previous unconfirmed live kill into an automatic postmortem deletion.
+        if _ended_identity(_record(binary, row["id"])) != identity:
+            raise SessionError("The finished session's identity changed before removal.")
     answer = _json(binary, ["kill", row["id"], "--grace-ms", "1000"])
     if not isinstance(answer, dict) or answer.get("id") != row["id"] or answer.get("record_removed") is not True:
         raise SessionError("Session termination/removal was not confirmed; refresh sessions before retrying.")

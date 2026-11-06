@@ -83,3 +83,35 @@ def test_failed_diagnostics_bind_fixed_public_inputs_without_bypassing_gate():
     assert "continue-on-error" not in workflow
     # The accepted installer artifact remains downstream of the mandatory gate.
     assert workflow.index("- name: Upload installer artifacts") > end
+
+
+def test_interrupt_wait_ignores_stale_prompt_and_requires_new_output():
+    from types import SimpleNamespace
+    spec = importlib.util.spec_from_file_location("tray_terminal_fixture", ROOT / "tests/release/tray_terminal_fixture.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for new_output, expected in ((b"", False), (b"still sleeping", False), (b"\r\nbash-9.9$\x1b[1C", True)):
+        chunks = [b"bash-9.9$ ", b"computed-workload-ready\r\n"]
+        sent = []
+        def write(value):
+            sent.append(value)
+        def flush():
+            assert sent == [b"\x03"]
+            chunks.append(new_output)
+        def wait(predicate, timeout):
+            assert timeout == 10
+            return predicate()
+        process = SimpleNamespace(stdin=SimpleNamespace(write=write, flush=flush))
+        assert module.interrupt_to_fresh_prompt(process, chunks, wait) is expected
+
+
+def test_native_gate_keeps_exact_memory_observer_and_explicit_postmortem_proofs():
+    gate = (ROOT / "scripts/ci/tray_terminal_gate.py").read_text()
+    assert 'observations = proof["memoryObservations"]' in gate and "len(observations) == 2" in gate
+    assert 'bounded["nativeExit"] == 0xC000012D' in gate
+    assert 'bounded["kernelLimitBytes"] == 64 * 1024**2' in gate
+    assert 'bounded["after"]["oom_kill_count"] == bounded["before"]["oom_kill_count"] + 1' in gate
+    assert 'preserved["preservedBeforeExplicitCleanup"] is True' in gate
+    assert 'explicit[0]["ownedProcessesGone"] == preserved["absence"]["ownedPIDsUnallocated"]' in gate
+    native = (ROOT / "tests/release/test_windows_tray_terminal_native.py").read_text()
+    assert 'host.kill(target["id"], after_oom=True)' in native

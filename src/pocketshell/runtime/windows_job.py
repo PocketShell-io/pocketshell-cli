@@ -59,3 +59,44 @@ def verify(session_id: str, workload_pid: int, requested: int | None = None) -> 
         if process:
             kernel.CloseHandle(process)
         kernel.CloseHandle(job)
+
+
+def verify_finished(session_id: str, worker_pid: int, workload_pid: int) -> None:
+    """Read-only absence proof before an explicit ended-record removal.
+
+    Snapshot PIDs do not contain their kernel birth identity. A still-allocated
+    PID, including a dead object or a reused PID, therefore remains ambiguous
+    and is refused. No process is signalled and no Job is modified here.
+    """
+    import ctypes as c
+    from ctypes import wintypes as w
+
+    from uuid import UUID
+    try:
+        valid_id = isinstance(session_id, str) and str(UUID(session_id)) == session_id
+    except ValueError:
+        valid_id = False
+    if not valid_id:
+        raise JobError("The finished session UUID is not verified.")
+    pids = (worker_pid, workload_pid)
+    if any(type(pid) is not int or not 0 < pid <= 0xFFFFFFFF for pid in pids) or worker_pid == workload_pid:
+        raise JobError("The finished session's process identities are not verified.")
+    kernel = c.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    kernel.OpenProcess.restype = w.HANDLE
+    kernel.OpenJobObjectW.argtypes = [w.DWORD, w.BOOL, w.LPCWSTR]
+    kernel.OpenJobObjectW.restype = w.HANDLE
+    kernel.CloseHandle.argtypes = [w.HANDLE]
+    for pid in pids:
+        process = kernel.OpenProcess(0x1000, False, pid)
+        if process:
+            kernel.CloseHandle(process)
+            raise JobError("A finished-session PID is still allocated; its identity cannot be verified.")
+        if c.get_last_error() not in (87, 1168):
+            raise JobError("Cannot prove that the finished session's processes are absent.")
+    job = kernel.OpenJobObjectW(4, False, "aplexer-" + session_id)
+    if job:
+        kernel.CloseHandle(job)
+        raise JobError("The finished session's containment Job still exists.")
+    if c.get_last_error() != 2:
+        raise JobError("Cannot prove that the finished session's containment Job is absent.")

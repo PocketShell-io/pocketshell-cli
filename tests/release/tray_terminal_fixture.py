@@ -35,6 +35,13 @@ def shell_prompt_seen(output):
     return re.search(rb"(?:^|[\r\n])bash-[0-9]+(?:\.[0-9]+)*[$#] ?(?:\r?\n|$)", rendered) is not None
 
 
+def interrupt_to_fresh_prompt(process, chunks, wait):
+    offset = len(b"".join(chunks))
+    process.stdin.write(b"\x03")
+    process.stdin.flush()
+    return wait(lambda: shell_prompt_seen(b"".join(chunks)[offset:]), 10)
+
+
 class Endpoint:
     def __init__(self, payload, *, allow_dirty_component=False):
         self.payload = Path(payload).resolve()
@@ -55,6 +62,8 @@ class Endpoint:
         self.installed = None
         self.ids = set()
         self.kill_proofs = []
+        self.memory_observations = []
+        self.oom_preservations = []
         self.nonce = uuid4().hex
         from pocketshell import windows_security as ws
         from pocketshell.gateway.service_agent_install import known_folders
@@ -246,16 +255,13 @@ class Endpoint:
         expected = "NATIVE43_" + str(first + second)
         command = f"v=$(({first}+{second})); printf 'NATIVE43_%s\\n' \"$v\" > {shlex.quote(oracle.as_posix())}; printf 'NATIVE43_%s\\n' \"$v\"\r"
         if allocation_probe:
-            # Reserve+commit 128 MiB under a 64 MiB session Job. Never run
-            # this against an unrelated process, global worker or real host.
-            code = ("import ctypes,pathlib; k=ctypes.WinDLL('kernel32');"
-                    "k.VirtualAlloc.restype=ctypes.c_void_p;"
-                    "p=k.VirtualAlloc(None,128*1024*1024,0x3000,4);"
-                    "k.VirtualFree.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_ulong];"
-                    "k.VirtualFree(p,0,0x8000) if p else None;"
-                    f"assert bool(p) is {allocation_probe == 'allow'};"
-                    f"m='NATIVE43_'+str({first}+{second});"
-                    f"pathlib.Path({str(oracle)!r}).write_text(m);print(m)")
+            from tray_memory_oracle import child_code
+            allow = allocation_probe == "allow"
+            pid_path = self.workspace / (label + "-pid.json")
+            release = self.workspace / (label + "-release.txt")
+            finish = self.workspace / (label + "-finish.txt")
+            allocation_result = self.workspace / (label + "-allocation.json")
+            code = child_code(first, second, oracle, pid_path, release, finish, allocation_result)
             command = self.python_command(code) + "\r"
         assert expected not in command
         remote = [] if ident is None else ["exec pocketshell sessions attach -- " + shlex.quote(ident)]
@@ -285,19 +291,36 @@ class Endpoint:
             if interrupt_probe:
                 checkpoint = self.workspace / "interrupt-started.txt"
                 assert not checkpoint.exists()
-                start = "printf started > " + shlex.quote(checkpoint.as_posix()) + "; sleep 60\r"
+                ready = "INTERRUPT43_" + str(first + second)
+                start = (f"v=$(({first}+{second})); printf started > " + shlex.quote(checkpoint.as_posix())
+                         + "; printf '\\nINTERRUPT43_%s\\n' \"$v\"; sleep 60\r")
+                assert ready not in start
                 process.stdin.write(start.encode())
                 process.stdin.flush()
-                assert seen(checkpoint.exists, 10), "The owned workload did not reach its interrupt checkpoint"
+                assert seen(lambda: checkpoint.exists() and ready.encode() in b"".join(chunks), 10), \
+                    "The owned workload did not reach its computed interrupt checkpoint"
                 time.sleep(.3)
-                process.stdin.write(b"\x03")
-                process.stdin.flush()
+                assert interrupt_to_fresh_prompt(process, chunks, seen), \
+                    "Ctrl-C did not return the owned workload to a fresh prompt"
             process.stdin.write(command.encode())
             process.stdin.flush()
             assert seen(lambda: expected.encode() in b"".join(chunks) and oracle.exists(), 20), b"".join(chunks)[-2000:]
             assert oracle.read_text().strip() == expected
+            if allocation_probe:
+                from tray_memory_oracle import observer_code, validate
+                assert seen(pid_path.exists, 10)
+                python_sha = next(row["sha256"] for row in self.catalog["files"] if row["path"] == "python/python.exe")
+                limit = 12 * 1024**3 if allow else 64 * 1024**2
+                observer = observer_code(ident, pid_path, release, finish, allocation_result,
+                                         self.installed / "python/a.exe", self.installed / "python/python.exe",
+                                         python_sha, limit, allow)
+                code, output = self.exec(self.python_command(observer), timeout=45)
+                assert code == 0, output
+                observation = json.loads(output)
+                self.memory_observations.append(observation)
+                validate(observation, ident=ident, limit=limit, allow=allow)
             return {"id": ident, "computedPTYOutput": expected, "independentFileOracle": True,
-                    "interruptVerified": interrupt_probe}
+                    "interruptVerified": interrupt_probe, "memoryProbeVerified": bool(allocation_probe)}
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -333,12 +356,36 @@ class Endpoint:
         assert not proof["flags"] & (0x800 | 0x1000) and proof["member"] is True
         return proof
 
-    def kill(self, ident):
+    def kill(self, ident, *, after_oom=False):
         assert ident in self.ids
         row, = [row for row in self.rows() if row["id"] == ident]
         pids = [row["worker_pid"], row["workload_pid"]]
         assert all(type(pid) is int and pid > 0 for pid in pids)
         code, output = self.exec("pocketshell sessions kill --json -- " + shlex.quote(ident))
+        if after_oom:
+            # The first explicit stop must remain an honest non-success when
+            # native aplexer preserves its OOM postmortem instead of removing it.
+            first = json.loads(output)
+            assert code == 1 and first["schema"] == 3 and first["uncertain"] is False
+            assert "not confirmed" in first["error"]
+            retained, = [item for item in self.rows() if item["id"] == ident]
+            assert retained["phase"] == retained["state"] == "exited"
+            assert retained["worker_alive"] is False and retained["containment_empty"] is True
+            assert [retained["worker_pid"], retained["workload_pid"]] == pids
+            assert retained["exit"]["oom_killed"] is True
+            absence = self.finished_absence(ident, pids)
+            evidence = {"id": ident, "firstKill": first, "nativeEndedRecord": {
+                key: retained[key] for key in ("phase", "state", "worker_alive", "containment_empty",
+                                              "worker_pid", "workload_pid", "exit", "limits")},
+                "absence": absence}
+            from pocketshell import windows_security as ws
+            saved = self.top / ("oom-before-explicit-cleanup-" + ident + ".json")
+            ws.write_private(saved, json.dumps(evidence, indent=2).encode())
+            self.oom_preservations.append({**evidence, "preservedBeforeExplicitCleanup": True,
+                                           "preservationSHA256": digest(saved)})
+            # A separate explicit request, after inspecting and durably saving
+            # the ended record. The application never auto-retries a failed kill.
+            code, output = self.exec("pocketshell sessions kill --json -- " + shlex.quote(ident))
         assert code == 0, output
         result = json.loads(output)
         assert result["id"] == ident and result["killed"] is True and result["reaped"] is True
@@ -361,8 +408,35 @@ class Endpoint:
                   "assert not any(map(alive,pids));print(json.dumps({'ownedProcessesGone':pids}))")
         code, proof = self.exec(self.python_command(script))
         assert code == 0 and json.loads(proof)["ownedProcessesGone"] == pids
-        self.kill_proofs.append({"id": ident, "ownedProcessesGone": pids})
+        self.kill_proofs.append({"id": ident, "ownedProcessesGone": pids,
+                                 "explicitEndedCleanup": after_oom})
         self.ids.remove(ident)
+
+    def finished_absence(self, ident, pids):
+        # Do not retain process handles across the explicit ended-record kill:
+        # even dead handles keep their PID objects allocated and ambiguous.
+        script = ("import ctypes as c,json,time;from ctypes import wintypes as w;"
+                  "k=c.WinDLL('kernel32',use_last_error=True);k.OpenProcess.argtypes=[w.DWORD,w.BOOL,w.DWORD];"
+                  "k.OpenProcess.restype=w.HANDLE;k.CloseHandle.argtypes=[w.HANDLE];"
+                  "k.OpenJobObjectW.argtypes=[w.DWORD,w.BOOL,w.LPCWSTR];k.OpenJobObjectW.restype=w.HANDLE;\n"
+                  "def absent(pid):\n"
+                  " h=k.OpenProcess(0x1000,False,pid)\n"
+                  " if h:k.CloseHandle(h);return False\n"
+                  " assert c.get_last_error() in (87,1168);return True\n"
+                  f"pids={pids!r}\n"
+                  "for attempt in range(100):\n"
+                  " if all(map(absent,pids)):break\n"
+                  " time.sleep(.1)\n"
+                  "assert all(map(absent,pids))\n"
+                  f"job=k.OpenJobObjectW(4,False,'aplexer-{ident}')\n"
+                  "if job:k.CloseHandle(job);raise AssertionError('Job still allocated')\n"
+                  "assert c.get_last_error()==2\n"
+                  "print(json.dumps({'ownedPIDsUnallocated':pids,'namedJobAbsent':True}))")
+        code, output = self.exec(self.python_command(script))
+        assert code == 0, output
+        proof = json.loads(output)
+        assert proof == {"ownedPIDsUnallocated": pids, "namedJobAbsent": True}
+        return proof
 
     def close(self):
         # Also recover owned creations whose CLI result was lost, using ONLY

@@ -26,7 +26,8 @@ def endpoint():
         host.close()
         proof = {"qualification": host.qualification, "source": host.catalog["source"],
                  "provenance": getattr(host, "provenance", None), "proofs": host.proofs,
-                 "killProofs": host.kill_proofs}
+                 "killProofs": host.kill_proofs, "memoryObservations": host.memory_observations,
+                 "oomPreservations": host.oom_preservations}
         Path(os.environ["POCKETSHELL_TRAY_TERMINAL_PROOF"]).write_text(json.dumps(proof, indent=2))
 
 
@@ -58,7 +59,7 @@ def test_project_cap_is_kernel_enforced_not_only_reported(endpoint):
         assert proof["bytes"] == 64 * 1024**2
         host.proofs.append({"kernelBound": proof, **host.attach_io(
             target["id"], "kernel-refused-128m", allocation_probe="deny")})
-        host.kill(target["id"])
+        host.kill(target["id"], after_oom=True)
         assert control["id"] in {row["id"] for row in host.rows()}
         host.kill(control["id"])
     finally:
