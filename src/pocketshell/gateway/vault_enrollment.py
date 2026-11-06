@@ -56,8 +56,31 @@ def read_private(path: Path, limit=65536) -> bytes:
         os.close(fd)
 
 
+def read_enrollment_config(path: Path) -> bytes:
+    """The public helper config uses the gateway's native authority contract.
+
+    Windows helper-created config files may also grant SYSTEM/Administrators
+    access. The private device PEM and vault trust records retain read_private's
+    stricter owner-only storage contract.
+    """
+    if sys.platform != "win32":
+        return read_private(path)
+    from pocketshell.gateway.service_common import ServiceError
+    from pocketshell.gateway.service_windows import WindowsApi
+    api = WindowsApi()
+    sid = api.current_sid()
+    try:
+        api.path_authority(str(path), sid, role="private", protected=True)
+        data = api.read_private_file(str(path), sid, 65536)
+    except ServiceError:
+        raise VaultError("The local gateway config is not protected by its owner.") from None
+    if data is None:
+        raise VaultError("The local gateway config is missing.")
+    return data
+
+
 def local_identity(config_dir: Path) -> dict:
-    config = parse(read_private(config_dir / "config.json").decode("utf-8"))
+    config = parse(read_enrollment_config(config_dir / "config.json").decode("utf-8"))
     server, device = config.get("server"), config.get("device_id")
     if server != endpoint.DEFAULT_SERVER or not isinstance(device, str) \
             or not endpoint.DEVICE_ID_RE.fullmatch(device):
