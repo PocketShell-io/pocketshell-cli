@@ -38,7 +38,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from private_shell_overlay import patch_pwd, patch_session
+from private_shell_overlay import patch_pwd, patch_session, patch_spawn
 
 REPO = Path(__file__).resolve().parents[2]
 INPUTS = REPO / "release" / "inputs"
@@ -173,7 +173,7 @@ def build_openssh(work: Path, out: Path, rec: Recorder) -> dict:
         overlay[rel] = {"upstream": upstream, "reviewed": reviewed}
     inputs["overlay"] = overlay
     inputs["privateShellOverlaySHA256"] = sha256(Path(__file__).with_name("private_shell_overlay.py"))
-    for name, patch in (("pwd.c", patch_pwd), ("w32-doexec.c", patch_session)):
+    for name, patch in (("pwd.c", patch_pwd), ("w32-doexec.c", patch_session), ("w32fd.c", patch_spawn)):
         target = src / "contrib/win32/win32compat" / name
         upstream = sha256(target)
         target.write_text(patch(target.read_text(encoding="utf-8")), encoding="utf-8")
@@ -334,7 +334,7 @@ def main() -> int:
     if ok and args.part == "openssh":
         staging = {"sourceArchiveSHA256": OPENSSH["sha256"],
                    "source": {name: result["inputs"]["overlay"][name]["reviewed"]
-                              for name in ("pwd.c", "w32-doexec.c")},
+                              for name in ("pwd.c", "w32-doexec.c", "w32fd.c")},
                    "files": result["outputs"], "processes": rec.processes}
         (out / "openssh/receipt.json").write_text(json.dumps(staging, indent=2))
     print(json.dumps({k: receipt.get(k) for k in ("part", "accepted", "outputs", "error")}, indent=1))

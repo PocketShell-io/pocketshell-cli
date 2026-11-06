@@ -92,7 +92,7 @@ def test_invalid_caps_and_mutable_selectors_fail_closed(endpoint):
 
 def test_private_profile_preserves_complete_scripts_and_interactive_shell(endpoint):
     host = endpoint
-    values = ["space arg", "single' and double\" quote", "C:\\tail dir\\", "Ω 日本 😀",
+    values = ["space arg", "single' and double\" quote", "C:\\tail dir\\", r"C:\\paired\\slashes", "Ω 日本 😀",
               "$(printf NOT_AN_EXPANSION)", "; printf ALSO_DATA", "line one\nline two"]
     oracle = host.workspace / "argv-boundary.json"
     code = "import json,pathlib,sys;pathlib.Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]),encoding='utf8');print('ARGV44_OK')"
@@ -103,13 +103,23 @@ def test_private_profile_preserves_complete_scripts_and_interactive_shell(endpoi
         assert answer[0] == 0 and "ARGV44_OK" in answer[1], answer
         assert json.loads(oracle.read_text(encoding="utf8")) == values
         oracle.unlink()
+        # Actual Python SOURCE, not encoded data: the Windows literals must
+        # arrive unchanged through both Bash command-line boundaries.
+        embedded = ("import json,pathlib\npathlib.Path(" + repr(str(oracle)) + ").write_text(json.dumps("
+                    + repr(values) + "),encoding='utf8')\nprint('SOURCE44_OK')\n")
+        script = host.python_command(embedded)
+        answer = host.exec_pty(script) if pty else host.exec(script)
+        assert answer[0] == 0 and "SOURCE44_OK" in answer[1], answer
+        assert json.loads(oracle.read_text(encoding="utf8")) == values
+        oracle.unlink()
         expansion = host.workspace / "expansion.txt"
         script = "printf '%s' \"$((44+8))\" > " + shlex.quote(expansion.as_posix())
         answer = host.exec_pty(script) if pty else host.exec(script)
         assert answer[0] == 0 and expansion.read_text() == "52", answer
         expansion.unlink()
         host.proofs.append({"privateProfilePTY": pty, "independentFileOracle": True,
-                            "argvDataPreserved": True, "shellExpansionPreserved": True})
+                            "argvDataPreserved": True, "shellExpansionPreserved": True,
+                            "embeddedSourcePreserved": True})
     host.proofs.append(host.attach_io(None, "no-command-interactive"))
 
 

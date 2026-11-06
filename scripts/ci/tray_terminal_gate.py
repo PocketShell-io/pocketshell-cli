@@ -59,6 +59,10 @@ def main():
     assert proof["provenance"]["elevated"] is False and proof["provenance"]["isolated"] is True
     assert len(proof["proofs"]) == 12 and all(row["independentFileOracle"] for row in proof["proofs"])
     assert any(row.get("interruptVerified") is True for row in proof["proofs"])
+    profiles = [row for row in proof["proofs"] if "privateProfilePTY" in row]
+    assert len(profiles) == 2 and {row["privateProfilePTY"] for row in profiles} == {False, True}
+    assert all(row["argvDataPreserved"] and row["shellExpansionPreserved"]
+               and row["embeddedSourcePreserved"] for row in profiles)
     assert len(proof["killProofs"]) == 5 and all(len(row["ownedProcessesGone"]) == 2 for row in proof["killProofs"])
     observations = proof["memoryObservations"]
     assert len(observations) == 2

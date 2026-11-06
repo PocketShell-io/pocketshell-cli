@@ -223,3 +223,5 @@ def test_native_gate_keeps_exact_memory_observer_and_explicit_postmortem_proofs(
     assert 'explicit[0]["ownedProcessesGone"] == preserved["absence"]["ownedPIDsUnallocated"]' in gate
     native = (ROOT / "tests/release/test_windows_tray_terminal_native.py").read_text()
     assert 'host.kill(target["id"], after_oom=True)' in native
+    assert 'and row["embeddedSourcePreserved"]' in gate
+    assert 'repr(str(oracle))' in native and '"embeddedSourcePreserved": True' in native

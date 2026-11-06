@@ -153,6 +153,11 @@ release directory, not the registry's DefaultShell or user/system PATH. Plain
 `pocketshell` and `a` commands from older PSC clients therefore resolve the
 bundled executables without client provisioning. The builder verifies the
 complete rebuilt executable/DLL inventory and every digest before staging it.
+For this managed Bash, PTY and non-PTY commands use its MSYS argument decoder,
+which requires escaping every backslash as well as quotes. A private spawn
+attribute selects this codec only for `SH_BASH`; other spawn callers retain
+the standard codec. The native unit exercises the measured Bash executable,
+and the packaged SSH gate checks raw Python source with Windows path literals.
 
 Obtain the PSC zip and SHA256 from the reviewed pocketshell-tui-client release
 or its Windows package workflow artifact. The tray builder validates the zip
