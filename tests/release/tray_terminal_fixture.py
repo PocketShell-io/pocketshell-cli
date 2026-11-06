@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import shlex
 import socket
 import struct
@@ -22,6 +23,16 @@ def digest(path):
 
 def ssh_string(value):
     return struct.pack(">I", len(value)) + value
+
+
+def shell_prompt_seen(output):
+    # Conhost may paint Bash's trailing space with CSI cursor movement.
+    # This only gates sending input; computed output and file proofs still
+    # determine whether the real interactive command succeeded.
+    rendered = re.sub(
+        rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]*[@-~=>])",
+        b"", output)
+    return re.search(rb"(?:^|[\r\n])bash-[0-9]+(?:\.[0-9]+)*[$#] ?(?:\r?\n|$)", rendered) is not None
 
 
 class Endpoint:
@@ -270,7 +281,7 @@ class Endpoint:
                 time.sleep(.1)
             return False
         try:
-            assert seen(lambda: b"$ " in b"".join(chunks) or b"# " in b"".join(chunks), 30), b"".join(chunks)[-2000:]
+            assert seen(lambda: shell_prompt_seen(b"".join(chunks)), 30), b"".join(chunks)[-2000:]
             if interrupt_probe:
                 checkpoint = self.workspace / "interrupt-started.txt"
                 assert not checkpoint.exists()

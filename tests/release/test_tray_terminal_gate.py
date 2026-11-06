@@ -41,3 +41,20 @@ def test_inventory_rejects_skip_and_teardown_failure():
     ):
         inventory.pytest_runtest_logreport(report)
     assert inventory.rejected == ["native::skip", "native::cleanup"]
+
+
+def test_prompt_readiness_accepts_conhost_cursor_space_without_weakening_io():
+    spec = importlib.util.spec_from_file_location("tray_terminal_fixture", ROOT / "tests/release/tray_terminal_fixture.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    # Synthetic terminal painting: a trailing space need not be a literal byte.
+    painted = b"\x1b[Hbash-9.9$\x1b[K\r\n\x1b[1;11H\x1b[?25h\x1b[1C"
+    assert b"$ " not in painted and b"# " not in painted  # old readiness was RED
+    for output in (painted, b"bash-9.9$ ", b"bash-9.9# ", b"bash-9.9$"):
+        assert module.shell_prompt_seen(output)
+    for output in (b"", b"Starting worker", b"cash$100", b"bash-9.9$unfinished", b"some $ output", b"# ",
+                   b"echo bash-9.9$ ", b"echo \x1b[Hbash-9.9$ "):
+        assert not module.shell_prompt_seen(output)
+    source = (ROOT / "tests/release/tray_terminal_fixture.py").read_text()
+    assert 'expected.encode() in b"".join(chunks) and oracle.exists()' in source
+    assert 'assert oracle.read_text().strip() == expected' in source
