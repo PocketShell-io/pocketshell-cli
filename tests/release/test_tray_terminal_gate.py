@@ -58,3 +58,28 @@ def test_prompt_readiness_accepts_conhost_cursor_space_without_weakening_io():
     source = (ROOT / "tests/release/tray_terminal_fixture.py").read_text()
     assert 'expected.encode() in b"".join(chunks) and oracle.exists()' in source
     assert 'assert oracle.read_text().strip() == expected' in source
+
+
+def test_failed_diagnostics_bind_fixed_public_inputs_without_bypassing_gate():
+    workflow = (ROOT / ".github/workflows/windows-tray-release.yml").read_text()
+    start = workflow.index("      - name: Bind failed payload diagnostics")
+    end = workflow.index("      - name: Fetch the previous release installer", start)
+    diagnostic = workflow[start:end]
+    assert "always() && steps.assemble.outcome == 'success' && steps.terminal_gate.outcome != 'success'" in diagnostic
+    assert "always() && steps.diagnostic_manifest.outcome == 'success'" in diagnostic
+    assert "acceptanceQualified = $false" in diagnostic
+    assert "include-hidden-files: true" in diagnostic
+    assert workflow.count("include-hidden-files: true") == 1
+    assert "$receipt.source -ne $head -or $receipt.sourceDirty -or $catalog.source -ne $head" in diagnostic
+    assert "$receipt.catalogSHA256" in diagnostic
+    assert "verify_inventory(payload/'runtime', rows)" in diagnostic
+    assert "assert expected and actual==expected" in diagnostic
+    assert "$receipt.privateEndpoint.receiptSHA256" in diagnostic
+    upload = diagnostic.split("          path: |", 1)[1].split("          if-no-files-found:", 1)[0]
+    assert len([line for line in upload.splitlines() if line.strip()]) == 6
+    assert "*" not in upload and "USERPROFILE" not in upload
+    assert "Setup-x64.exe" not in upload and "psc-package" not in upload
+    assert "payload\\runtime" in upload and "payload\\psc-ssh" in upload
+    assert "continue-on-error" not in workflow
+    # The accepted installer artifact remains downstream of the mandatory gate.
+    assert workflow.index("- name: Upload installer artifacts") > end
