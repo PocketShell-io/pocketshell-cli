@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "suite": "test_windows_gateway_config_native.py",
+  "cases": [
+    "test_real_gateway_writer_config_is_accepted_and_exact_device_key_is_derived",
+    "test_foreign_read_or_mutation_config_acl_is_refused[R]",
+    "test_foreign_read_or_mutation_config_acl_is_refused[M]",
+    "test_inherited_config_acl_is_refused",
+    "test_hardlinked_config_is_refused",
+    "test_junction_ancestor_is_refused",
+    "test_foreign_acl_swapped_after_protected_path_gate_is_refused",
+    "test_foreign_mutation_on_config_parent_is_refused",
+    "test_privileged_acl_is_still_refused_for_the_device_private_key",
+    "test_valid_but_changed_local_identity_is_refused_before_publication[device_id]",
+    "test_valid_but_changed_local_identity_is_refused_before_publication[ssh_host_key]",
+    "test_valid_but_changed_local_identity_is_refused_before_publication[device_key]"
+  ]
+}
