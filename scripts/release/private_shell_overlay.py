@@ -68,6 +68,99 @@ set_managed_commands(void)
 
 '''
 
+# MSYS Bash parses its Windows command line differently from the Microsoft CRT:
+# paired backslashes must also be escaped before ordinary characters. This is
+# argv transport, not Bash-language quoting; the complete script stays intact.
+MSYS_SPAWN_FLAG = "#define POCKETSHELL_SPAWN_MSYS_ARGV 0x4000\n"
+PTY_ARGV = r'''static char *
+pocketshell_quote_pty_script(const char *script)
+{
+    size_t length = strlen(script);
+    char *encoded, *out;
+    if (length > (SIZE_MAX - 3) / 2) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    if ((encoded = malloc(length * 2 + 3)) == NULL)
+        return NULL;
+    out = encoded;
+    *out++ = '"';
+    for (const char *p = script; *p; p++) {
+        if (*p == '\\' || *p == '"') *out++ = '\\';
+        *out++ = *p;
+    }
+    *out++ = '"';
+    *out = '\0';
+    return encoded;
+}
+
+'''
+
+MSYS_COMMANDLINE = r'''static char *
+pocketshell_msys_commandline(const char *cmd, char *const argv[], BOOLEAN prepend_module_path)
+{
+    /* Keep the existing executable resolution/argv[0] policy. Only the
+     * remaining operands use the explicitly selected MSYS decoder. */
+    char *base = build_commandline_string(cmd, NULL, prepend_module_path);
+    char *result, *out;
+    size_t size;
+    if (base == NULL) return NULL;
+    size = strlen(base) + 1;
+    if (argv) for (char *const *arg = argv; *arg; arg++) {
+        size_t length = strlen(*arg);
+        if (length > (SIZE_MAX - 4) / 2 || size > SIZE_MAX - (length * 2 + 4)) {
+            free(base); errno = EOVERFLOW; return NULL;
+        }
+        size += length * 2 + 4;
+    }
+    result = malloc(size);
+    if (result == NULL) { free(base); return NULL; }
+    strcpy_s(result, size, base);
+    free(base);
+    out = result + strlen(result);
+    if (argv) for (char *const *arg = argv; *arg; arg++) {
+        char *encoded = pocketshell_quote_pty_script(*arg);
+        if (encoded == NULL) { free(result); return NULL; }
+        *out++ = ' ';
+        size_t length = strlen(encoded);
+        memcpy(out, encoded, length);
+        out += length;
+        free(encoded);
+    }
+    *out = '\0';
+    return result;
+}
+
+'''
+
+
+def patch_spawn(text):
+    """Explicit private attribute; preserve every unselected spawn caller."""
+    anchor = "static int\nspawn_child_internal("
+    signature = "BOOLEAN prepend_module_path, BOOLEAN load_user_env)\n{"
+    begin = text.index(anchor)
+    end = text.index("\n}", begin) + 2
+    body = text[begin:end]
+    if body.count(signature) != 1:
+        raise ValueError("Unexpected upstream spawn-child signature")
+    body = body.replace(signature, "BOOLEAN prepend_module_path, BOOLEAN load_user_env, BOOLEAN msys_argv)\n{")
+    old = "build_commandline_string(cmd, argv, prepend_module_path)"
+    if body.count(old) != 1:
+        raise ValueError("Unexpected upstream command-line construction")
+    body = body.replace(old, "(msys_argv ? pocketshell_msys_commandline(cmd, argv, prepend_module_path) : " + old + ")")
+    patched = text[:begin] + MSYS_SPAWN_FLAG + "#include <stdint.h>\n" + PTY_ARGV + MSYS_COMMANDLINE + body + text[end:]
+    old_call = "spawn_child_internal(path, argv + 1, &si_ex, sc_flags, user_token, prepend_module_path, load_user_env)"
+    if patched.count(old_call) != 1:
+        raise ValueError("Unexpected upstream spawn-child caller")
+    patched = patched.replace(old_call, old_call[:-1] + ",\n"
+                              "        attrp && (attrp->flags & POCKETSHELL_SPAWN_MSYS_ARGV))")
+    # The private attribute is never a Windows creation flag. Existing pgroup
+    # behavior is unchanged for every caller without this new attribute.
+    group = "attrp && attrp->flags == POSIX_SPAWN_SETPGROUP"
+    if patched.count(group) != 1:
+        raise ValueError("Unexpected upstream process-group selection")
+    return patched.replace(group, "attrp && (attrp->flags & ~POCKETSHELL_SPAWN_MSYS_ARGV) == POSIX_SPAWN_SETPGROUP")
+
 
 def patch_pwd(text):
     begin = text.index("static int\nset_defaultshell()\n{")
@@ -89,6 +182,26 @@ def patch_session(text):
     if patched.count(old) != 1:
         raise ValueError("Unexpected upstream environment PATH filter")
     patched = patched.replace(old, '_strnicmp(env_name, "PATH=", strlen("PATH="))')
+    # The PTY branch constructs CreateProcessW's command line directly, unlike
+    # the non-PTY posix_spawn argv below. Raw SSH scripts otherwise lose every
+    # word after the first when Bash interprets its -c operand.
+    old_pty = '''\t\tif (command) {
+\t\t\tsize_t len = strlen(shell) + 1 + strlen(shell_command_option_local) + 1 + strlen(command) + 1;'''
+    new_pty = '''\t\tif (command) {
+            char *encoded_script = shell_type == SH_BASH ? pocketshell_quote_pty_script(command) : NULL;
+            const char *pty_script = shell_type == SH_BASH ? encoded_script : command;
+            if (pty_script == NULL)
+                goto cleanup;
+\t\t\tsize_t len = strlen(shell) + 1 + strlen(shell_command_option_local) + 1 + strlen(pty_script) + 1;'''
+    if patched.count(old_pty) != 1 or patched.count('strcat_s(pty_cmd, len, command);') != 1:
+        raise ValueError("Unexpected upstream PTY shell command construction")
+    patched = patched.replace(old_pty, new_pty)
+    patched = patched.replace('strcat_s(pty_cmd, len, command);', 'strcat_s(pty_cmd, len, pty_script);')
+    end_pty = '\t\t} else {\n\t\t\tif (shell_arguments) {'
+    if patched.count(end_pty) != 1:
+        raise ValueError("Unexpected upstream PTY no-command branch")
+    patched = patched.replace(end_pty, '            free(encoded_script);\n'
+                              '            if (pty_cmd == NULL)\n                goto cleanup;\n' + end_pty)
     # Bash detects SSH stdin and reads .bashrc for noninteractive commands.
     # shell_arguments is only used for an interactive PTY by upstream; it does
     # not protect this exec branch. Pass separate argv elements for exec, and
@@ -114,10 +227,21 @@ def patch_session(text):
     if previous not in patched:
         raise ValueError("Unexpected upstream exec-shell argv implementation")
     patched = patched.replace(previous, replacement)
+    spawn = "posix_spawn(&pid, spawn_argv[0], &actions, NULL, spawn_argv, NULL)"
+    if patched.count(spawn) != 1:
+        raise ValueError("Unexpected upstream private-shell spawn call")
+    # This explicit attribute is local to this managed SH_BASH call. It does
+    # not depend on an environment switch or executable-name heuristic.
+    patched = patched.replace('char *spawn_argv[6] = { NULL, };',
+                              'char *spawn_argv[6] = { NULL, };\n'
+                              '        posix_spawnattr_t msys_attrs = { 0 };\n'
+                              '        msys_attrs.flags = POCKETSHELL_SPAWN_MSYS_ARGV;')
+    patched = patched.replace(spawn, "posix_spawn(&pid, spawn_argv[0], &actions,\n"
+                              "            shell_type == SH_BASH ? &msys_attrs : NULL, spawn_argv, NULL)")
     anchor = "static int\nsetup_session_env(struct ssh *ssh, Session* s)"
     if anchor not in patched:
         raise ValueError("Unexpected upstream session environment implementation")
-    patched = patched.replace(anchor, COMMANDS + anchor)
+    patched = patched.replace(anchor, MSYS_SPAWN_FLAG + PTY_ARGV + COMMANDS + anchor)
     begin = patched.index(anchor)
     end = patched.index("\nint do_exec_windows", begin)
     section = patched[begin:end]

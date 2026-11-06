@@ -90,10 +90,15 @@ def test_managed_session_path_prefers_tools_and_excludes_user_path(bb):
               '\t/* PATH is a special case. */\n L"Environment", L"PATH";\n}\n'
               'static int\nsetup_session_env(struct ssh *ssh, Session* s)\n{\n\tret = 0;\n}\n'
               '\nint do_exec_windows\n'
+              '\t\tif (command) {\n'
+              '\t\t\tsize_t len = strlen(shell) + 1 + strlen(shell_command_option_local) + 1 + strlen(command) + 1;\n'
+              'strcat_s(pty_cmd, len, command);\n'
+              '\t\t} else {\n\t\t\tif (shell_arguments) {\n}\n}\n'
               'char *spawn_argv[4] = { NULL, };\n'
               '\t\t\tif (exec_command) {\n'
               '\t\t\t\tspawn_argv[1] = shell_command_option_local;\n'
-              '\t\t\t\tspawn_argv[2] = exec_command;\n\t\t\t}\n')
+              '\t\t\t\tspawn_argv[2] = exec_command;\n\t\t\t}\n'
+              'posix_spawn(&pid, spawn_argv[0], &actions, NULL, spawn_argv, NULL);\n')
     patched = patch_session(source)
     assert 'L"%s\\\\python;%s;%s\\\\endpoint\\\\shell\\\\usr\\\\bin;' in patched
     assert 'L"Environment", L"PATH"' not in patched
@@ -108,6 +113,46 @@ def test_managed_session_path_prefers_tools_and_excludes_user_path(bb):
     assert 'BASH_FUNC_a%%' in patched
     assert 'BASH_FUNC_aplexer%%' in patched
     assert 'set_managed_commands();\n\tret = 0;' in patched
+    assert 'shell_type == SH_BASH ? pocketshell_quote_pty_script(command)' in patched
+    assert 'strcat_s(pty_cmd, len, command);' not in patched
+    assert 'strcat_s(pty_cmd, len, pty_script);' in patched
+    assert 'free(encoded_script);' in patched
+    assert 'shell_type == SH_BASH ? &msys_attrs : NULL' in patched
+    assert 'msys_attrs.flags = POCKETSHELL_SPAWN_MSYS_ARGV' in patched
+
+
+def test_private_msys_spawn_preserves_unselected_codec_and_entire_child_lifecycle(bb):
+    from private_shell_overlay import patch_spawn
+    source = (SCRIPT.parents[2] / "release/inputs/openssh-quiet-e302fe1/w32fd.c").read_text(encoding="utf8")
+    patched = patch_spawn(source)
+    anchor = "static int\nspawn_child_internal("
+    def function(text, start):
+        begin = text.index(start)
+        return text[begin:text.index("\n}", begin) + 2]
+    child = function(patched, anchor)
+    child = child.replace("BOOLEAN load_user_env, BOOLEAN msys_argv)", "BOOLEAN load_user_env)")
+    child = child.replace("(msys_argv ? pocketshell_msys_commandline(cmd, argv, prepend_module_path) : "
+                          "build_commandline_string(cmd, argv, prepend_module_path))",
+                          "build_commandline_string(cmd, argv, prepend_module_path)")
+    assert child == function(source, anchor)  # flags, handles, tokens and environment byte-for-byte
+    spawn = function(patched, "int\nposix_spawn_internal(")
+    spawn = spawn.replace("load_user_env,\n        attrp && (attrp->flags & POCKETSHELL_SPAWN_MSYS_ARGV))", "load_user_env)")
+    spawn = spawn.replace("(attrp->flags & ~POCKETSHELL_SPAWN_MSYS_ARGV)", "attrp->flags")
+    assert spawn == function(source, "int\nposix_spawn_internal(")
+    # Public APIs/ABI and every caller's default path are unchanged.
+    assert patched[patched.index("int\nposix_spawn(pid_t"): ] == source[source.index("int\nposix_spawn(pid_t"): ]
+    assert "build_commandline_string(cmd, NULL, prepend_module_path)" in patched
+    assert "#define POCKETSHELL_SPAWN_MSYS_ARGV 0x4000" in patched
+    assert 'for name in ("pwd.c", "w32-doexec.c", "w32fd.c")' in SCRIPT.read_text()
+
+
+@pytest.mark.parametrize("anchor", ["spawn_child_internal(path, argv + 1", "attrp->flags == POSIX_SPAWN_SETPGROUP",
+                                   "build_commandline_string(cmd, argv, prepend_module_path)"])
+def test_private_msys_spawn_refuses_changed_upstream_anchors(anchor, bb):
+    from private_shell_overlay import patch_spawn
+    source = (SCRIPT.parents[2] / "release/inputs/openssh-quiet-e302fe1/w32fd.c").read_text(encoding="utf8")
+    with pytest.raises(ValueError):
+        patch_spawn(source.replace(anchor, "unexpected-upstream", 1))
 
 
 @pytest.mark.parametrize("overlay", [None, "0" * 64, "current"])

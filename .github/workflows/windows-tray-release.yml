@@ -135,8 +135,10 @@ jobs:
           $env:CGO_ENABLED = '0'
           $out = "$env:RUNNER_TEMP\build\GatewayTray.exe"
           New-Item -ItemType Directory "$env:RUNNER_TEMP\build" -Force | Out-Null
-          go -C native/launcher build -trimpath -buildvcs=false '-ldflags=-s -w -buildid= -H=windowsgui -X main.module=pocketshell.tray_bundle' -o $out .
+          go -C native/launcher build -mod=readonly -trimpath -buildvcs=false '-ldflags=-s -w -buildid= -H=windowsgui -X main.module=pocketshell.tray_bundle' -o $out .
           if ($LASTEXITCODE -ne 0) { throw 'GatewayTray build failed' }
+          go -C native/launcher build -mod=readonly -trimpath -buildvcs=false '-ldflags=-s -w -buildid= -H=windowsgui' -o "$env:RUNNER_TEMP\build\pocketshell.exe" .
+          if ($LASTEXITCODE -ne 0) { throw 'CLI launcher build failed' }
       - name: Install NSIS
         shell: pwsh
         run: |
@@ -144,11 +146,12 @@ jobs:
           choco install nsis --no-progress -y
           if ($LASTEXITCODE -ne 0) { throw 'NSIS setup failed' }
       - name: Assemble installer from verified inputs
+        id: assemble
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $inputDir = "$env:RUNNER_TEMP\input"
-          uv run --frozen python scripts/release/build_tray_installer.py --resources "$env:RUNNER_TEMP\base" --catalog-sha256 $env:CATALOG_SHA256 --aplexer-cli-wheel "$inputDir\aplexer-0.1.13-py3-none-win_amd64.whl" --aplexer-client-wheel "$inputDir\aplexer_client-0.1.13-cp311-abi3-win_amd64.whl" --tray-launcher "$env:RUNNER_TEMP\build\GatewayTray.exe" --psc-zip $env:PSC_ZIP --psc-sha256 $env:PSC_SHA256 --ssh-zip "$inputDir\OpenSSH-Win64.zip" --ssh-sha256 $env:SSH_ZIP_SHA256 --endpoint-backend "$env:RUNNER_TEMP\backend-out\openssh" --endpoint-backend-receipt-sha256 $env:BACKEND_RECEIPT_SHA256 --helper release\inputs\pocketshell-link-70f5a4b\pocketshell-link-windows-amd64.exe --helper-sha256 $env:HELPER_SHA256 --helper-version git-70f5a4b9e8ee --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" --out "$env:RUNNER_TEMP\tray-out"
+          uv run --frozen python scripts/release/build_tray_installer.py --resources "$env:RUNNER_TEMP\base" --catalog-sha256 $env:CATALOG_SHA256 --aplexer-cli-wheel "$inputDir\aplexer-0.1.13-py3-none-win_amd64.whl" --aplexer-client-wheel "$inputDir\aplexer_client-0.1.13-cp311-abi3-win_amd64.whl" --tray-launcher "$env:RUNNER_TEMP\build\GatewayTray.exe" --cli-launcher "$env:RUNNER_TEMP\build\pocketshell.exe" --psc-zip $env:PSC_ZIP --psc-sha256 $env:PSC_SHA256 --ssh-zip "$inputDir\OpenSSH-Win64.zip" --ssh-sha256 $env:SSH_ZIP_SHA256 --endpoint-backend "$env:RUNNER_TEMP\backend-out\openssh" --endpoint-backend-receipt-sha256 $env:BACKEND_RECEIPT_SHA256 --helper release\inputs\pocketshell-link-70f5a4b\pocketshell-link-windows-amd64.exe --helper-sha256 $env:HELPER_SHA256 --helper-version git-70f5a4b9e8ee --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" --out "$env:RUNNER_TEMP\tray-out"
           if ($LASTEXITCODE -ne 0) { throw 'Installer assembly failed' }
           $head = (git rev-parse HEAD).Trim()
           $receipt = Get-Content "$env:RUNNER_TEMP\tray-out\installer-receipt.json" -Raw | ConvertFrom-Json
@@ -156,6 +159,74 @@ jobs:
           if ($receipt.sourceDirty) { throw 'release build ran on a dirty checkout' }
           Set-Location "$env:RUNNER_TEMP\tray-out"
           python -c "import hashlib,pathlib; pathlib.Path('SHA256SUMS').write_text(''.join(f'{hashlib.sha256(pathlib.Path(n).read_bytes()).hexdigest()}  {n}' + chr(10) for n in ('PocketShellGateway-Setup-x64.exe','installer-receipt.json')))"
+      - name: Prove packaged Windows terminal lifecycle through private SSH
+        id: terminal_gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv run --frozen python scripts/ci/tray_terminal_gate.py --payload "$env:RUNNER_TEMP\tray-out\payload" --out "$env:RUNNER_TEMP\tray-terminal-proof"
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged terminal lifecycle, kernel limit, or zero-skip inventory proof failed' }
+      - name: Preserve terminal lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          retention-days: 7
+          name: tray-terminal-proof
+          path: ${{ runner.temp }}\tray-terminal-proof
+          if-no-files-found: error
+      - name: Bind failed payload diagnostics to the exact normal producer
+        id: diagnostic_manifest
+        if: always() && steps.assemble.outcome == 'success' && steps.terminal_gate.outcome != 'success'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "$env:RUNNER_TEMP\tray-out"
+          $head = (git rev-parse HEAD).Trim()
+          $receipt = Get-Content "$out\installer-receipt.json" -Raw | ConvertFrom-Json
+          $catalog = Get-Content "$out\payload\host-runtime-catalog.json" -Raw | ConvertFrom-Json
+          if ($receipt.source -ne $head -or $receipt.sourceDirty -or $catalog.source -ne $head) { throw 'Diagnostic source binding mismatch' }
+          # Only fixed normal, pre-enrollment producer files are allowed here.
+          # The native fixture's generated keys/state live in its separate owned
+          # USERPROFILE test tree. Only measured build-runtime files and its
+          # identical measured SSH-client copy are uploaded, never that tree,
+          # Setup.exe, PSC installation payload, or another fixture directory.
+          $verify = @'
+          import hashlib,json,sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts/release')
+          from build_tray_installer import verify_inventory
+          out=Path(sys.argv[1]); payload=out/'payload'
+          rows=json.loads((payload/'host-runtime-catalog.json').read_bytes())['files']
+          assert not any(p.is_symlink() or p.is_junction() for p in payload.rglob('*'))
+          verify_inventory(payload/'runtime', rows)
+          expected={r['path'][len('psc-ssh/'):]:r['sha256'] for r in rows if r['path'].startswith('psc-ssh/')}
+          actual={p.relative_to(payload/'psc-ssh').as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in (payload/'psc-ssh').rglob('*') if p.is_file()}
+          assert expected and actual==expected
+          '@
+          uv run --frozen python -c $verify $out
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic payload differs from normal measured build files' }
+          $names = @('installer-receipt.json', 'payload/host-runtime-catalog.json', 'payload/private-endpoint-build-receipt.json')
+          $digests = [ordered]@{}
+          foreach ($name in $names) { $digests[$name] = (Get-FileHash -LiteralPath (Join-Path $out $name) -Algorithm SHA256).Hash.ToLower() }
+          if ($digests['payload/host-runtime-catalog.json'] -ne $receipt.catalogSHA256 -or $digests['payload/private-endpoint-build-receipt.json'] -ne $receipt.privateEndpoint.receiptSHA256) { throw 'Diagnostic normal-producer digest mismatch' }
+          [ordered]@{ qualification = 'failed-native-gate-diagnostic-only'; acceptanceQualified = $false; source = $head; sourceDirty = $false; terminalGateOutcome = '${{ steps.terminal_gate.outcome }}'; fileSHA256 = $digests } | ConvertTo-Json -Depth 8 | Set-Content "$out\diagnostic-only.json" -Encoding utf8
+      - name: Preserve failed unqualified payload for diagnosis
+        if: always() && steps.diagnostic_manifest.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          retention-days: 7
+          name: failed-native-gate-unqualified-payload
+          # Required measured public dotfiles (for example Vim .editorconfig)
+          # are authorized by the exact catalog inventory check above.
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}\tray-out\diagnostic-only.json
+            ${{ runner.temp }}\tray-out\installer-receipt.json
+            ${{ runner.temp }}\tray-out\payload\host-runtime-catalog.json
+            ${{ runner.temp }}\tray-out\payload\private-endpoint-build-receipt.json
+            ${{ runner.temp }}\tray-out\payload\runtime
+            ${{ runner.temp }}\tray-out\payload\psc-ssh
+          if-no-files-found: error
       - name: Fetch the previous release installer (upgrade test input)
         env:
           GH_TOKEN: ${{ github.token }}

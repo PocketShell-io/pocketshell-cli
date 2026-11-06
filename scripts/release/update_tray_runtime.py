@@ -13,10 +13,10 @@ import shutil
 import subprocess
 
 from build_tray_installer import (REPO, digest, parse_catalog, stage_guardian,
-                                  stage_python_application, verify_inventory)
+                                  stage_cli_launcher, stage_python_application, verify_inventory)
 
 
-def build(resources, expected, destination):
+def build(resources, expected, destination, cli_launcher=None):
     source, out = Path(resources).resolve(), Path(destination).resolve()
     catalog_path = source / 'host-runtime-catalog.json'
     if digest(catalog_path) != expected:
@@ -34,6 +34,7 @@ def build(resources, expected, destination):
     root = out / 'runtime'
     shutil.copytree(source / 'runtime', root)
     stage_python_application(root)
+    launcher_receipt = stage_cli_launcher(cli_launcher, root, catalog)
     stage_guardian(root, catalog)
     catalog['source'] = commit
     catalog['release'] = 'tray-' + commit[:12]
@@ -51,7 +52,7 @@ def build(resources, expected, destination):
     (out / 'host-runtime-catalog.json').write_bytes(data)
     receipt = {'source': commit, 'sourceDirty': False, 'baseCatalogSHA256': expected,
                'catalogSHA256': hashlib.sha256(data).hexdigest(),
-               'files': len(catalog['files']), 'release': catalog['release']}
+               'files': len(catalog['files']), 'release': catalog['release'], 'cliLauncher': launcher_receipt}
     (out / 'runtime-build-receipt.json').write_text(json.dumps(receipt, indent=2))
     return receipt
 
@@ -61,5 +62,6 @@ if __name__ == '__main__':
     parser.add_argument('--resources', required=True)
     parser.add_argument('--catalog-sha256', required=True)
     parser.add_argument('--out', required=True)
+    parser.add_argument('--cli-launcher', required=True)
     args = parser.parse_args()
-    print(json.dumps(build(args.resources, args.catalog_sha256, args.out), indent=2))
+    print(json.dumps(build(args.resources, args.catalog_sha256, args.out, args.cli_launcher), indent=2))

@@ -11,7 +11,7 @@ from pocketshell.runtime import sessions as runtime
 
 @click.group(name="sessions")
 def sessions_group():
-    """Inspect this Windows user's aplexer sessions."""
+    """List, create, attach to, and stop this Windows user's aplexer sessions."""
 
 
 @sessions_group.command(name="list")
@@ -31,3 +31,7 @@ def list_sessions(ctx, json_output):
 
 
 sessions_group.add_command(list_sessions, name="ls")
+
+from pocketshell.windows_session_lifecycle import install  # noqa: E402
+
+install(sessions_group)

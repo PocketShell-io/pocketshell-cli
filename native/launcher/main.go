@@ -9,9 +9,8 @@
 // catalogued closure (no site, no PATH, no PYTHON* variables: -I).
 //
 // Quiet (no visible CMD): it is linked as a GUI-subsystem binary
-// (-H=windowsgui, so Windows allocates no console for it) and starts the
-// console-subsystem interpreter with CREATE_NO_WINDOW, so the child gets no
-// console either. stdio still flows through the inherited handles.
+// (-H=windowsgui, so Windows allocates no console for it). GUI/background
+// children stay quiet; the CLI can preserve an existing parent terminal.
 //go:build windows
 
 package main
@@ -37,9 +36,14 @@ func main() {
 		os.Exit(1)
 	}
 	python := filepath.Join(filepath.Dir(self), "python", "python.exe")
+	streams, flags, err := childStdio(module)
+	if err != nil {
+		streams[2].WriteString("pocketshell: cannot preserve the existing console stdio\n")
+		os.Exit(1)
+	}
 	cmd := exec.Command(python, append([]string{"-I", "-B", "-m", module}, os.Args[1:]...)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow, HideWindow: true}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = streams[0], streams[1], streams[2]
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: flags, HideWindow: flags == createNoWindow}
 	// Console control events reach the child directly; the launcher only waits.
 	signal.Ignore(os.Interrupt)
 	err = cmd.Run()
@@ -50,7 +54,7 @@ func main() {
 	case errors.As(err, &exit):
 		os.Exit(exit.ExitCode())
 	default:
-		os.Stderr.WriteString("pocketshell: cannot start the bundled interpreter\n")
+		streams[2].WriteString("pocketshell: cannot start the bundled interpreter\n")
 		os.Exit(1)
 	}
 }
