@@ -42,11 +42,21 @@ def verified_public_files(payload, receipt):
     expected["host-runtime-catalog.json"] = receipt["catalogSHA256"]
     expected["private-endpoint-build-receipt.json"] = receipt["privateEndpoint"]["receiptSHA256"]
     actual = {}
-    for path in payload.rglob("*"):
-        assert not path.is_symlink() and not getattr(path.lstat(), "st_file_attributes", 0) & 0x400
-        if path.is_file():
-            assert path.stat().st_nlink == 1
-            actual[path.relative_to(payload).as_posix()] = digest(path)
+    for root in payload.iterdir():
+        assert not root.is_symlink() and not getattr(root.lstat(), "st_file_attributes", 0) & 0x400
+        assert root.name in {"runtime", "psc-ssh", "host-runtime-catalog.json",
+                             "private-endpoint-build-receipt.json", "psc-package"}
+        if root.name == "psc-package":
+            # The normal installer also builds this separate optional client.
+            # It is not part of the measured terminal closure: never enumerate,
+            # read, copy or execute its contents in this fixture.
+            assert root.is_dir()
+            continue
+        for path in (root, *root.rglob("*")) if root.is_dir() else (root,):
+            assert not path.is_symlink() and not getattr(path.lstat(), "st_file_attributes", 0) & 0x400
+            if path.is_file():
+                assert path.stat().st_nlink == 1
+                actual[path.relative_to(payload).as_posix()] = digest(path)
     assert actual == expected
     backend = json.loads((payload / "private-endpoint-build-receipt.json").read_bytes())
     assert backend["source"] == receipt["privateEndpoint"]["source"]

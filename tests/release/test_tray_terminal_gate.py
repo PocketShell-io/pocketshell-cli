@@ -45,6 +45,41 @@ def test_public_copy_inventory_keeps_exact_catalog_backend_client_and_hidden_fil
     assert measured["psc-ssh/ssh.exe"] == measured["runtime/psc-ssh/ssh.exe"]
 
 
+def test_normal_installer_sidecar_is_never_enumerated_read_or_selected(tmp_path, monkeypatch):
+    module, payload, receipt = public_copy_fixture(tmp_path)
+    expected = module.verified_public_files(payload, receipt)
+    sidecar = payload / "psc-package"
+    sidecar.mkdir()
+    (sidecar / "not-a-terminal-input.exe").write_bytes(b"synthetic optional installer client")
+    original_digest, original_rglob = module.digest, Path.rglob
+    def measured_digest(path):
+        assert not path.is_relative_to(sidecar)
+        return original_digest(path)
+    def measured_rglob(path, *args, **kwargs):
+        assert not path.is_relative_to(sidecar)
+        return original_rglob(path, *args, **kwargs)
+    monkeypatch.setattr(module, "digest", measured_digest)
+    monkeypatch.setattr(Path, "rglob", measured_rglob)
+    assert module.verified_public_files(payload, receipt) == expected
+    assert not any(path.startswith("psc-package/") for path in expected)
+
+
+@pytest.mark.parametrize("mutation", ["unknown-root", "sidecar-file", "sidecar-reparse"])
+def test_public_copy_keeps_top_level_and_sidecar_boundary_strict(tmp_path, monkeypatch, mutation):
+    module, payload, receipt = public_copy_fixture(tmp_path)
+    if mutation == "unknown-root":
+        (payload / "unmeasured-extra").mkdir()
+    elif mutation == "sidecar-file":
+        (payload / "psc-package").write_bytes(b"wrong object type")
+    else:
+        sidecar = payload / "psc-package"
+        sidecar.mkdir()
+        original = Path.is_symlink
+        monkeypatch.setattr(Path, "is_symlink", lambda self: self == sidecar or original(self))
+    with pytest.raises(AssertionError):
+        module.verified_public_files(payload, receipt)
+
+
 @pytest.mark.parametrize("mutation", ["extra", "runtime", "client", "catalog", "backend", "hardlink"])
 def test_public_copy_refuses_unmeasured_or_changed_bytes_before_copy(tmp_path, mutation):
     module, payload, receipt = public_copy_fixture(tmp_path)
