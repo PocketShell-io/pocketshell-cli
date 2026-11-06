@@ -87,8 +87,8 @@ def start_gateway():
     return start()
 
 
-def check_own_binding(binding):
-    authority = home() / "managed-runtime/authority.json"
+def check_own_binding(binding, *, user_data: Path | None = None):
+    authority = (home() if user_data is None else user_data) / "managed-runtime/authority.json"
     if Path(binding.get("authority") or "").resolve() != authority.resolve():
         raise RuntimeError("The gateway binding belongs to another installation")
 
@@ -470,7 +470,7 @@ def main():
                     configure_context()
                     (home() / "tray-exit").touch()
                     wait_for_tray_exit()
-                    installed = installed_root(repair(root))
+                    installed = installed_root(repair(root, user_data=home()))
             if root.resolve() != installed.resolve():
                 args = [a for a in sys.argv[1:] if a != "--repair"]
                 subprocess.Popen([str(installed / "GatewayTray.exe"), *args], creationflags=0x08000000)
