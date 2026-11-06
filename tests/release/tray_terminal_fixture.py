@@ -4,10 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import queue
 import re
 import shlex
+import shutil
 import socket
 import struct
 import subprocess
@@ -19,6 +20,74 @@ from uuid import uuid4
 def digest(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def verified_public_files(payload, receipt):
+    """Only the measured, pre-enrollment public producer closure may be copied."""
+    for parent in (payload, *payload.parents):
+        assert not parent.is_symlink() and not getattr(parent.lstat(), "st_file_attributes", 0) & 0x400
+    catalog_path = payload / "host-runtime-catalog.json"
+    assert digest(catalog_path) == receipt["catalogSHA256"]
+    catalog = json.loads(catalog_path.read_bytes())
+    assert catalog["source"] == receipt["source"]
+    wanted = {}
+    for row in catalog["files"]:
+        path = PurePosixPath(row["path"])
+        assert not path.is_absolute() and ".." not in path.parts and ":" not in str(path) and "\\" not in str(path)
+        assert row["path"] not in wanted
+        wanted[row["path"]] = row["sha256"]
+    assert wanted and len(wanted) == receipt["files"]
+    expected = {"runtime/" + path: value for path, value in wanted.items()}
+    expected.update({path: value for path, value in wanted.items() if path.startswith("psc-ssh/")})
+    expected["host-runtime-catalog.json"] = receipt["catalogSHA256"]
+    expected["private-endpoint-build-receipt.json"] = receipt["privateEndpoint"]["receiptSHA256"]
+    actual = {}
+    for path in payload.rglob("*"):
+        assert not path.is_symlink() and not getattr(path.lstat(), "st_file_attributes", 0) & 0x400
+        if path.is_file():
+            assert path.stat().st_nlink == 1
+            actual[path.relative_to(payload).as_posix()] = digest(path)
+    assert actual == expected
+    backend = json.loads((payload / "private-endpoint-build-receipt.json").read_bytes())
+    assert backend["source"] == receipt["privateEndpoint"]["source"]
+    assert backend["files"] == receipt["privateEndpoint"]["files"]
+    assert all(wanted["endpoint/bin/" + path] == value for path, value in backend["files"].items())
+    assert wanted["GatewayTray.exe"] == receipt["launcherSHA256"]
+    assert wanted["pocketshell.exe"] == receipt["cliLauncher"]["sha256"]
+    return expected
+
+
+def stage_public_payload(payload, output, receipt_bytes):
+    from pocketshell import windows_security as ws
+    receipt = json.loads(receipt_bytes)
+    measured = verified_public_files(payload, receipt)
+    assert not output.exists() and output.parent.is_dir()
+    # Only a fresh test-owned destination is protected; never change the
+    # runner's temp ancestry. copyfile deliberately does not copy source ACLs.
+    ws.write_private(output / "installer-receipt.json", receipt_bytes)
+    destination = output / "payload"
+    for relative in measured:
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(payload / relative, target)
+    assert verified_public_files(destination, receipt) == measured
+    # Check the actual post-copy DACLs with the unchanged production reader.
+    from pocketshell.gateway.service_agent_install import MAX_DOCUMENT, NativePaths
+    from pocketshell.gateway.service_windows import WindowsApi
+    api = WindowsApi()
+    paths, sid = NativePaths(api), api.current_sid()
+    result = paths.file(str(destination / "host-runtime-catalog.json"), sid,
+                        private=False, max_bytes=MAX_DOCUMENT, root=str(destination))
+    assert result["sha256"] == receipt["catalogSHA256"]
+    rows = paths.inventory(str(destination / "runtime"), sid, private=False,
+                           root=str(destination / "runtime"), max_files=16384)
+    wanted = {row["path"]: row["sha256"] for row in json.loads(result["bytes"])["files"]}
+    assert set(rows) == set(wanted)
+    for relative in rows:
+        checked = paths.file(str(destination / "runtime" / relative), sid, private=False,
+                             max_bytes=0, root=str(destination / "runtime"))
+        assert checked["sha256"] == wanted[relative]
+    return destination
 
 
 def ssh_string(value):
@@ -44,21 +113,11 @@ def interrupt_to_fresh_prompt(process, chunks, wait):
 
 class Endpoint:
     def __init__(self, payload, *, allow_dirty_component=False):
-        self.payload = Path(payload).resolve()
-        self.stage = self.payload / "runtime"
-        self.catalog = json.loads((self.payload / "host-runtime-catalog.json").read_bytes())
-        receipt = json.loads((self.payload.parent / "installer-receipt.json").read_text())
+        self.payload = Path(payload).absolute()
+        receipt_bytes = (self.payload.parent / "installer-receipt.json").read_bytes()
+        receipt = json.loads(receipt_bytes)
         assert receipt["sourceDirty"] is False or allow_dirty_component
-        assert receipt["catalogSHA256"] == digest(self.payload / "host-runtime-catalog.json")
-        assert receipt["source"] == self.catalog["source"]
         self.qualification = "dirty-local-component" if receipt["sourceDirty"] else "clean-exact-head-artifact"
-        wanted = {row["path"]: row["sha256"] for row in self.catalog["files"]}
-        actual = {}
-        for path in self.stage.rglob("*"):
-            assert not path.is_symlink() and not path.is_junction()
-            if path.is_file():
-                actual[path.relative_to(self.stage).as_posix()] = digest(path)
-        assert actual == wanted
         self.installed = None
         self.ids = set()
         self.kill_proofs = []
@@ -69,6 +128,9 @@ class Endpoint:
         from pocketshell.gateway.service_agent_install import known_folders
         self.top = Path(known_folders()["USERPROFILE"]) / ("PocketShell Native Test " + self.nonce)
         ws.write_private(self.top / "test-owned.json", json.dumps({"nonce": self.nonce}).encode())
+        self.payload = stage_public_payload(self.payload, self.top / "public-producer", receipt_bytes)
+        self.stage = self.payload / "runtime"
+        self.catalog = json.loads((self.payload / "host-runtime-catalog.json").read_bytes())
         self.workspace = self.top / "workspace data"
         ws.write_private(self.workspace / "test-owned.json", b'{"testOnly":true}')
         self.user_data = self.top / "host"

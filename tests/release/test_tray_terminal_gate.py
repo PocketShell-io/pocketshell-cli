@@ -1,9 +1,82 @@
 """The normal artifact route must retain the non-optional native gate."""
 import importlib.util
+import json
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def public_copy_fixture(tmp_path):
+    spec = importlib.util.spec_from_file_location("tray_terminal_fixture", ROOT / "tests/release/tray_terminal_fixture.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    payload = tmp_path / "payload"
+    files = {"GatewayTray.exe": b"tray", "pocketshell.exe": b"cli",
+             "endpoint/bin/sshd.exe": b"backend", "psc-ssh/ssh.exe": b"client",
+             "python/app.zip": b"app", "shell/.measured-hidden": b"public hidden file"}
+    for name, data in files.items():
+        path = payload / "runtime" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    (payload / "psc-ssh").mkdir()
+    (payload / "psc-ssh/ssh.exe").write_bytes(files["psc-ssh/ssh.exe"])
+    backend = {"source": "backend-source", "files": {"sshd.exe": module.digest(payload / "runtime/endpoint/bin/sshd.exe")}}
+    backend_path = payload / "private-endpoint-build-receipt.json"
+    backend_path.write_text(json.dumps(backend))
+    catalog = {"source": "fixture-source", "files": [
+        {"path": name, "sha256": module.digest(payload / "runtime" / name)} for name in files]}
+    catalog_path = payload / "host-runtime-catalog.json"
+    catalog_path.write_text(json.dumps(catalog))
+    receipt = {"source": "fixture-source", "files": len(files), "catalogSHA256": module.digest(catalog_path),
+               "privateEndpoint": {**backend, "receiptSHA256": module.digest(backend_path)},
+               "launcherSHA256": module.digest(payload / "runtime/GatewayTray.exe"),
+               "cliLauncher": {"sha256": module.digest(payload / "runtime/pocketshell.exe")}}
+    return module, payload, receipt
+
+
+def test_public_copy_inventory_keeps_exact_catalog_backend_client_and_hidden_files(tmp_path):
+    module, payload, receipt = public_copy_fixture(tmp_path)
+    measured = module.verified_public_files(payload, receipt)
+    assert len(measured) == receipt["files"] + 3
+    assert "runtime/shell/.measured-hidden" in measured
+    assert measured["psc-ssh/ssh.exe"] == measured["runtime/psc-ssh/ssh.exe"]
+
+
+@pytest.mark.parametrize("mutation", ["extra", "runtime", "client", "catalog", "backend", "hardlink"])
+def test_public_copy_refuses_unmeasured_or_changed_bytes_before_copy(tmp_path, mutation):
+    module, payload, receipt = public_copy_fixture(tmp_path)
+    target = payload / {"extra": "personal-credentials.json", "runtime": "runtime/python/app.zip",
+                        "client": "psc-ssh/ssh.exe", "catalog": "host-runtime-catalog.json",
+                        "backend": "private-endpoint-build-receipt.json", "hardlink": "runtime/python/app.zip"}[mutation]
+    if mutation == "hardlink":
+        (tmp_path / "alias").hardlink_to(target)
+    else:
+        target.write_bytes(b"untrusted")
+    with pytest.raises(AssertionError):
+        module.verified_public_files(payload, receipt)
+
+
+@pytest.mark.parametrize("path", ["../outside", "/absolute", "C:/drive", "bad\\path"])
+def test_public_copy_refuses_unsafe_catalog_names(tmp_path, path):
+    module, payload, receipt = public_copy_fixture(tmp_path)
+    catalog_path = payload / "host-runtime-catalog.json"
+    catalog = json.loads(catalog_path.read_bytes())
+    catalog["files"][0]["path"] = path
+    catalog_path.write_text(json.dumps(catalog))
+    receipt["catalogSHA256"] = module.digest(catalog_path)
+    with pytest.raises(AssertionError):
+        module.verified_public_files(payload, receipt)
+
+
+def test_public_copy_refuses_reparse_ancestry_before_reading(tmp_path, monkeypatch):
+    module, payload, receipt = public_copy_fixture(tmp_path)
+    original = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda self: self == payload.parent or original(self))
+    with pytest.raises(AssertionError):
+        module.verified_public_files(payload, receipt)
 
 
 def test_normal_release_requires_exact_native_inventory_before_upload():
