@@ -81,3 +81,21 @@ def test_every_enabled_account_gateway_help_encodes_strict_cp1252():
                                 capture_output=True, timeout=30)
         assert result.returncode == 0, (args, result.stderr.decode("cp1252"))
         assert b"UnicodeEncodeError" not in result.stderr
+
+
+def test_windows_job_import_does_not_load_native_ctypes():
+    script = """
+import importlib.abc, sys
+class RefuseNative(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'ctypes' or fullname.startswith('ctypes.'):
+            raise AssertionError('Native API loaded during registration: ' + fullname)
+sys.meta_path.insert(0, RefuseNative())
+for name in list(sys.modules):
+    if name == 'ctypes' or name.startswith('ctypes.'):
+        del sys.modules[name]
+import pocketshell.runtime.windows_job
+assert issubclass(pocketshell.runtime.windows_job.JobError, RuntimeError)
+"""
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

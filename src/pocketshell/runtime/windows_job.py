@@ -1,24 +1,9 @@
 """Read-only verification of aplexer's named Windows session containment job."""
 from __future__ import annotations
 
-import ctypes as c
-from ctypes import wintypes as w
-
 
 class JobError(RuntimeError):
     pass
-
-
-class _Basic(c.Structure):
-    _fields_ = [("process_time", c.c_int64), ("job_time", c.c_int64), ("flags", w.DWORD),
-                ("min_working_set", c.c_size_t), ("max_working_set", c.c_size_t),
-                ("active_processes", w.DWORD), ("affinity", c.c_size_t),
-                ("priority", w.DWORD), ("scheduling", w.DWORD)]
-
-
-class _Extended(c.Structure):
-    _fields_ = [("basic", _Basic), ("io", c.c_uint64 * 6), ("process_memory", c.c_size_t),
-                ("job_memory", c.c_size_t), ("peak_process", c.c_size_t), ("peak_job", c.c_size_t)]
 
 
 def verify(session_id: str, workload_pid: int, requested: int | None = None) -> dict:
@@ -27,6 +12,20 @@ def verify(session_id: str, workload_pid: int, requested: int | None = None) -> 
     JobMemoryLimit measures committed private memory, not Linux resident RAM.
     No process is assigned, killed or modified by this check.
     """
+    # Keep command registration/help independent of native API loading.
+    import ctypes as c
+    from ctypes import wintypes as w
+
+    class _Basic(c.Structure):
+        _fields_ = [("process_time", c.c_int64), ("job_time", c.c_int64), ("flags", w.DWORD),
+                    ("min_working_set", c.c_size_t), ("max_working_set", c.c_size_t),
+                    ("active_processes", w.DWORD), ("affinity", c.c_size_t),
+                    ("priority", w.DWORD), ("scheduling", w.DWORD)]
+
+    class _Extended(c.Structure):
+        _fields_ = [("basic", _Basic), ("io", c.c_uint64 * 6), ("process_memory", c.c_size_t),
+                    ("job_memory", c.c_size_t), ("peak_process", c.c_size_t), ("peak_job", c.c_size_t)]
+
     kernel = c.WinDLL("kernel32", use_last_error=True)
     kernel.OpenJobObjectW.argtypes = [w.DWORD, w.BOOL, w.LPCWSTR]
     kernel.OpenJobObjectW.restype = w.HANDLE
