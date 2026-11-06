@@ -325,6 +325,31 @@ def stage_guardian(root, catalog):
     catalog["lineage"]["policy"]["sourceSHA256"] = expected[2]
 
 
+def stage_cli_launcher(source, root, catalog):
+    """Stage the current GUI-subsystem CLI entry, preserving its catalog role."""
+    if source is None:
+        raise ValueError("The current source-built CLI launcher is required")
+    source = Path(source)
+    with source.open("rb") as stream:
+        header = stream.read(4096)
+    try:
+        pe, = struct.unpack_from("<I", header, 0x3c)
+        valid = (header[:2] == b"MZ" and header[pe:pe+4] == b"PE\0\0"
+                 and struct.unpack_from("<H", header, pe+4)[0] == 0x8664
+                 and struct.unpack_from("<H", header, pe+24)[0] == 0x20b
+                 and struct.unpack_from("<H", header, pe+24+68)[0] == 2)
+    except struct.error:
+        valid = False
+    if not valid:
+        raise ValueError("The current CLI launcher must be an x64 GUI-subsystem PE")
+    rows = [row for row in catalog["files"] if row["role"] == "cli"]
+    if len(rows) != 1:
+        raise ValueError("The base catalog has no single CLI launcher")
+    target = root / rows[0]["path"]
+    shutil.copyfile(source, target)
+    return {"path": rows[0]["path"], "sha256": digest(target)}
+
+
 def stage_python_application(root):
     """Build the frozen Python application for a measured Windows closure."""
     with tempfile.TemporaryDirectory() as scratch:
@@ -388,6 +413,7 @@ def build(args):
     backend_receipt = stage_private_backend(args.endpoint_backend, args.endpoint_backend_receipt_sha256, root, catalog)
     shutil.copyfile(Path(args.endpoint_backend) / "receipt.json", out / "payload/private-endpoint-build-receipt.json")
     shutil.copyfile(args.tray_launcher, root / "GatewayTray.exe")
+    cli_launcher = stage_cli_launcher(args.cli_launcher, root, catalog)
     stage_python_application(root)
     stage_guardian(root, catalog)
     helper_receipt = stage_helper(args.helper, args.helper_sha256, args.helper_version, root, catalog)
@@ -431,6 +457,7 @@ def build(args):
     receipt["helper"] = helper_receipt
     receipt["psc"] = psc_receipt
     receipt["privateEndpoint"] = backend_receipt
+    receipt["cliLauncher"] = cli_launcher
     (out / "installer-receipt.json").write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt, indent=2))
 
@@ -442,6 +469,7 @@ if __name__ == "__main__":
     parser.add_argument("--aplexer-cli-wheel", required=True, help="Pinned aplexer 0.1.13 Windows CLI wheel")
     parser.add_argument("--aplexer-client-wheel", required=True, help="Pinned aplexer-client 0.1.13 Windows wheel")
     parser.add_argument("--tray-launcher", required=True, help="native/launcher built with -X main.module=pocketshell.tray_bundle")
+    parser.add_argument("--cli-launcher", required=True, help="native/launcher built from this source for the default CLI entry")
     parser.add_argument("--psc-zip", required=True, help="Reviewed standalone psc-windows-x64 zip")
     parser.add_argument("--psc-sha256", required=True, help="Expected SHA256 of the PSC zip")
     parser.add_argument("--ssh-zip", required=True, help="Microsoft's portable OpenSSH-Win64.zip")

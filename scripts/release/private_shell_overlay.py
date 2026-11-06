@@ -68,6 +68,40 @@ set_managed_commands(void)
 
 '''
 
+# Encode ONE Windows CRT argv operand. This does not quote a Bash program:
+# after Windows decoding Bash receives the exact SSH command as its -c script.
+PTY_ARGV = r'''static char *
+pocketshell_quote_pty_script(const char *script)
+{
+    size_t length = strlen(script), slashes = 0;
+    char *encoded, *out;
+    if (length > (SIZE_MAX - 3) / 2) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    if ((encoded = malloc(length * 2 + 3)) == NULL)
+        return NULL;
+    out = encoded;
+    *out++ = '"';
+    for (const char *p = script; ; p++) {
+        if (*p == '\\') {
+            slashes++;
+            continue;
+        }
+        size_t count = (*p == '"' || *p == '\0') ? slashes * 2 : slashes;
+        while (count--) *out++ = '\\';
+        slashes = 0;
+        if (*p == '\0') break;
+        if (*p == '"') *out++ = '\\';
+        *out++ = *p;
+    }
+    *out++ = '"';
+    *out = '\0';
+    return encoded;
+}
+
+'''
+
 
 def patch_pwd(text):
     begin = text.index("static int\nset_defaultshell()\n{")
@@ -89,6 +123,26 @@ def patch_session(text):
     if patched.count(old) != 1:
         raise ValueError("Unexpected upstream environment PATH filter")
     patched = patched.replace(old, '_strnicmp(env_name, "PATH=", strlen("PATH="))')
+    # The PTY branch constructs CreateProcessW's command line directly, unlike
+    # the non-PTY posix_spawn argv below. Raw SSH scripts otherwise lose every
+    # word after the first when Bash interprets its -c operand.
+    old_pty = '''\t\tif (command) {
+\t\t\tsize_t len = strlen(shell) + 1 + strlen(shell_command_option_local) + 1 + strlen(command) + 1;'''
+    new_pty = '''\t\tif (command) {
+            char *encoded_script = shell_type == SH_BASH ? pocketshell_quote_pty_script(command) : NULL;
+            const char *pty_script = shell_type == SH_BASH ? encoded_script : command;
+            if (pty_script == NULL)
+                goto cleanup;
+\t\t\tsize_t len = strlen(shell) + 1 + strlen(shell_command_option_local) + 1 + strlen(pty_script) + 1;'''
+    if patched.count(old_pty) != 1 or patched.count('strcat_s(pty_cmd, len, command);') != 1:
+        raise ValueError("Unexpected upstream PTY shell command construction")
+    patched = patched.replace(old_pty, new_pty)
+    patched = patched.replace('strcat_s(pty_cmd, len, command);', 'strcat_s(pty_cmd, len, pty_script);')
+    end_pty = '\t\t} else {\n\t\t\tif (shell_arguments) {'
+    if patched.count(end_pty) != 1:
+        raise ValueError("Unexpected upstream PTY no-command branch")
+    patched = patched.replace(end_pty, '            free(encoded_script);\n'
+                              '            if (pty_cmd == NULL)\n                goto cleanup;\n' + end_pty)
     # Bash detects SSH stdin and reads .bashrc for noninteractive commands.
     # shell_arguments is only used for an interactive PTY by upstream; it does
     # not protect this exec branch. Pass separate argv elements for exec, and
@@ -117,7 +171,7 @@ def patch_session(text):
     anchor = "static int\nsetup_session_env(struct ssh *ssh, Session* s)"
     if anchor not in patched:
         raise ValueError("Unexpected upstream session environment implementation")
-    patched = patched.replace(anchor, COMMANDS + anchor)
+    patched = patched.replace(anchor, PTY_ARGV + COMMANDS + anchor)
     begin = patched.index(anchor)
     end = patched.index("\nint do_exec_windows", begin)
     section = patched[begin:end]

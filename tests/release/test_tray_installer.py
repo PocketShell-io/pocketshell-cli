@@ -154,6 +154,47 @@ def test_catalog_requires_complete_aplexer(tmp_path):
         builder.verify_inventory(tmp_path, inventory(tmp_path))
 
 
+def _gui_cli_fixture(path):
+    data = bytearray(512)
+    data[:2] = b'MZ'
+    struct.pack_into('<I', data, 0x3c, 128)
+    data[128:132] = b'PE\0\0'
+    struct.pack_into('<H', data, 132, 0x8664)
+    struct.pack_into('<H', data, 152, 0x20b)
+    struct.pack_into('<H', data, 220, 2)
+    path.write_bytes(data)
+
+
+def test_current_cli_launcher_replaces_base_and_binds_its_actual_digest(tmp_path):
+    current = tmp_path / 'current.exe'
+    _gui_cli_fixture(current)
+    root = tmp_path / 'runtime'
+    root.mkdir()
+    (root / 'pocketshell.exe').write_bytes(b'old BASE launcher')
+    catalog = {'files': [{'role': 'cli', 'path': 'pocketshell.exe'}]}
+    receipt = builder.stage_cli_launcher(current, root, catalog)
+    assert (root / 'pocketshell.exe').read_bytes() == current.read_bytes()
+    assert receipt == {'path': 'pocketshell.exe', 'sha256': builder.digest(current)}
+
+
+def test_missing_or_console_subsystem_cli_cannot_replace_base(tmp_path):
+    root = tmp_path / 'runtime'
+    root.mkdir()
+    target = root / 'pocketshell.exe'
+    target.write_bytes(b'old BASE launcher')
+    catalog = {'files': [{'role': 'cli', 'path': 'pocketshell.exe'}]}
+    with pytest.raises(ValueError, match='required'):
+        builder.stage_cli_launcher(None, root, catalog)
+    current = tmp_path / 'wrong.exe'
+    _gui_cli_fixture(current)
+    data = bytearray(current.read_bytes())
+    struct.pack_into('<H', data, 220, 3)
+    current.write_bytes(data)
+    with pytest.raises(ValueError, match='GUI-subsystem'):
+        builder.stage_cli_launcher(current, root, catalog)
+    assert target.read_bytes() == b'old BASE launcher'
+
+
 def test_zip_preserves_namespace_packages_and_reproducibility(tmp_path):
     import zipfile
     a, b = tmp_path / "a.zip", tmp_path / "b.zip"

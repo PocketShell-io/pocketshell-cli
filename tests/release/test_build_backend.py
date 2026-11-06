@@ -90,6 +90,10 @@ def test_managed_session_path_prefers_tools_and_excludes_user_path(bb):
               '\t/* PATH is a special case. */\n L"Environment", L"PATH";\n}\n'
               'static int\nsetup_session_env(struct ssh *ssh, Session* s)\n{\n\tret = 0;\n}\n'
               '\nint do_exec_windows\n'
+              '\t\tif (command) {\n'
+              '\t\t\tsize_t len = strlen(shell) + 1 + strlen(shell_command_option_local) + 1 + strlen(command) + 1;\n'
+              'strcat_s(pty_cmd, len, command);\n'
+              '\t\t} else {\n\t\t\tif (shell_arguments) {\n}\n}\n'
               'char *spawn_argv[4] = { NULL, };\n'
               '\t\t\tif (exec_command) {\n'
               '\t\t\t\tspawn_argv[1] = shell_command_option_local;\n'
@@ -108,6 +112,10 @@ def test_managed_session_path_prefers_tools_and_excludes_user_path(bb):
     assert 'BASH_FUNC_a%%' in patched
     assert 'BASH_FUNC_aplexer%%' in patched
     assert 'set_managed_commands();\n\tret = 0;' in patched
+    assert 'shell_type == SH_BASH ? pocketshell_quote_pty_script(command)' in patched
+    assert 'strcat_s(pty_cmd, len, command);' not in patched
+    assert 'strcat_s(pty_cmd, len, pty_script);' in patched
+    assert 'free(encoded_script);' in patched
 
 
 @pytest.mark.parametrize("overlay", [None, "0" * 64, "current"])
