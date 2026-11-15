@@ -321,3 +321,13 @@ def test_normal_setup_uses_vault_instead_of_manual_public_key_picker(tmp_path, m
     assert bundle.setup(installed) is True
     assert events == [("vault", password), ("start", None)]
     assert not hasattr(bundle, "select_public_key")
+
+
+def test_idle_tray_does_not_poll_with_a_cold_status_child_every_few_seconds():
+    """Regression: a 5 s poll of a multi-second `--status` child burned ~1 core."""
+    import inspect
+    from pocketshell import tray_bundle
+
+    assert tray_bundle.STATUS_POLL_INTERVAL >= 30
+    src = inspect.getsource(tray_bundle.run_tray)
+    assert "poll_interval=STATUS_POLL_INTERVAL" in src
