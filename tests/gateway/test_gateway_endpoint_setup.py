@@ -177,7 +177,8 @@ def test_the_production_trio_is_compiled_generically():
 
     fresh = importlib.reload(importlib.import_module("pocketshell.gateway.service_endpoint"))
     assert fresh.ALLOWED_GUARDIAN_SOURCES == frozenset({TRIO, (fresh.SERVICING_GUARDIAN_SHA256, *TRIO[1:]),
-        (fresh.INTERACTIVE_GUARDIAN_SHA256, TRIO[1], fresh.INTERACTIVE_POLICY_SHA256)})
+        (fresh.INTERACTIVE_GUARDIAN_SHA256, TRIO[1], fresh.INTERACTIVE_POLICY_SHA256),
+        (fresh.LOGIN_SHELL_GUARDIAN_SHA256, TRIO[1], fresh.INTERACTIVE_POLICY_SHA256)})
     assert fresh.ALLOWED_ENDPOINT_MANIFEST_SHA256 == frozenset()  # NO per-host compiled digest
 
 
@@ -969,3 +970,41 @@ def test_regular_manifest_does_not_become_isolated_during_repair():
     receipt = install(host, paths)
     manifest = ep.parse_manifest(paths.files[paths.key(receipt['endpoint']['manifest'])][1], receipt['endpoint']['manifest'])
     assert not eps.isolated_session_manifest(manifest)
+
+
+def _shell_engine(host, paths):
+    import tomllib
+    receipt = install(host, paths)
+    m = ep.parse_manifest(paths.files[paths.key(receipt["endpoint"]["manifest"])][1], receipt["endpoint"]["manifest"])
+    toml = tomllib.loads(paths.files[paths.key(m.config_bindings["backendConfig"])][1].decode("utf-8"))
+    return m, toml["engines"]["shell"]
+
+
+def test_login_shell_guardian_gets_a_login_interactive_shell_engine(monkeypatch):
+    """User-facing: durable shell sessions must read ~/.bash_profile (aliases, PATH)."""
+    host = Host()
+    files = endpoint_files()
+    monkeypatch.setattr(ep, "LOGIN_SHELL_GUARDIAN_SHA256", sha(files["guardian/guardian.py"][0]))
+    m, shell = _shell_engine(host, staged(host, files))
+    assert shell["command"] == [m.raw_bindings["backendExecutable"], "--login", "-i"]
+    assert shell["env_unset"] == ["BASH_ENV", "ENV", "ZDOTDIR"]
+
+
+def test_an_older_guardian_keeps_the_profile_less_shell_engine_it_pins():
+    host = Host()
+    m, shell = _shell_engine(host, staged(host))
+    assert shell["command"] == [m.raw_bindings["backendExecutable"], "--noprofile", "--norc", "-i"]
+    assert shell["env_unset"] == ["BASH_ENV", "ENV", "ZDOTDIR"]
+
+
+def test_the_shipped_login_shell_guardian_pins_exactly_the_generated_argv():
+    from pathlib import Path
+    root = Path(__file__).parents[2] / "release/inputs/guardian-login-shell"
+    trio = tuple(sha((root / n).read_bytes()) for n in ep.SOURCE_NAMES)
+    assert trio == (ep.LOGIN_SHELL_GUARDIAN_SHA256, TRIO[1], ep.INTERACTIVE_POLICY_SHA256)
+    text = (root / "guardian.py").read_text(encoding="utf-8")
+    argv = ",".join(repr(a) for a in eps.LOGIN_SHELL_ARGV)
+    assert f"[m['configBindings']['backendExecutable'],{argv}]" in text and "'--norc'" not in text
+    for line in (root / "SHA256SUMS").read_text().splitlines():
+        digest, name = line.split()
+        assert sha((root / name).read_bytes()) == digest

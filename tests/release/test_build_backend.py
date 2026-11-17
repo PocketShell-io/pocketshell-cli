@@ -171,3 +171,28 @@ def test_closure_rejects_backends_without_current_private_shell_path(overlay, tm
     else:
         with pytest.raises(SystemExit, match="current private shell/PATH overlay"):
             closure._verified_receipt(tmp_path, "openssh")
+
+
+def test_session_path_is_managed_dirs_then_fresh_machine_and_user_registry_path(bb):
+    """Maintainer report: Windows endpoint shells had no claude/codex/npm/git on PATH."""
+    import private_shell_overlay as o
+    assert "RegQueryValueExW(key, L\"Path\"" in o.REGISTRY_PATH
+    assert 'Session Manager\\\\Environment' in o.REGISTRY_PATH and "RegOpenCurrentUser" in o.REGISTRY_PATH
+    # REG_EXPAND_SZ expands against the USER's environment, not sshd-session's closed one
+    assert "ExpandEnvironmentStringsForUserW(token" in o.REGISTRY_PATH and 'userenv.lib' in o.REGISTRY_PATH
+    assert "REG_EXPAND_SZ" in o.REGISTRY_PATH and "wcschr(entry, L'%') != NULL" in o.REGISTRY_PATH
+    path = o.PATH
+    managed = path.index("endpoint\\\\shell\\\\mingw64\\\\bin")
+    machine = path.index("pocketshell_append_registry_path(path, _countof(path), 0)")
+    user = path.index("pocketshell_append_registry_path(path, _countof(path), 1)")
+    publish = path.index('_wputenv_s(L"PATH", path)')
+    assert managed < machine < user < publish  # managed tools first, machine before user, then export
+
+
+def test_interactive_shell_is_a_login_shell_and_exec_stays_profile_less(bb):
+    import private_shell_overlay as o
+    assert o.INTERACTIVE_SHELL_ARGUMENTS == "--login -i"
+    assert o.EXEC_SHELL_COMMAND_OPTION == "--noprofile --norc -c"
+    assert f'shell_arguments = _strdup("{o.INTERACTIVE_SHELL_ARGUMENTS}")' in o.PWD
+    assert f'shell_command_option = _strdup("{o.EXEC_SHELL_COMMAND_OPTION}")' in o.PWD
+    assert "--norc -i" not in o.PWD

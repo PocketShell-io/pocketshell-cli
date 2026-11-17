@@ -312,8 +312,8 @@ def gateway_auth_probe(helper, timeout=30):
 
 def stage_guardian(root, catalog):
     from pocketshell.gateway import service_endpoint as ep
-    source = REPO / "release/inputs/guardian-interactive"
-    expected = (ep.INTERACTIVE_GUARDIAN_SHA256,
+    source = REPO / "release/inputs/guardian-login-shell"
+    expected = (ep.LOGIN_SHELL_GUARDIAN_SHA256,
                 "cab601e27e9814ee8c4e3cd72e0dfd55fd2808682d302655725885b4a4812231",
                 ep.INTERACTIVE_POLICY_SHA256)
     for name, sha in zip(ep.SOURCE_NAMES, expected):

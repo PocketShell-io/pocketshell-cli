@@ -111,7 +111,12 @@ def shell_prompt_seen(output):
     rendered = re.sub(
         rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]*[@-~=>])",
         b"", output)
-    return re.search(rb"(?:^|[\r\n])bash-[0-9]+(?:\.[0-9]+)*[$#] ?(?:\r?\n|$)", rendered) is not None
+    if re.search(rb"(?:^|[\r\n])bash-[0-9]+(?:\.[0-9]+)*[$#] ?(?:\r?\n|$)", rendered) is not None:
+        return True
+    # Login shells (`bash --login -i`) get the bundled /etc/bash.bashrc prompt:
+    # a title/status line `user@host MSYSTEM cwd` and then a bare `$ ` / `# `
+    # as the LAST thing painted. A bare symbol alone is never a prompt.
+    return re.search(rb"@[^\r\n]*\r?\n[$#] ?$", rendered) is not None
 
 
 def interrupt_to_fresh_prompt(process, chunks, wait):
@@ -133,6 +138,7 @@ class Endpoint:
         self.kill_proofs = []
         self.memory_observations = []
         self.oom_preservations = []
+        self.environment_proofs = []
         self.nonce = uuid4().hex
         from pocketshell import windows_security as ws
         from pocketshell.gateway.service_agent_install import known_folders
@@ -321,11 +327,15 @@ class Endpoint:
         self.ids.add(ident)
         return result
 
-    def attach_io(self, ident, label, *, allocation_probe=False, interrupt_probe=False):
+    def attach_io(self, ident, label, *, allocation_probe=False, interrupt_probe=False, script=None):
         oracle = self.workspace / (label + ".txt")
         first, second = int(uuid4().hex[:4], 16), 7341
         expected = "NATIVE43_" + str(first + second)
         command = f"v=$(({first}+{second})); printf 'NATIVE43_%s\\n' \"$v\" > {shlex.quote(oracle.as_posix())}; printf 'NATIVE43_%s\\n' \"$v\"\r"
+        if script is not None:
+            # script(oracle_posix, first, second) -> (typed command, expected output). The command
+            # must write exactly the expected line to the oracle file itself.
+            command, expected = script(oracle.as_posix(), first, second)
         if allocation_probe:
             from tray_memory_oracle import child_code
             allow = allocation_probe == "allow"
