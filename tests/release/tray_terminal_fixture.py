@@ -114,9 +114,9 @@ def shell_prompt_seen(output):
     if re.search(rb"(?:^|[\r\n])bash-[0-9]+(?:\.[0-9]+)*[$#] ?(?:\r?\n|$)", rendered) is not None:
         return True
     # Login shells (`bash --login -i`) get the bundled /etc/bash.bashrc prompt:
-    # a title/status line `user@host MSYSTEM cwd` and then a bare `$ ` / `# `
-    # as the LAST thing painted. A bare symbol alone is never a prompt.
-    return re.search(rb"@[^\r\n]*\r?\n[$#] ?$", rendered) is not None
+    # a title/status line `user@host MSYSTEM cwd` and then a line holding only `$` / `#`
+    # (conhost may repaint blank lines after it). A bare symbol alone is never a prompt.
+    return re.search(rb"@[^\r\n]*\r?\n[$#] ?(?:\r?\n|$)", rendered) is not None
 
 
 def interrupt_to_fresh_prompt(process, chunks, wait):

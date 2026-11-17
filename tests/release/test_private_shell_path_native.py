@@ -60,7 +60,8 @@ def _msvc(tmp_path):
               "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"], text=True).strip())
     vc = sorted((vs / "VC/Tools/MSVC").iterdir())[-1]
     sdk = Path(os.environ["ProgramFiles(x86)"]) / "Windows Kits/10"
-    version = sorted((sdk / "Include").iterdir())[-1].name
+    version = sorted(d.name for d in (sdk / "Include").iterdir()
+                     if d.name.startswith("10.0.") and (d / "um/windows.h").is_file())[-1]
     env = dict(os.environ, INCLUDE=";".join(map(str, [vc / "include", *[
         sdk / "Include" / version / part for part in ("ucrt", "shared", "um")]])),
         LIB=";".join(map(str, [vc / "lib/x64", *[sdk / "Lib" / version / part / "x64" for part in ("ucrt", "um")]])))

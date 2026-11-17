@@ -165,6 +165,10 @@ def test_prompt_readiness_accepts_conhost_cursor_space_without_weakening_io():
         assert module.shell_prompt_seen(output)
     # The login shell's bundled /etc/bash.bashrc prompt (status line, then a bare symbol LAST).
     login = b"\x1b]0;/c/x\x07\r\n\x1b[32muser@host \x1b[35mMSYS \x1b[33m/c/x\x1b[0m\r\n$ "
+    # Verbatim conhost paint captured from run 44173566901 (status line, `$`, blank repaint lines).
+    painted_login = (b"\x1b[?25l\x1b[K\x1b[32m\r\nrunneradmin@runnervm \x1b[35mMSYS \x1b[33m~/P N T/workspace data\x1b[K\x1b[m"
+                     b"\r\n$\x1b[K\r\n\x1b[K\r\n\x1b[K\x1b[3;3H\x1b[?25h\r$\x1b[K\x1b[1C")
+    assert module.shell_prompt_seen(painted_login)
     assert module.shell_prompt_seen(login) and module.shell_prompt_seen(login.replace(b"$ ", b"# "))
     assert not module.shell_prompt_seen(login + b"echo hi") and not module.shell_prompt_seen(b"\r\n$ ")
     for output in (b"", b"Starting worker", b"cash$100", b"bash-9.9$unfinished", b"some $ output", b"# ",
