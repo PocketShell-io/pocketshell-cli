@@ -159,11 +159,13 @@ def user_environment(host, nonce):
     root = host.top / "registry-path-tools"
     shadow, literal, expand = root / "shadow bin", root / "literal bin", root / "expand bin"
     whoami = Path(os.environ["SystemRoot"]) / "System32/whoami.exe"
-    for directory, names in ((shadow, ("a.exe", "pocketshell.exe")), (literal, ("psregprobe.exe", "claude.exe")),
+    for directory, names in ((shadow, ("a.exe", "pocketshell.exe")), (literal, ("psregprobe.exe",)),
                              (expand, ("psexpandprobe.exe",))):
         directory.mkdir(parents=True)
         for name in names:
             shutil.copyfile(whoami, directory / name)
+    # A stand-in "claude" that keeps running (an agent that exits at once cannot be verified as a session).
+    shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32/cmd.exe", literal / "claude.exe")
     entries = [str(shadow), str(literal), "%USERPROFILE%\\" + str(expand.relative_to(profile))]
     dotfiles = {name: profile / name for name in (".bash_profile", ".bashrc")}
     saved = {name: path.read_bytes() for name, path in dotfiles.items() if path.exists()}
