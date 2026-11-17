@@ -305,6 +305,13 @@ def patch_session(text):
     if 'L"Environment", L"PATH"' not in text[begin:end]:
         raise ValueError("Unexpected upstream session PATH implementation")
     patched = text[:begin] + PATH + text[end:]
+    # The PATH block lives in a function that precedes setup_session_env: define the
+    # registry helpers before that function (MSVC rejects a later definition of a
+    # function first used implicitly, error C2371).
+    call = patched.index("pocketshell_append_registry_path(path, _countof(path), 0)")
+    function_end = patched.rfind("\n}\n", 0, call)
+    insert_at = function_end + 3 if function_end >= 0 else 0
+    patched = patched[:insert_at] + "\n" + REGISTRY_PATH + patched[insert_at:]
     # Win32 environment names are case-insensitive; registry exports usually
     # spell this one 'Path'. It must not overwrite the private PATH above.
     old = 'strncmp(env_name, "PATH=", strlen("PATH="))'
@@ -370,7 +377,7 @@ def patch_session(text):
     anchor = "static int\nsetup_session_env(struct ssh *ssh, Session* s)"
     if anchor not in patched:
         raise ValueError("Unexpected upstream session environment implementation")
-    patched = patched.replace(anchor, MSYS_SPAWN_FLAG + PTY_ARGV + REGISTRY_PATH + COMMANDS + anchor)
+    patched = patched.replace(anchor, MSYS_SPAWN_FLAG + PTY_ARGV + COMMANDS + anchor)
     begin = patched.index(anchor)
     end = patched.index("\nint do_exec_windows", begin)
     section = patched[begin:end]
