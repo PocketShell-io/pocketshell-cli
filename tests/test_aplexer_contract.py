@@ -907,9 +907,11 @@ def test_bundled_aplexer_names_the_agent_running_inside_a_session(
     """
     agent_bin = aplexer_fixture.workspace.parent / "ps2581-bin"
     agent_bin.mkdir()
-    # `sleep` under an agent's name: `comm` and argv[0] both become the token
-    # detection looks for, with no coding agent installed anywhere.
-    (agent_bin / "claude").symlink_to("/bin/sleep")
+    # `sh` under an agent's name: `comm` and argv[0] both become the token
+    # detection looks for, with no coding agent installed anywhere. Not a
+    # symlink to `sleep`: on runners where coreutils is one multicall binary
+    # (uutils) a `claude`-named link exits at once as an unknown applet.
+    (agent_bin / "claude").symlink_to("/bin/sh")
     go_marker = aplexer_fixture.workspace.parent / "ps2581-go"
     pid_file = aplexer_fixture.workspace.parent / "ps2581-agent-pid"
     runner = aplexer_fixture.workspace.parent / "ps2581-session-runner.sh"
@@ -918,7 +920,7 @@ def test_bundled_aplexer_names_the_agent_running_inside_a_session(
     runner.write_text(
         "#!/bin/sh\n"
         f'while [ ! -e "{go_marker}" ]; do sleep 0.05; done\n'
-        f'"{agent_bin}/claude" 3600 &\n'
+        f'"{agent_bin}/claude" -c \'while :; do sleep 1; done\' &\n'
         f'echo $! > "{pid_file}"\n'
         "wait\n"
         "exec sleep 300\n",
