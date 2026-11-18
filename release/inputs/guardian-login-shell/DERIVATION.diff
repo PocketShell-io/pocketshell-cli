@@ -1,0 +1,11 @@
+--- guardian-interactive/guardian.py	2026-11-17 21:26:59.850772910 +0100
++++ guardian-login-shell/guardian.py	2026-11-17 21:30:19.519551334 +0100
+@@ -263,7 +263,7 @@
+     import tomllib
+     backend=tomllib.loads(pathlib.Path(m['configBindings']['backendConfig']).read_text(encoding='utf8'))
+     shell=backend.get('engines',{}).get('shell',{})
+-    if shell.get('command')!=[m['configBindings']['backendExecutable'],'--noprofile','--norc','-i'] or shell.get('env_unset')!=['BASH_ENV','ENV','ZDOTDIR']:raise RuntimeError('Pinned interactive backend command mismatch')
++    if shell.get('command')!=[m['configBindings']['backendExecutable'],'--login','-i'] or shell.get('env_unset')!=['BASH_ENV','ENV','ZDOTDIR']:raise RuntimeError('Pinned interactive backend command mismatch')
+     for p in (m['environment']['TEMP'],m['environment']['TMP']):path_authority(p,m['ownerSID'],True,True)
+     if args.check_only:
+         print(json.dumps({'phase':'preflight-only','manifestSHA256':manifest_sha,'context':context,'port':m['port'],'sourceSHA256':a.digest(pathlib.Path(__file__)),'daemonSpawned':False,'stateAllocated':False}),flush=True)

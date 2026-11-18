@@ -1,9 +1,19 @@
 """Owned Win32 OpenSSH shell/PATH derivation for the catalogued private runtime.
 
-No registry default shell or user/system PATH is consulted. Paths are derived
-from the held sshd-session image's release layout, whose files the guardian
-already validates. This adapter is deliberately not a system OpenSSH build.
+No registry default shell is consulted: the shell is the catalogued bundled
+Bash, derived from the held sshd-session image's release layout, whose files
+the guardian already validates. The managed runtime directories always come
+first in PATH; the machine and user registry Path values follow, read fresh
+for every session (see REGISTRY_PATH), so tools installed after setup resolve.
+Interactive shells are login shells (the user's ~/.bash_profile and ~/.bashrc
+run, as in Git Bash); exec commands keep --noprofile --norc and have BASH_ENV
+and ENV cleared. This adapter is deliberately not a system OpenSSH build.
 """
+
+# The interactive shell argv. The same words are pinned for the aplexer shell
+# engine in service_agent_endpoint.generate() and by the guardian.
+INTERACTIVE_SHELL_ARGUMENTS = "--login -i"
+EXEC_SHELL_COMMAND_OPTION = "--noprofile --norc -c"
 
 PWD = r'''static int
 set_defaultshell()
@@ -19,7 +29,7 @@ set_defaultshell()
     }
     pw_shellpath = utf16_to_utf8(path);
     shell_command_option = _strdup("--noprofile --norc -c");
-    shell_arguments = _strdup("--noprofile --norc -i");
+    shell_arguments = _strdup("--login -i");
     if (!pw_shellpath || !shell_command_option || !shell_arguments) {
         free(pw_shellpath); free(shell_command_option); free(shell_arguments);
         pw_shellpath = shell_command_option = shell_arguments = NULL;
@@ -32,16 +42,135 @@ set_defaultshell()
     return 0;
 }'''
 
-PATH = r'''    /* PocketShell private release: managed tools precede every other directory.
-     * Never import user or registry PATH dependencies. */
+PATH = r'''    /* PocketShell private release: managed tools precede every other directory,
+     * then the machine and user registry Path values, read fresh per session. */
     wchar_t candidate[PATH_MAX], root[PATH_MAX], system[MAX_PATH], path[PATH_MAX * 5];
     if (swprintf_s(candidate, _countof(candidate), L"%s\\..\\..", __wprogdir) < 0 ||
         _wfullpath(root, candidate, _countof(root)) == NULL ||
         !GetSystemDirectoryW(system, _countof(system)) ||
         swprintf_s(path, _countof(path), L"%s\\python;%s;%s\\endpoint\\shell\\usr\\bin;%s\\endpoint\\shell\\mingw64\\bin;%s",
-                   root, root, root, root, system) < 0 ||
-        _wputenv_s(L"PATH", path) != 0 || !SetEnvironmentVariableW(L"PATH", path))
+                   root, root, root, root, system) < 0)
         fatal("Cannot construct the PocketShell private runtime PATH");
+    pocketshell_append_registry_path(path, _countof(path), 0);
+    pocketshell_append_registry_path(path, _countof(path), 1);
+    if (_wputenv_s(L"PATH", path) != 0 || !SetEnvironmentVariableW(L"PATH", path))
+        fatal("Cannot construct the PocketShell private runtime PATH");
+'''
+
+# REGISTRY_PATH appends the `Path` value of one open registry key to a bounded
+# PATH (pocketshell_append_path_value) and opens the machine (HKLM Session
+# Manager Environment) or the current user's (HKCU Environment) key
+# (pocketshell_append_registry_path). REG_EXPAND_SZ is expanded against the
+# USER's environment block (ExpandEnvironmentStringsForUserW with the thread or
+# process token), not sshd-session's own closed environment, which lacks
+# %USERPROFILE%/%LOCALAPPDATA%; a plain REG_SZ is never expanded, like Windows.
+# Entries that are empty, relative, still contain '%', are already present (exact
+# match after normalising "/" to "\\") or do not fit are skipped. Failure to read
+# a key only leaves its directories out: it must never deny the session.
+# RegOpenCurrentUser honours the session's impersonation.
+REGISTRY_PATH = r'''#include <stdlib.h>
+#include <wchar.h>
+#include <wctype.h>
+#include <userenv.h>
+#pragma comment(lib, "userenv.lib")
+#define POCKETSHELL_EXPANDED_CHARS 32768
+static int
+pocketshell_expand_for_user(const wchar_t *raw, wchar_t *out)
+{
+    HANDLE token = NULL;
+    int ok = 0;
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE, TRUE, &token) &&
+        !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE, &token))
+        token = NULL;
+    if (token != NULL) {
+        ok = ExpandEnvironmentStringsForUserW(token, raw, out, POCKETSHELL_EXPANDED_CHARS) != 0;
+        CloseHandle(token);
+    }
+    if (!ok) {
+        DWORD needed = ExpandEnvironmentStringsW(raw, out, POCKETSHELL_EXPANDED_CHARS);
+        ok = needed != 0 && needed <= POCKETSHELL_EXPANDED_CHARS;
+    }
+    out[POCKETSHELL_EXPANDED_CHARS - 1] = L'\0';
+    return ok;
+}
+
+static void
+pocketshell_append_path_value(HKEY key, wchar_t *path, size_t capacity)
+{
+    DWORD type = 0, bytes = 0;
+    wchar_t *raw = NULL, *expanded = NULL, *entry, *next;
+    if (RegQueryValueExW(key, L"Path", NULL, &type, NULL, &bytes) != ERROR_SUCCESS ||
+        (type != REG_SZ && type != REG_EXPAND_SZ) || bytes == 0 || bytes > 65536)
+        return;
+    raw = calloc(bytes / sizeof(wchar_t) + 2, sizeof(wchar_t));
+    expanded = calloc(POCKETSHELL_EXPANDED_CHARS, sizeof(wchar_t));
+    if (raw == NULL || expanded == NULL ||
+        RegQueryValueExW(key, L"Path", NULL, &type, (LPBYTE)raw, &bytes) != ERROR_SUCCESS)
+        goto done;
+    if (type == REG_EXPAND_SZ) {
+        if (!pocketshell_expand_for_user(raw, expanded))
+            goto done;
+    } else if (wcslen(raw) < POCKETSHELL_EXPANDED_CHARS)
+        wcscpy_s(expanded, POCKETSHELL_EXPANDED_CHARS, raw);
+    else
+        goto done;
+    for (entry = expanded; entry != NULL; entry = next) {
+        size_t length, used = wcslen(path);
+        wchar_t *probe;
+        next = wcschr(entry, L';');
+        if (next != NULL)
+            *next++ = L'\0';
+        for (probe = entry; *probe; ++probe)
+            if (*probe == L'/') *probe = L'\\';
+        length = wcslen(entry);
+        while (length > 1 && entry[length - 1] == L'\\')
+            entry[--length] = L'\0';
+        if (length < 3 || !iswalpha(entry[0]) || entry[1] != L':' ||
+            entry[2] != L'\\' || wcschr(entry, L'%') != NULL)
+            continue;
+        if (used + 1 + length + 1 > capacity)
+            continue;
+        probe = path;
+        while ((probe = wcsstr(probe, entry)) != NULL) {
+            size_t at = (size_t)(probe - path);
+            if ((at == 0 || path[at - 1] == L';') &&
+                (probe[length] == L';' || probe[length] == L'\0' ||
+                 (probe[length] == L'\\' &&
+                  (probe[length + 1] == L';' || probe[length + 1] == L'\0'))))
+                break;
+            probe++;
+        }
+        if (probe != NULL)
+            continue;
+        path[used] = L';';
+        wcscpy_s(path + used + 1, capacity - used - 1, entry);
+    }
+done:
+    free(raw);
+    free(expanded);
+}
+
+static void
+pocketshell_append_registry_path(wchar_t *path, size_t capacity, int user_scope)
+{
+    HKEY key = NULL;
+    if (user_scope) {
+        HKEY current = NULL;
+        if (RegOpenCurrentUser(KEY_READ, &current) != ERROR_SUCCESS)
+            return;
+        if (RegOpenKeyExW(current, L"Environment", 0, KEY_READ, &key) != ERROR_SUCCESS)
+            key = NULL;
+        RegCloseKey(current);
+    } else if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                             L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+                             0, KEY_READ, &key) != ERROR_SUCCESS)
+        key = NULL;
+    if (key == NULL)
+        return;
+    pocketshell_append_path_value(key, path, capacity);
+    RegCloseKey(key);
+}
+
 '''
 
 COMMANDS = r'''static void
@@ -176,6 +305,13 @@ def patch_session(text):
     if 'L"Environment", L"PATH"' not in text[begin:end]:
         raise ValueError("Unexpected upstream session PATH implementation")
     patched = text[:begin] + PATH + text[end:]
+    # The PATH block lives in a function that precedes setup_session_env: define the
+    # registry helpers before that function (MSVC rejects a later definition of a
+    # function first used implicitly, error C2371).
+    call = patched.index("pocketshell_append_registry_path(path, _countof(path), 0)")
+    function_end = patched.rfind("\n}\n", 0, call)
+    insert_at = function_end + 3 if function_end >= 0 else 0
+    patched = patched[:insert_at] + "\n" + REGISTRY_PATH + patched[insert_at:]
     # Win32 environment names are case-insensitive; registry exports usually
     # spell this one 'Path'. It must not overwrite the private PATH above.
     old = 'strncmp(env_name, "PATH=", strlen("PATH="))'

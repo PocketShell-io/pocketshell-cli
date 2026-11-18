@@ -130,10 +130,13 @@ def test_normal_release_requires_exact_native_inventory_before_upload():
         "test_private_pty_encoder_preserves_one_exact_windows_operand",
         "test_private_profile_preserves_complete_scripts_and_interactive_shell",
         "test_packaged_launchers_preserve_console_and_quiet_stdio",
+        "test_registry_path_login_shell_and_session_environment",
+        "test_registry_path_expands_against_the_user_not_the_closed_session_env",
     }
     native = (ROOT / "tests/release/test_windows_tray_terminal_native.py").read_text()
     encoder = (ROOT / "tests/release/test_private_pty_argv_native.py").read_text()
-    assert {line.split("(")[0][4:] for line in (native + encoder).splitlines() if line.startswith("def test_")} == module.CASES
+    path_unit = (ROOT / "tests/release/test_private_shell_path_native.py").read_text()
+    assert {line.split("(")[0][4:] for line in (native + encoder + path_unit).splitlines() if line.startswith("def test_")} == module.CASES
     assert 'os.environ["POCKETSHELL_TRAY_TERMINAL_PAYLOAD"]' in native
 
 
@@ -160,6 +163,14 @@ def test_prompt_readiness_accepts_conhost_cursor_space_without_weakening_io():
     assert b"$ " not in painted and b"# " not in painted  # old readiness was RED
     for output in (painted, b"bash-9.9$ ", b"bash-9.9# ", b"bash-9.9$"):
         assert module.shell_prompt_seen(output)
+    # The login shell's bundled /etc/bash.bashrc prompt (status line, then a bare symbol LAST).
+    login = b"\x1b]0;/c/x\x07\r\n\x1b[32muser@host \x1b[35mMSYS \x1b[33m/c/x\x1b[0m\r\n$ "
+    # Verbatim conhost paint captured from run 44173566901 (status line, `$`, blank repaint lines).
+    painted_login = (b"\x1b[?25l\x1b[K\x1b[32m\r\nrunneradmin@runnervm \x1b[35mMSYS \x1b[33m~/P N T/workspace data\x1b[K\x1b[m"
+                     b"\r\n$\x1b[K\r\n\x1b[K\r\n\x1b[K\x1b[3;3H\x1b[?25h\r$\x1b[K\x1b[1C")
+    assert module.shell_prompt_seen(painted_login)
+    assert module.shell_prompt_seen(login) and module.shell_prompt_seen(login.replace(b"$ ", b"# "))
+    assert not module.shell_prompt_seen(login + b"echo hi") and not module.shell_prompt_seen(b"\r\n$ ")
     for output in (b"", b"Starting worker", b"cash$100", b"bash-9.9$unfinished", b"some $ output", b"# ",
                    b"echo bash-9.9$ ", b"echo \x1b[Hbash-9.9$ "):
         assert not module.shell_prompt_seen(output)

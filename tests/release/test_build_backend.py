@@ -171,3 +171,53 @@ def test_closure_rejects_backends_without_current_private_shell_path(overlay, tm
     else:
         with pytest.raises(SystemExit, match="current private shell/PATH overlay"):
             closure._verified_receipt(tmp_path, "openssh")
+
+
+def test_session_path_is_managed_dirs_then_fresh_machine_and_user_registry_path(bb):
+    """Maintainer report: Windows endpoint shells had no claude/codex/npm/git on PATH."""
+    import private_shell_overlay as o
+    assert "RegQueryValueExW(key, L\"Path\"" in o.REGISTRY_PATH
+    assert 'Session Manager\\\\Environment' in o.REGISTRY_PATH and "RegOpenCurrentUser" in o.REGISTRY_PATH
+    # REG_EXPAND_SZ expands against the USER's environment, not sshd-session's closed one
+    assert "ExpandEnvironmentStringsForUserW(token" in o.REGISTRY_PATH and 'userenv.lib' in o.REGISTRY_PATH
+    assert "REG_EXPAND_SZ" in o.REGISTRY_PATH and "wcschr(entry, L'%') != NULL" in o.REGISTRY_PATH
+    path = o.PATH
+    managed = path.index("endpoint\\\\shell\\\\mingw64\\\\bin")
+    machine = path.index("pocketshell_append_registry_path(path, _countof(path), 0)")
+    user = path.index("pocketshell_append_registry_path(path, _countof(path), 1)")
+    publish = path.index('_wputenv_s(L"PATH", path)')
+    assert managed < machine < user < publish  # managed tools first, machine before user, then export
+
+
+def test_interactive_shell_is_a_login_shell_and_exec_stays_profile_less(bb):
+    import private_shell_overlay as o
+    assert o.INTERACTIVE_SHELL_ARGUMENTS == "--login -i"
+    assert o.EXEC_SHELL_COMMAND_OPTION == "--noprofile --norc -c"
+    assert f'shell_arguments = _strdup("{o.INTERACTIVE_SHELL_ARGUMENTS}")' in o.PWD
+    assert f'shell_command_option = _strdup("{o.EXEC_SHELL_COMMAND_OPTION}")' in o.PWD
+    assert "--norc -i" not in o.PWD
+
+
+def test_registry_helpers_are_defined_before_the_function_that_calls_them(bb):
+    """MSVC C2371 (run 44172368156): a helper defined after its first call is a redefinition."""
+    from private_shell_overlay import patch_session
+    source = ('strncmp(env_name, "PATH=", strlen("PATH="));\n'
+              'static int\nfirst_function(void)\n{\n\treturn 0;\n}\n'
+              'static int\nenv_function(void)\n{\n\t/* PATH is a special case. */\n L"Environment", L"PATH";\n}\n'
+              'static int\nsetup_session_env(struct ssh *ssh, Session* s)\n{\n\tret = 0;\n}\n'
+              '\nint do_exec_windows\n'
+              '\t\tif (command) {\n'
+              '\t\t\tsize_t len = strlen(shell) + 1 + strlen(shell_command_option_local) + 1 + strlen(command) + 1;\n'
+              'strcat_s(pty_cmd, len, command);\n'
+              '\t\t} else {\n\t\t\tif (shell_arguments) {\n}\n}\n'
+              'char *spawn_argv[4] = { NULL, };\n'
+              '\t\t\tif (exec_command) {\n'
+              '\t\t\t\tspawn_argv[1] = shell_command_option_local;\n'
+              '\t\t\t\tspawn_argv[2] = exec_command;\n\t\t\t}\n'
+              'posix_spawn(&pid, spawn_argv[0], &actions, NULL, spawn_argv, NULL);\n')
+    patched = patch_session(source)
+    definition = patched.index("static void\npocketshell_append_registry_path(")
+    assert patched.count("static void\npocketshell_append_registry_path(") == 1
+    assert patched.index("pocketshell_append_path_value(HKEY key") < definition
+    assert definition < patched.index("pocketshell_append_registry_path(path, _countof(path), 0)")
+    assert patched.index("first_function") < definition < patched.index("env_function")

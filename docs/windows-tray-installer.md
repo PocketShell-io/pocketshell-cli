@@ -148,10 +148,24 @@ The tray builder also requires `--endpoint-backend OWNED_OPENSSH_OUTPUT` and
 `--endpoint-backend-receipt-sha256 RECEIPT_SHA256`. Build the pinned backend with
 `scripts/release/build_backend_windows.py --part openssh --work FRESH_WORK --out
 BACKEND_OUTPUT`; its `openssh` directory includes the measured `receipt.json`.
-The private OpenSSH source overlay derives Bash and command PATH from its own
-release directory, not the registry's DefaultShell or user/system PATH. Plain
-`pocketshell` and `a` commands from older PSC clients therefore resolve the
-bundled executables without client provisioning. The builder verifies the
+The private OpenSSH source overlay derives the Bash executable from its own
+release directory, not the registry's DefaultShell. Session PATH is the managed
+runtime directories first (so plain `pocketshell` and `a` from older PSC clients
+resolve the bundled executables, which also stay pinned as exported Bash
+functions), followed by the expanded machine and user registry `Path` values,
+read fresh at every session start (REG_EXPAND_SZ entries such as `%USERPROFILE%\...` expand against the user's own environment block, not sshd-session's closed one) so tools installed later (claude, codex, npm,
+git, ...) are found without reinstalling. Interactive shells, both the SSH PTY
+and the aplexer `shell` engine, run `bash --login -i`, so the user's
+`~/.bash_profile` and `~/.bashrc` apply as in Git Bash. Exec commands and probes
+stay `bash --noprofile --norc -c` with `BASH_ENV`/`ENV` cleared, so a user's
+startup files can never change a non-interactive command. Durable `a` sessions (shell and agent engines) are
+spawned by `a start` / `pocketshell sessions create` run inside that SSH session,
+so they inherit this environment; the bundled `/etc/profile` keeps
+`MSYS2_PATH_TYPE=inherit`. Already-running `a` workers and their shells keep the
+environment they were started with: after upgrading, stop and recreate old
+sessions. The guardian daemon's own closed environment is unchanged. The `guardian-login-shell` source trio pins
+the `--login -i` engine command (`DERIVATION.diff` is one line).
+The builder verifies the
 complete rebuilt executable/DLL inventory and every digest before staging it.
 For this managed Bash, PTY and non-PTY commands use its MSYS argument decoder,
 which requires escaping every backslash as well as quotes. A private spawn
