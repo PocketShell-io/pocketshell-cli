@@ -17,6 +17,8 @@ CASES = {
     "test_private_pty_encoder_preserves_one_exact_windows_operand",
     "test_private_profile_preserves_complete_scripts_and_interactive_shell",
     "test_packaged_launchers_preserve_console_and_quiet_stdio",
+    "test_registry_path_login_shell_and_session_environment",
+    "test_registry_path_expands_against_the_user_not_the_closed_session_env",
 }
 
 
@@ -47,7 +49,8 @@ def main():
     inventory = Inventory()
     test = Path(__file__).resolve().parents[2] / "tests/release/test_windows_tray_terminal_native.py"
     encoder = test.with_name("test_private_pty_argv_native.py")
-    code = pytest.main([str(test), str(encoder), "-v", "-rA", "-s",
+    path_unit = test.with_name("test_private_shell_path_native.py")
+    code = pytest.main([str(test), str(encoder), str(path_unit), "-v", "-rA", "-s",
                         "--junitxml=" + str(args.out / "junit.xml")], plugins=[inventory])
     result = {"expected": sorted(CASES), "collected": inventory.collected,
               "passed": inventory.passed, "rejected": inventory.rejected, "pytestCode": int(code)}
@@ -63,7 +66,16 @@ def main():
     assert len(profiles) == 2 and {row["privateProfilePTY"] for row in profiles} == {False, True}
     assert all(row["argvDataPreserved"] and row["shellExpansionPreserved"]
                and row["embeddedSourcePreserved"] for row in profiles)
-    assert len(proof["killProofs"]) == 5 and all(len(row["ownedProcessesGone"]) == 2 for row in proof["killProofs"])
+    environment = {row["context"]: row for row in proof["environmentProofs"]}
+    assert set(environment) == {"ssh-exec", "ssh-exec-pty", "ssh-interactive-login", "aplexer-shell-session", "agent-engine"}
+    for name in ("ssh-exec", "ssh-exec-pty", "ssh-interactive-login", "aplexer-shell-session"):
+        assert environment[name]["registryPath"] and environment[name]["expandedUserProfileEntry"]
+        assert environment[name]["managedToolsBeatShadow"]
+    assert environment["ssh-exec"]["profileSkipped"] and environment["ssh-exec-pty"]["profileSkipped"]
+    assert environment["ssh-interactive-login"]["loginRc"] and environment["aplexer-shell-session"]["loginRc"]
+    assert environment["aplexer-shell-session"]["independentFileOracle"] is True
+    assert environment["agent-engine"]["engineAvailable"] and environment["agent-engine"]["agentSessionStarted"]
+    assert len(proof["killProofs"]) == 6 and all(len(row["ownedProcessesGone"]) == 2 for row in proof["killProofs"])
     observations = proof["memoryObservations"]
     assert len(observations) == 2
     python_sha = hashlib.sha256((args.payload / "runtime/python/python.exe").read_bytes()).hexdigest()

@@ -1,6 +1,7 @@
 """Mandatory normal-tray artifact gate: actual private SSH and native PTYs."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ def endpoint():
         proof = {"qualification": host.qualification, "source": host.catalog["source"],
                  "provenance": getattr(host, "provenance", None), "proofs": host.proofs,
                  "killProofs": host.kill_proofs, "memoryObservations": host.memory_observations,
-                 "oomPreservations": host.oom_preservations}
+                 "oomPreservations": host.oom_preservations, "environmentProofs": host.environment_proofs}
         Path(os.environ["POCKETSHELL_TRAY_TERMINAL_PROOF"]).write_text(json.dumps(proof, indent=2))
 
 
@@ -141,3 +142,115 @@ def test_packaged_launchers_preserve_console_and_quiet_stdio(endpoint):
             assert proof["consoleWindow"] == 0
         host.proofs.append({"independentFileOracle": True, "entry": name, "console": console,
                             "validParentConsoleOnly": True})
+
+
+@contextlib.contextmanager
+def user_environment(host, nonce):
+    """A user whose tools live only in the registry Path and whose login files set a marker.
+
+    HKCU Path gets: a SHADOW dir (a.exe, pocketshell.exe) FIRST, a literal dir, and a
+    %USERPROFILE%-relative REG_EXPAND_SZ dir (sshd-session's closed env has no %USERPROFILE%).
+    ~/.bash_profile + ~/.bashrc export a marker that only a LOGIN shell may see.
+    """
+    import shutil
+    import winreg
+    from pocketshell.gateway.service_agent_install import known_folders
+    profile = Path(known_folders()["USERPROFILE"])
+    root = host.top / "registry-path-tools"
+    shadow, literal, expand = root / "shadow bin", root / "literal bin", root / "expand bin"
+    whoami = Path(os.environ["SystemRoot"]) / "System32/whoami.exe"
+    for directory, names in ((shadow, ("a.exe", "pocketshell.exe")), (literal, ("psregprobe.exe",)),
+                             (expand, ("psexpandprobe.exe",))):
+        directory.mkdir(parents=True)
+        for name in names:
+            shutil.copyfile(whoami, directory / name)
+    # A stand-in "claude" that keeps running (an agent that exits at once cannot be verified as a session).
+    shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32/cmd.exe", literal / "claude.exe")
+    entries = [str(shadow), str(literal), "%USERPROFILE%\\" + str(expand.relative_to(profile))]
+    dotfiles = {name: profile / name for name in (".bash_profile", ".bashrc")}
+    saved = {name: path.read_bytes() for name, path in dotfiles.items() if path.exists()}
+    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_SET_VALUE)
+    try:
+        original = winreg.QueryValueEx(key, "Path")
+    except FileNotFoundError:
+        original = None
+    try:
+        base = original[0] if original else ""
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, ";".join([*entries, base] if base else entries))
+        dotfiles[".bashrc"].write_text("export PSBASHRC_" + nonce + "=1\n", encoding="ascii")
+        dotfiles[".bash_profile"].write_text("test -f ~/.bashrc && . ~/.bashrc\n", encoding="ascii")
+        yield {"shadow": shadow, "literal": literal, "expand": expand}
+    finally:
+        for name, path in dotfiles.items():
+            if name in saved:
+                path.write_bytes(saved[name])
+            else:
+                path.unlink(missing_ok=True)
+        if original is None:
+            with contextlib.suppress(FileNotFoundError):
+                winreg.DeleteValue(key, "Path")
+        else:
+            winreg.SetValueEx(key, "Path", 0, original[1], original[0])
+        key.Close()
+
+
+def environment_script(host, dirs, nonce, *, login, oracle, first, second):
+    """One line of Bash: prints ENV43_<sum>_OK only if every environment fact holds."""
+    root = host.installed.as_posix().lower()
+    def lower(path):
+        return Path(path).as_posix().lower()
+    marker = 'PSBASHRC_' + nonce
+    rc = f'[ "${{{marker}}}" = 1 ] || ok=FAIL-login-rc' if login else f'[ -z "${{{marker}}}" ] || ok=FAIL-exec-sourced-rc'
+    return (f"v=$(({first}+{second})); ok=OK; "
+            "chk(){ g=$(cygpath -m \"$(type -P $1)\" 2>/dev/null); g=${g,,}; [ \"$g\" = \"$2\" ] || ok=FAIL-$1:$g; }; "
+            f"chk psregprobe '{lower(dirs['literal'])}/psregprobe.exe'; "
+            f"chk psexpandprobe '{lower(dirs['expand'])}/psexpandprobe.exe'; "
+            f"chk a '{root}/python/a.exe'; chk pocketshell '{root}/pocketshell.exe'; "
+            '[ "$(a --version 2>&1)" = "a 0.1.13" ] || ok=FAIL-managed-a-version; '
+            f"{rc}; printf 'ENV43_%s_%s\\n' \"$v\" \"$ok\" > {shlex.quote(oracle)}; cat {shlex.quote(oracle)}")
+
+
+def test_registry_path_login_shell_and_session_environment(endpoint):
+    """The maintainer's report: no claude/codex/npm/aliases in Windows endpoint shells.
+
+    Real shipped sshd-session + aplexer. Covers SSH exec, SSH PTY command, the direct
+    interactive login shell and an aplexer-created durable shell session, plus agent
+    engine detection and spawn through `a`.
+    """
+    host = endpoint
+    nonce = host.nonce[:12]
+    with user_environment(host, nonce) as dirs:
+        def script_for(login):
+            return lambda oracle, first, second: (
+                environment_script(host, dirs, nonce, login=login, oracle=oracle, first=first, second=second) + "\r",
+                f"ENV43_{first + second}_OK")
+        for pty in (False, True):
+            first, second = 4200 + int(pty), 17
+            oracle = (host.workspace / f"exec-env-{pty}.txt").as_posix()
+            command = environment_script(host, dirs, nonce, login=False, oracle=oracle, first=first, second=second)
+            answer = host.exec_pty(command) if pty else host.exec(command)
+            expected = f"ENV43_{first + second}_OK"
+            assert answer[0] == 0 and expected in answer[1], answer
+            host.environment_proofs.append({"context": "ssh-exec-pty" if pty else "ssh-exec", "profileSkipped": True,
+                                            "registryPath": True, "expandedUserProfileEntry": True,
+                                            "managedToolsBeatShadow": True})
+        proof = host.attach_io(None, "direct-login-environment", script=script_for(True))
+        host.environment_proofs.append({"context": "ssh-interactive-login", "loginRc": True, "registryPath": True,
+                                        "expandedUserProfileEntry": True, "managedToolsBeatShadow": True, **proof})
+        session = host.create("environment-" + nonce[:8])
+        proof = host.attach_io(session["id"], "aplexer-shell-session-environment", script=script_for(True))
+        host.environment_proofs.append({"context": "aplexer-shell-session", "loginRc": True, "registryPath": True,
+                                        "expandedUserProfileEntry": True, "managedToolsBeatShadow": True, **proof})
+        host.kill(session["id"])
+        # Agent engines are detected and launched through the same environment: the agent picker.
+        code, output = host.exec("a --json engines")
+        assert code == 0, output
+        engines = {row["name"]: row["available"] for row in json.loads(output)}
+        assert engines.get("claude") is True, engines
+        cwd = shlex.quote(host.sftp_workspace())
+        code, output = host.exec(f"pocketshell sessions create --json --cwd {cwd} --engine claude -- agent-{nonce[:8]}")
+        assert code == 0, output
+        agent = json.loads(output)
+        host.ids.add(agent["id"])
+        host.exec("pocketshell sessions kill --json -- " + shlex.quote(agent["id"]))
+        host.environment_proofs.append({"context": "agent-engine", "engineAvailable": True, "agentSessionStarted": True})
