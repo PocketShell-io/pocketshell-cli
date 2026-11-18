@@ -315,6 +315,13 @@ def status_document():
                 "clients": [], "sessions": [], "errors": [str(exc)[:300]]}
 
 
+# Every managed poll spawns a cold `python -I -m pocketshell.tray_bundle --status`
+# child (imports, session enumeration, log parsing, a PowerShell event query).
+# That costs seconds of a full core, so the 5 s library default kept the machine
+# permanently busy. An idle tray polls rarely; menu actions still refresh at once.
+STATUS_POLL_INTERVAL = 60.0
+
+
 def run_tray(root):
     from pocketshell.tray_supervisor import configure_context
     configure_context()
@@ -425,6 +432,7 @@ def run_tray(root):
         return
     try:
         ManagedApp(status_client=ManagedClient(), gateway_auth_client=ManagedGatewayAuth(),
+                   poll_interval=STATUS_POLL_INTERVAL,
                    autostart_installer=lambda: install_autostart(
             command=startup_command(root))).run()
     finally:
