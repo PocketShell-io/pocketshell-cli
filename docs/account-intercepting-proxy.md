@@ -1,15 +1,16 @@
 # Login through a TLS-intercepting egress proxy (design and blocker)
 
-Status: **client and broker halves implemented and tested; not yet usable.**
+Status: **broker deployed and production key pinned (2026-11-27).**
 The plain path still refuses an intercepting proxy, which is correct. The opt-in
 sealed transport (`POCKETSHELL_BROKER_SEALED=1`, `pocketshell.account.sealed`) is
-in this repo, and its broker route is PocketShell-io/pocketshell-sync PR #3
-(`docs/SEALED-TRANSPORT.md` there has the wire format). It works end to end only
-after three operator steps that are deliberately not done by code:
+in this repo, and its broker route came from PocketShell-io/pocketshell-sync PR #3
+(`docs/SEALED-TRANSPORT.md` there has the wire format and the key runbook). The
+broker serves `POST /sealed` with the SSM key `/pocketshell-sync/sealed-transport-key`;
+its public half is pinned in `PINNED_KEYS` (`sealed.py`, kid `575a6a86`). Sealed
+mode works from the first CLI release that contains this pin.
 
-1. deploy the broker change (the route answers `503 sealed_unavailable` until the key exists);
-2. create the SSM key and pin its public half in `PINNED_KEYS` (`sealed.py`) — until then sealed mode refuses to run;
-3. release the CLI.
+Rotation is not supported yet: the broker accepts only its current key, so the
+CLI must pin exactly one key until the broker accepts a current+previous pair.
 
 Usage once released: `POCKETSHELL_BROKER_SEALED=1 pocketshell login --no-open`
 with the sandbox's `HTTPS_PROXY` (and CA bundle) set. Sealed mode applies to

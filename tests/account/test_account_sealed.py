@@ -206,6 +206,14 @@ def test_no_pinned_key_means_no_sealed_mode(sealed_env, monkeypatch):
         client.start_device(DEFAULT_BROKER_URL, "x")
 
 
+def test_shipped_pin_is_the_single_consistent_production_key():
+    # kid must be SHA-256(raw key)[:4]; exactly one key until the broker
+    # accepts a current+previous pair (see the PINNED_KEYS comment).
+    pins = sealed._pins(None)
+    assert list(pins) == ["575a6a86"]
+    assert len(pins["575a6a86"]) == 32
+
+
 def test_inconsistent_pin_is_refused(sealed_env, monkeypatch):
     fake = FakeBroker()
     monkeypatch.setattr(sealed, "PINNED_KEYS", {"00000000": sealed._b64u(fake.pub)})

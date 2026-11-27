@@ -43,10 +43,15 @@ SEALED_PATH = "/sealed"
 _NK, _NN = 16, 12
 
 # kid (hex, first 4 bytes of SHA-256(public key)) -> base64url raw X25519 public key.
-# Populated when the operator provisions the production key
-# (broker docs/SEALED-TRANSPORT.md, "Operator runbook"). While empty, sealed
-# mode refuses to run: there is nothing to authenticate the broker against.
-PINNED_KEYS: dict[str, str] = {}
+# The production broker key, provisioned 2026-11-27 per the broker's
+# docs/SEALED-TRANSPORT.md "Operator runbook" (SSM
+# /pocketshell-sync/sealed-transport-key, version 1). Keep exactly ONE entry:
+# the broker accepts only its current key and seal() always uses the first
+# kid, so pinning a second key before the broker accepts current+previous
+# would break logins on one side of the swap.
+PINNED_KEYS: dict[str, str] = {
+    "575a6a86": "ORyrN6hRUdq2T2-mo14DB2mNpojLkP5xqW-YNetymiE",
+}
 
 _SUITE = CipherSuite.new(KEMId.DHKEM_X25519_HKDF_SHA256, KDFId.HKDF_SHA256, AEADId.AES128_GCM)
 
