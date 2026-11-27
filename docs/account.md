@@ -146,6 +146,9 @@ device. See [keys.md](keys.md).
   commands won't work there. If no CA bundle exists at the default location
   (e.g. a python.org macOS build without "Install Certificates"), TLS
   verification fails rather than falling back to the environment.
+  Behind a TLS-intercepting proxy login cannot work safely today; see
+  [account-intercepting-proxy.md](account-intercepting-proxy.md) for why and the
+  planned fix.
 - Beyond those variables and `POCKETSHELL_BROKER_URL` (see above), the
   process environment is trusted. An `.envrc` or profile that can set
   `PYTHONPATH`, `LD_PRELOAD` and the like can run code inside the CLI
