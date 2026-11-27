@@ -10,6 +10,10 @@ stdlib ``urllib`` only. Hardening relative to a bare ``urlopen``:
   session token goes straight to the broker.
 * Redirects are refused: urllib would replay the ``Authorization`` header to
   whatever ``Location`` says, including an ``http://`` downgrade.
+* Opt-in sealed mode (``POCKETSHELL_BROKER_SEALED=1``, production broker only)
+  is the one exception to the proxy/CA rules: every request is HPKE-sealed to a
+  pinned broker key (:mod:`pocketshell.account.sealed`), so an intercepting
+  proxy only ever carries ciphertext. It never falls back to the plain path.
 * Every request has a timeout; response bodies are capped at 64 KiB.
 * Responses are strict JSON objects and every field we use is type-checked.
 * Tokens travel only in the ``Authorization`` header or the JSON body —
@@ -39,6 +43,7 @@ from pocketshell.account.errors import (
     GatewayToken,
     NotLoggedIn,
 )
+from pocketshell.account import sealed
 from pocketshell.account.jsonutil import StrictJSONError, loads_strict
 from pocketshell.account.sanitize import clean_text
 from pocketshell.tokentls import token_opener
@@ -118,6 +123,8 @@ def request(
     on an error status, unparseable body). Raises :class:`BrokerUnavailable`
     for transport failures and :class:`AccountError` for a malformed success.
     """
+    if sealed.enabled():
+        return _request_sealed(base_url, method, path, body=body, bearer=bearer, timeout=timeout)
     headers = {"Accept": "application/json", "User-Agent": f"pocketshell/{__version__}"}
     data: bytes | None = None
     if method in ("POST", "PUT"):
@@ -160,6 +167,85 @@ def request(
     finally:
         resp.close()
     return Response(status, _parse(raw, status))
+
+
+def _sealed_opener() -> urllib.request.OpenerDirector:
+    """Outer transport for sealed mode. It may use the environment proxy and CA
+    bundle because it carries only ciphertext; redirects are still refused."""
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler(urllib.request.getproxies()),
+        urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+        _NoRedirect(),
+    )
+
+
+def _request_sealed(
+    base_url: str,
+    method: str,
+    path: str,
+    *,
+    body: dict | None,
+    bearer: str | None,
+    timeout: float,
+    pins: dict[str, str] | None = None,
+) -> Response:
+    from pocketshell.account.config import DEFAULT_BROKER_URL
+
+    if base_url != DEFAULT_BROKER_URL:
+        raise sealed.SealedError(
+            "Sealed mode only works with the production PocketShell broker; "
+            "unset POCKETSHELL_BROKER_SEALED or log in to the production broker."
+        )
+    sreq = sealed.seal(
+        method,
+        path,
+        body=None if body is None else json.dumps(body),
+        bearer=bearer,
+        pins=pins,
+    )
+    req = urllib.request.Request(
+        base_url + sealed.SEALED_PATH,
+        data=sreq.body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": f"pocketshell/{__version__}",
+        },
+        method="POST",
+    )
+    try:
+        resp = _sealed_opener().open(req, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        exc.close()
+        raise BrokerUnavailable(
+            f"The sealed PocketShell broker endpoint refused the request (HTTP {status})."
+        ) from None
+    except urllib.error.URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, ssl.SSLError):
+            raise BrokerUnavailable("TLS verification of the outer connection failed.") from None
+        raise BrokerUnavailable(
+            f"Could not reach the PocketShell broker ({clean_text(str(reason), max_len=120)})."
+        ) from None
+    except (TimeoutError, socket.timeout):
+        raise BrokerUnavailable("The PocketShell broker did not respond in time.") from None
+    except (OSError, http.client.HTTPException) as exc:
+        raise BrokerUnavailable(
+            f"Could not reach the PocketShell broker ({type(exc).__name__})."
+        ) from None
+    try:
+        try:
+            raw = _read_capped(resp)
+        except (OSError, http.client.HTTPException):
+            raise BrokerUnavailable("The PocketShell broker connection failed.") from None
+        outer = resp.status
+    finally:
+        resp.close()
+    if outer != 200:
+        raise BrokerUnavailable(f"The sealed PocketShell broker endpoint answered HTTP {outer}.")
+    status, text = sreq.open(raw)
+    return Response(status, _parse(text, status))
 
 
 def _parse(raw: bytes, status: int) -> dict | None:

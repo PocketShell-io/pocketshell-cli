@@ -146,6 +146,9 @@ device. See [keys.md](keys.md).
   commands won't work there. If no CA bundle exists at the default location
   (e.g. a python.org macOS build without "Install Certificates"), TLS
   verification fails rather than falling back to the environment.
+  Behind a TLS-intercepting proxy login cannot work safely today; see
+  [account-intercepting-proxy.md](account-intercepting-proxy.md) for why and the
+  opt-in sealed transport that fixes it.
 - Beyond those variables and `POCKETSHELL_BROKER_URL` (see above), the
   process environment is trusted. An `.envrc` or profile that can set
   `PYTHONPATH`, `LD_PRELOAD` and the like can run code inside the CLI
@@ -182,6 +185,7 @@ device. See [keys.md](keys.md).
 | --- | --- |
 | `POCKETSHELL_BROKER_URL` | Broker base URL for `login` (default: the production broker). Must be `https://` with no credentials, query or fragment. An existing session always uses the broker stored with it, and the command refuses to run when this variable names a different one. |
 | `POCKETSHELL_DEV_WEB_ORIGIN` | Staging and development only: the trusted approval origin, as a bare `https://host[:port]`. It's honored only when `POCKETSHELL_BROKER_URL` is also set. |
+| `POCKETSHELL_BROKER_SEALED=1` | Opt in to the sealed broker transport for networks that intercept TLS (production broker only; see [account-intercepting-proxy.md](account-intercepting-proxy.md)). The only mode that honors `HTTPS_PROXY` and the ambient CA bundle, and only for ciphertext; it never falls back to the plain path. |
 | `POCKETSHELL_BROKER_INSECURE_DEV=1` | Development and tests only: also allows `http://` when the host is loopback (`127.0.0.0/8`, `::1`, `localhost`). |
 
 ## Exit codes
