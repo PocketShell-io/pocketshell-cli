@@ -57,6 +57,9 @@ dependencies = [
     # of transitive dependency choices. 42 is a conservative floor for the
     # APIs used (GCM `update_into`, OpenSSH private-key serialization).
     "cryptography>=42",
+    # Sealed broker transport (RFC 9180 HPKE) for logins behind a TLS-intercepting
+    # proxy; see docs/account-intercepting-proxy.md. No custom primitives.
+    "pyhpke>=0.6,<1",
     # The account vault shares the clients' Argon2id v1 format. Never use
     # the separate local device-password vault's PBKDF2 format for sync.
     "argon2-cffi>=23.1.0",

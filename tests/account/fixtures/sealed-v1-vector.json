@@ -1,0 +1,21 @@
+{
+  "note": "Synthetic. server_ikm is a TEST value, never a production key.",
+  "server_ikm_b64u": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+  "server_pk_b64u": "X9R2M7XkP8p7rRv75CT-rLF12dTUow8Wbb0wY28LRGs",
+  "kid": "a3ab3844",
+  "ekm_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+  "inner": {
+    "m": "POST",
+    "p": "/auth/device/start",
+    "a": null,
+    "b": "{\"label\":\"vector@cloud\"}",
+    "t": 1700000000,
+    "n": "AgICAgICAgICAgICAgICAg"
+  },
+  "request_body": "{\"v\":1,\"kid\":\"a3ab3844\",\"enc\":\"3okjpnXQIYDN19AJe6QEueHikw1WZculjRdlAGNheTs\",\"ct\":\"PDGaAlpJYqu_exE1KAek9yaZPSr6DRgEzwGRg7EC7JAvTwp7K559Vw0L2h1oL7BjrrmPvytYiJgVYrtYXzGH4drBeWIq42LtMKdV5W48-xWJTpRly7VIkXu9kbmjSabURCIPES7ixbcvhRchhuqupvToTVJ1pbzofNuqpfcjgBzdoiQccSK10BhvNvJd\"}",
+  "response_body": "{\"v\":1,\"nonce\":\"QTGQVvvgYJC8nLkqfoTPPQ\",\"ct\":\"Q3APf1GnGGs4sP8rrKXrxoWkkmz56azU8TAgGc1Ata2HgkTDbupkYfgt-dz2_3ML8WFiIIwvPNPXJsaDevikoaw\"}",
+  "response_plain": {
+    "s": 200,
+    "b": "{\"synthetic\":\"response-body\"}"
+  }
+}

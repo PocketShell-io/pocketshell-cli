@@ -1,8 +1,21 @@
 # Login through a TLS-intercepting egress proxy (design and blocker)
 
-Status: **design only, not implemented.** `pocketshell login` does not work
-behind a proxy that terminates TLS, and this document records why that is
-correct today and the smallest secure change that would fix it.
+Status: **client and broker halves implemented and tested; not yet usable.**
+The plain path still refuses an intercepting proxy, which is correct. The opt-in
+sealed transport (`POCKETSHELL_BROKER_SEALED=1`, `pocketshell.account.sealed`) is
+in this repo, and its broker route is PocketShell-io/pocketshell-sync PR #3
+(`docs/SEALED-TRANSPORT.md` there has the wire format). It works end to end only
+after three operator steps that are deliberately not done by code:
+
+1. deploy the broker change (the route answers `503 sealed_unavailable` until the key exists);
+2. create the SSM key and pin its public half in `PINNED_KEYS` (`sealed.py`) — until then sealed mode refuses to run;
+3. release the CLI.
+
+Usage once released: `POCKETSHELL_BROKER_SEALED=1 pocketshell login --no-open`
+with the sandbox's `HTTPS_PROXY` (and CA bundle) set. Sealed mode applies to
+`login`, `whoami`, `logout` and token mints against the production broker only.
+`pocketshell gateway ssh/proxy` talk to the gateway, not the broker, and are not
+covered.
 
 ## The case
 
@@ -46,7 +59,7 @@ the protection has to live **above TLS**.
 - This repo's latest PyPI release when checked was 0.5.15; `main` is 0.5.16.
   No released version supports this case.
 
-## Minimum viable secure change
+## Design (as implemented)
 
 Use an established construction, not custom crypto: **HPKE (RFC 9180) with
 Oblivious-HTTP-style request/response encapsulation (RFC 9458)**. The proxy
@@ -65,8 +78,7 @@ acts as the (untrusted) relay.
    dispatches internally to the existing handlers and encapsulates the
    response, so `device_code` and `psc_` never appear in clear outside the
    client and the Lambda. The `Origin`-refusal rule applies to the inner request.
-4. The CLI uses this transport only when explicitly opted in (for example
-   `POCKETSHELL_BROKER_SEALED=1` or `login --sealed`). The default direct
+4. The CLI uses this transport only when explicitly opted in (`POCKETSHELL_BROKER_SEALED=1`, exact value). The default direct
    TLS path is unchanged.
 5. In sealed mode the outer connection may use the environment proxy and its CA,
    but carries only ciphertext and public routing data. There is no fallback to
